@@ -974,3 +974,122 @@ describe('per-project config', () => {
     expect(await store.scheduleAfterChange(project, a.id)).toBeGreaterThan(0)
   })
 })
+
+describe('issue keys', () => {
+  async function reloadProject(app: App, vault: FakeVault, path: string): Promise<Project> {
+    const file = vault.getAbstractFileByPath(path)
+    if (!(file instanceof TFile)) throw new Error('missing file')
+    return expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(file))
+  }
+
+  it('assigns PREFIX-N keys to dirty keyless tasks on save, persisting nextKeySeq', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Keyed', 'Projects')
+    project.keyPrefix = 'SOC'
+
+    const a = await addNamed(store, project, 'First')
+    const b = await addNamed(store, project, 'Second')
+    expect(a.key).toBe('SOC-1')
+    expect(b.key).toBe('SOC-2')
+
+    const reloaded = await reloadProject(app, vault, project.filePath)
+    expect(reloaded.nextKeySeq).toBe(3)
+    expect(
+      flattenTasks(reloaded.tasks)
+        .map((f) => f.task.key)
+        .sort()
+    ).toEqual(['SOC-1', 'SOC-2'])
+  })
+
+  it('keeps keys immutable: an already-keyed task is never re-keyed on later saves', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Immutable', 'Projects')
+    project.keyPrefix = 'SOC'
+    const a = await addNamed(store, project, 'Task')
+    expect(a.key).toBe('SOC-1')
+    await store.updateTask(project, a.id, { status: 'in-progress' })
+    expect(a.key).toBe('SOC-1')
+  })
+
+  it('a duplicated task gets a fresh key, not the source key', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Dup', 'Projects')
+    project.keyPrefix = 'SOC'
+    const a = await addNamed(store, project, 'Original')
+    await store.duplicateTask(project, a.id, false)
+
+    const reloaded = await reloadProject(app, vault, project.filePath)
+    const keys = flattenTasks(reloaded.tasks)
+      .map((f) => f.task.key)
+      .sort()
+    expect(keys).toEqual(['SOC-1', 'SOC-2'])
+  })
+
+  it('adoptIssueKeys adopts embedded keys, strips titles, keys the rest by age, and is idempotent', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Argus', 'Projects')
+
+    const epic1 = makeTask({ title: 'ARGUS-1: Data Collection', createdAt: '2026-07-01T00:00:00Z' })
+    const epic2 = makeTask({ title: 'ARGUS-2: Correlation', createdAt: '2026-07-02T00:00:00Z' })
+    const plain = makeTask({ title: 'Loose story', createdAt: '2026-07-03T00:00:00Z' })
+    await store.insertTask(project, epic1, null)
+    await store.insertTask(project, epic2, null)
+    await store.insertTask(project, plain, null)
+    const child = makeTask({ title: 'Child of one', type: 'subtask', createdAt: '2026-07-04T00:00:00Z' })
+    await store.insertTask(project, child, epic1.id)
+
+    const result = expectDefined(await store.adoptIssueKeys(project))
+    expect(result.prefix).toBe('ARGUS')
+    expect(result.adopted).toBe(2)
+    expect(result.assigned).toBe(2) // plain + child
+    expect(result.renamedBasenames.length).toBe(2)
+
+    const reloaded = await reloadProject(app, vault, project.filePath)
+    const byTitle = new Map(flattenTasks(reloaded.tasks).map((f) => [f.task.title, f.task]))
+    expect(expectDefined(byTitle.get('Data Collection')).key).toBe('ARGUS-1')
+    expect(expectDefined(byTitle.get('Correlation')).key).toBe('ARGUS-2')
+    expect(expectDefined(byTitle.get('Loose story')).key).toBe('ARGUS-3')
+    expect(expectDefined(byTitle.get('Child of one')).key).toBe('ARGUS-4')
+    expect(reloaded.keyPrefix).toBe('ARGUS')
+    expect(reloaded.nextKeySeq).toBe(5)
+
+    // Second run: nothing left to do.
+    const again = expectDefined(await store.adoptIssueKeys(project))
+    expect(again.adopted).toBe(0)
+    expect(again.assigned).toBe(0)
+  })
+
+  it('adoptIssueKeys returns null without a determinable prefix, then honors the fallback', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('NoPrefix', 'Projects')
+    await addNamed(store, project, 'Plain task')
+
+    expect(await store.adoptIssueKeys(project)).toBeNull()
+    const result = expectDefined(await store.adoptIssueKeys(project, 'soc'))
+    expect(result.prefix).toBe('SOC')
+    expect(result.assigned).toBe(1)
+  })
+
+  it('duplicate embedded numbers: first claims the seq, second falls through to fresh assignment', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('DupSeq', 'Projects')
+    const first = makeTask({ title: 'XX-1: Alpha', createdAt: '2026-07-01T00:00:00Z' })
+    const second = makeTask({ title: 'XX-1: Beta', createdAt: '2026-07-02T00:00:00Z' })
+    await store.insertTask(project, first, null)
+    await store.insertTask(project, second, null)
+
+    const result = expectDefined(await store.adoptIssueKeys(project))
+    expect(result.adopted).toBe(1)
+    expect(result.assigned).toBe(1)
+    const keys = flattenTasks(project.tasks)
+      .map((f) => f.task.key)
+      .sort()
+    expect(keys).toEqual(['XX-1', 'XX-2'])
+    // The second keeps its (now misleading) title untouched — honest, reported, not silently rewritten.
+    expect(
+      flattenTasks(project.tasks)
+        .map((f) => f.task.title)
+        .sort()
+    ).toEqual(['Alpha', 'XX-1: Beta'])
+  })
+})

@@ -48,7 +48,7 @@ const REPEAT_OPTIONS: SelectItem[] = [
  */
 export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFieldsContext): void {
   const { task, project, plugin, rerender, shownExtras } = ctx
-  const { statuses, priorities } = plugin.store.configFor(project)
+  const { statuses, priorities, issueTypes } = plugin.store.configFor(project)
   const grid = container.createDiv('pm-prop-grid')
 
   // Type
@@ -107,6 +107,27 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
   } else {
     grid.createDiv()
   }
+
+  // Issue type (spacer holds the right column so Status | Priority stays paired)
+  renderPropRow(
+    grid,
+    'Issue type',
+    () => {
+      const cell = createDiv('pm-prop-value')
+      renderSelectControl({
+        container: cell,
+        value: task.issueType,
+        options: issueTypes.map((t) => ({ id: t.id, label: t.label, color: t.color, icon: t.icon || undefined })),
+        onChange: (id) => {
+          task.issueType = id
+          rerender()
+        }
+      })
+      return cell
+    },
+    'shapes'
+  )
+  grid.createDiv()
 
   // Status
   renderPropRow(

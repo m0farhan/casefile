@@ -498,6 +498,17 @@ export class ProjectStore implements TaskSource {
     try {
       project.updatedAt = new Date().toISOString()
 
+      // Issue-key choke point: every creation path (insert, duplicate, subtask
+      // reconcile, import) funnels through here as a dirty task, so assigning
+      // keys to dirty keyless tasks covers them all with zero per-path code.
+      // nextKeySeq persists in the project rewrite below, in the same save.
+      if (project.keyPrefix) {
+        for (const id of dirty.keys()) {
+          const task = findTaskById(project, id)
+          if (task && task.key === '') task.key = `${project.keyPrefix}-${project.nextKeySeq++}`
+        }
+      }
+
       const taskFolder = this.projectTaskFolder(project)
       await this.ensureFolder(taskFolder)
 
@@ -986,6 +997,74 @@ export class ProjectStore implements TaskSource {
       }
     }
     await this.saveProject(project)
+  }
+
+  /**
+   * One-time issue-key adoption for a project. Titles carrying an embedded key
+   * ("ARGUS-4: Fix things") donate it: the key moves to `task.key`, the prefix
+   * is stripped from the title (which renames the file — vault-wide backlinks
+   * outside PM-managed files do NOT auto-update; the caller must warn).
+   * Keyless tasks get fresh sequential keys in createdAt order. Idempotent:
+   * a second run finds no embedded keys and no keyless tasks, and changes
+   * nothing. Not on the TaskSource interface — a one-time pm-file concern.
+   */
+  async adoptIssueKeys(
+    project: Project,
+    fallbackPrefix?: string
+  ): Promise<{ prefix: string; adopted: number; assigned: number; renamedBasenames: string[] } | null> {
+    const flat = flattenTasks(project.tasks).map((f) => f.task)
+    const embedded = new Map<string, { seq: number; title: string }>()
+    const counts = new Map<string, number>()
+    for (const t of flat) {
+      const m = /^([A-Z][A-Z0-9]+)-(\d+):?\s*/.exec(t.title)
+      if (!m) continue
+      embedded.set(t.id, { seq: Number(m[2]), title: t.title.slice(m[0].length) || t.title })
+      counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
+    }
+    const majority = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+    const hadPrefix = !!project.keyPrefix
+    const prefix = project.keyPrefix || majority || fallbackPrefix?.toUpperCase() || ''
+    if (!/^[A-Z][A-Z0-9]*$/.test(prefix)) return null
+
+    let adopted = 0
+    let assigned = 0
+    const renamedBasenames: string[] = []
+    const usedSeqs = new Set<number>()
+    for (const t of flat) {
+      if (t.key) {
+        const m = new RegExp(`^${prefix}-(\\d+)$`).exec(t.key)
+        if (m) usedSeqs.add(Number(m[1]))
+      }
+    }
+
+    // Pass 1: adopt embedded keys (first claim on a sequence number wins;
+    // duplicates fall through to fresh assignment, title left untouched).
+    for (const t of flat) {
+      const e = embedded.get(t.id)
+      if (!e || t.key || usedSeqs.has(e.seq)) continue
+      usedSeqs.add(e.seq)
+      t.key = `${prefix}-${e.seq}`
+      if (t.filePath) renamedBasenames.push(t.filePath.replace(/^.*\//, ''))
+      t.title = e.title
+      adopted++
+      // Title change renames the file; children's Parent link needs a rewrite.
+      this.markDirty(project, [t.id], 'full')
+      for (const sub of t.subtasks) this.markDirty(project, [sub.id], 'full')
+    }
+
+    // Pass 2: fresh keys for the keyless, oldest first.
+    let nextSeq = usedSeqs.size ? Math.max(...usedSeqs) + 1 : 1
+    const keyless = flat.filter((t) => !t.key).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    for (const t of keyless) {
+      t.key = `${prefix}-${nextSeq++}`
+      assigned++
+      this.markDirty(project, [t.id], 'fm')
+    }
+
+    project.keyPrefix = prefix
+    project.nextKeySeq = nextSeq
+    if (adopted || assigned || !hadPrefix) await this.saveProject(project)
+    return { prefix, adopted, assigned, renamedBasenames }
   }
 
   /**

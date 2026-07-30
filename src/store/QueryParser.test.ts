@@ -1,0 +1,257 @@
+import { describe, expect, it } from 'vitest'
+import { Temporal } from '../dates'
+import { DEFAULT_PRIORITIES, DEFAULT_SEVERITIES, DEFAULT_STATUSES, makeTask, type Task } from '../types'
+import { evaluateQuery, parseQuery, type QueryCtx } from './QueryParser'
+
+// Thursday; end of ISO week = 2026-08-02.
+const TODAY = Temporal.PlainDate.from('2026-07-30')
+
+function ctx(overrides: Partial<QueryCtx> = {}): QueryCtx {
+  return {
+    statuses: DEFAULT_STATUSES,
+    priorities: DEFAULT_PRIORITIES,
+    severities: DEFAULT_SEVERITIES,
+    currentUser: '',
+    today: TODAY,
+    ...overrides
+  }
+}
+
+function matches(query: string, overrides: Partial<Task>, c: QueryCtx = ctx()): boolean {
+  return evaluateQuery(parseQuery(query), makeTask(overrides), c)
+}
+
+describe('parseQuery', () => {
+  it('returns an empty query for empty and whitespace-only input', () => {
+    expect(parseQuery('')).toEqual({ terms: [], freeText: '' })
+    expect(parseQuery('   \n ')).toEqual({ terms: [], freeText: '' })
+  })
+
+  it('parses field terms and collects the rest as free text', () => {
+    expect(parseQuery('status:done beacon triage')).toEqual({
+      terms: [{ field: 'status', op: '=', value: 'done' }],
+      freeText: 'beacon triage'
+    })
+  })
+
+  it('parses negation and every comparison operator', () => {
+    expect(parseQuery('status:!done').terms).toEqual([{ field: 'status', op: '!', value: 'done' }])
+    expect(parseQuery('prio:>=high').terms).toEqual([{ field: 'prio', op: '>=', value: 'high' }])
+    expect(parseQuery('prio:<=low').terms).toEqual([{ field: 'prio', op: '<=', value: 'low' }])
+    expect(parseQuery('progress:>50').terms).toEqual([{ field: 'progress', op: '>', value: '50' }])
+    expect(parseQuery('due:<2026-08-15').terms).toEqual([{ field: 'due', op: '<', value: '2026-08-15' }])
+  })
+
+  it('keeps a double-quoted value (with spaces) as one atom', () => {
+    expect(parseQuery('assignee:"John Smith" beacon').terms).toEqual([
+      { field: 'assignee', op: '=', value: 'john smith' }
+    ])
+    expect(parseQuery('assignee:"John Smith" beacon').freeText).toBe('beacon')
+    expect(parseQuery('assignee:!"John Smith"').terms).toEqual([{ field: 'assignee', op: '!', value: 'john smith' }])
+  })
+
+  it('quotes protect operator characters', () => {
+    expect(parseQuery('assignee:">weird"').terms).toEqual([{ field: 'assignee', op: '=', value: '>weird' }])
+  })
+
+  it('lowercases field names and values', () => {
+    expect(parseQuery('STATUS:Done').terms).toEqual([{ field: 'status', op: '=', value: 'done' }])
+  })
+
+  it('treats an unknown field as free text (whole term)', () => {
+    expect(parseQuery('flavor:sour status:done')).toEqual({
+      terms: [{ field: 'status', op: '=', value: 'done' }],
+      freeText: 'flavor:sour'
+    })
+  })
+
+  it('never throws on garbage: lone colons, dangling ops, unclosed quotes', () => {
+    expect(() => parseQuery(':')).not.toThrow()
+    expect(() => parseQuery('::: a:b: !>=< "')).not.toThrow()
+    expect(parseQuery(':').freeText).toBe(':')
+    expect(parseQuery('status:').freeText).toBe('status:')
+    expect(parseQuery('status:!').freeText).toBe('status:!')
+    expect(parseQuery('assignee:"John').terms).toEqual([{ field: 'assignee', op: '=', value: 'john' }])
+  })
+
+  it('memoizes the last query string', () => {
+    const a = parseQuery('status:done x')
+    expect(parseQuery('status:done x')).toBe(a)
+    expect(parseQuery('status:todo')).not.toBe(a)
+  })
+})
+
+describe('field matchers', () => {
+  it('key: exact and prefix match, case-insensitive', () => {
+    expect(matches('key:argus-3', { key: 'ARGUS-3' })).toBe(true)
+    expect(matches('key:ARGUS', { key: 'ARGUS-3' })).toBe(true)
+    expect(matches('key:ARGUS-1', { key: 'ARGUS-12' })).toBe(false)
+    expect(matches('key:SOC', { key: 'ARGUS-3' })).toBe(false)
+    expect(matches('key:!ARGUS', { key: 'ARGUS-3' })).toBe(false)
+    expect(matches('key:ARGUS', { key: '' })).toBe(false)
+  })
+
+  it('status: equality and negation on the id', () => {
+    expect(matches('status:done', { status: 'done' })).toBe(true)
+    expect(matches('status:DONE', { status: 'done' })).toBe(true)
+    expect(matches('status:done', { status: 'todo' })).toBe(false)
+    expect(matches('status:!done', { status: 'todo' })).toBe(true)
+    expect(matches('status:!done', { status: 'done' })).toBe(false)
+  })
+
+  it('status: an ordering op on an equality field matches nothing (and never throws)', () => {
+    expect(matches('status:>done', { status: 'done' })).toBe(false)
+  })
+
+  it('type: matches issueType', () => {
+    expect(matches('type:incident', { issueType: 'incident' })).toBe(true)
+    expect(matches('type:!incident', { issueType: 'bug' })).toBe(true)
+    expect(matches('type:incident', { issueType: 'bug' })).toBe(false)
+  })
+
+  it('priority: ordering by catalog index, 0 = highest rank', () => {
+    // DEFAULT_PRIORITIES: critical, high, medium, low
+    expect(matches('prio:>=high', { priority: 'critical' })).toBe(true)
+    expect(matches('prio:>=high', { priority: 'high' })).toBe(true)
+    expect(matches('prio:>=high', { priority: 'medium' })).toBe(false)
+    expect(matches('prio:>high', { priority: 'critical' })).toBe(true)
+    expect(matches('prio:>high', { priority: 'high' })).toBe(false)
+    expect(matches('prio:<medium', { priority: 'low' })).toBe(true)
+    expect(matches('prio:<medium', { priority: 'medium' })).toBe(false)
+    expect(matches('prio:<=medium', { priority: 'medium' })).toBe(true)
+    expect(matches('priority:high', { priority: 'high' })).toBe(true)
+    expect(matches('priority:!high', { priority: 'low' })).toBe(true)
+  })
+
+  it('priority: unknown ids never match an ordering op', () => {
+    expect(matches('prio:>=urgent', { priority: 'high' })).toBe(false)
+    expect(matches('prio:>=high', { priority: 'mystery' })).toBe(false)
+    expect(matches('prio:>=high', { priority: 'high' }, ctx({ priorities: [] }))).toBe(false)
+  })
+
+  it('severity: sev:>=sev2 means sev1 or sev2', () => {
+    expect(matches('sev:>=sev2', { severity: 'sev1' })).toBe(true)
+    expect(matches('sev:>=sev2', { severity: 'sev2' })).toBe(true)
+    expect(matches('sev:>=sev2', { severity: 'sev3' })).toBe(false)
+    expect(matches('sev:>=sev2', { severity: '' })).toBe(false)
+    expect(matches('severity:sev1', { severity: 'sev1' })).toBe(true)
+    expect(matches('sev:!sev1', { severity: 'sev2' })).toBe(true)
+  })
+
+  it('verdict: equality and negation', () => {
+    expect(matches('verdict:pending', { verdict: 'pending' })).toBe(true)
+    expect(matches('verdict:!pending', { verdict: 'false-positive' })).toBe(true)
+    expect(matches('verdict:pending', { verdict: '' })).toBe(false)
+  })
+
+  it('assignee: me resolves to currentUser, falls back to the literal', () => {
+    const withUser = ctx({ currentUser: 'Alice' })
+    expect(matches('assignee:me', { assignees: ['Alice'] }, withUser)).toBe(true)
+    expect(matches('assignee:me', { assignees: ['Bob'] }, withUser)).toBe(false)
+    expect(matches('assignee:me', { assignees: ['me'] })).toBe(true)
+    expect(matches('assignee:me', { assignees: ['Alice'] })).toBe(false)
+  })
+
+  it('assignee: none matches unassigned, negation inverts', () => {
+    expect(matches('assignee:none', { assignees: [] })).toBe(true)
+    expect(matches('assignee:none', { assignees: ['Alice'] })).toBe(false)
+    expect(matches('assignee:!none', { assignees: ['Alice'] })).toBe(true)
+    expect(matches('assignee:"john smith"', { assignees: ['John Smith'] })).toBe(true)
+    expect(matches('assignee:!bob', { assignees: ['Alice'] })).toBe(true)
+  })
+
+  it('tag: any tag equals; negation = no tag equals', () => {
+    expect(matches('tag:phishing', { tags: ['malware', 'phishing'] })).toBe(true)
+    expect(matches('tag:phishing', { tags: ['malware'] })).toBe(false)
+    expect(matches('tag:!phishing', { tags: ['malware'] })).toBe(true)
+    expect(matches('tag:!phishing', { tags: [] })).toBe(true)
+    expect(matches('tag:PHISHING', { tags: ['phishing'] })).toBe(true)
+  })
+
+  it('bucket: equality including the literal none', () => {
+    expect(matches('bucket:this-week', { bucket: 'this-week' })).toBe(true)
+    expect(matches('bucket:none', { bucket: 'none' })).toBe(true)
+    expect(matches('bucket:!none', { bucket: 'next' })).toBe(true)
+    expect(matches('bucket:next', { bucket: 'none' })).toBe(false)
+  })
+
+  it('progress: equality and ordering on the number', () => {
+    expect(matches('progress:50', { progress: 50 })).toBe(true)
+    expect(matches('progress:50', { progress: 49 })).toBe(false)
+    expect(matches('progress:!50', { progress: 49 })).toBe(true)
+    expect(matches('progress:>=50', { progress: 50 })).toBe(true)
+    expect(matches('progress:>50', { progress: 50 })).toBe(false)
+    expect(matches('progress:<50', { progress: 0 })).toBe(true)
+    expect(matches('progress:<=50', { progress: 51 })).toBe(false)
+    expect(matches('progress:banana', { progress: 50 })).toBe(false)
+  })
+
+  it('due: none / today / tomorrow keywords', () => {
+    expect(matches('due:none', { due: '' })).toBe(true)
+    expect(matches('due:none', { due: '2026-08-01' })).toBe(false)
+    expect(matches('due:!none', { due: '2026-08-01' })).toBe(true)
+    expect(matches('due:today', { due: '2026-07-30' })).toBe(true)
+    expect(matches('due:today', { due: '2026-07-31' })).toBe(false)
+    expect(matches('due:tomorrow', { due: '2026-07-31' })).toBe(true)
+    expect(matches('due:tomorrow', { due: '2026-07-30' })).toBe(false)
+  })
+
+  it('due: overdue requires a past date and a non-terminal status', () => {
+    expect(matches('due:overdue', { due: '2026-07-29', status: 'in-progress' })).toBe(true)
+    expect(matches('due:overdue', { due: '2026-07-29', status: 'done' })).toBe(false)
+    expect(matches('due:overdue', { due: '2026-07-30', status: 'in-progress' })).toBe(false)
+    expect(matches('due:overdue', { due: '', status: 'in-progress' })).toBe(false)
+  })
+
+  it('due: this-week and this-month windows', () => {
+    // Week of Thu 2026-07-30 ends Sun 2026-08-02.
+    expect(matches('due:this-week', { due: '2026-07-30' })).toBe(true)
+    expect(matches('due:this-week', { due: '2026-08-02' })).toBe(true)
+    expect(matches('due:this-week', { due: '2026-08-03' })).toBe(false)
+    expect(matches('due:this-week', { due: '2026-07-29' })).toBe(false)
+    expect(matches('due:this-month', { due: '2026-07-31' })).toBe(true)
+    expect(matches('due:this-month', { due: '2026-07-01' })).toBe(false)
+    expect(matches('due:this-month', { due: '2026-08-01' })).toBe(false)
+  })
+
+  it('due: relative comparisons in d/w/m from ctx.today', () => {
+    expect(matches('due:<7d', { due: '2026-08-05' })).toBe(true)
+    expect(matches('due:<7d', { due: '2026-08-06' })).toBe(false)
+    expect(matches('due:<=2w', { due: '2026-08-13' })).toBe(true)
+    expect(matches('due:<=2w', { due: '2026-08-14' })).toBe(false)
+    expect(matches('due:>3d', { due: '2026-08-05' })).toBe(true)
+    expect(matches('due:>3d', { due: '2026-08-01' })).toBe(false)
+    expect(matches('due:>=1m', { due: '2026-08-30' })).toBe(true)
+    expect(matches('due:>=1m', { due: '2026-08-29' })).toBe(false)
+  })
+
+  it('due: ISO comparisons and exact date', () => {
+    expect(matches('due:<2026-08-15', { due: '2026-08-14' })).toBe(true)
+    expect(matches('due:<2026-08-15', { due: '2026-08-15' })).toBe(false)
+    expect(matches('due:2026-08-15', { due: '2026-08-15' })).toBe(true)
+    expect(matches('due:2026-08-15', { due: '2026-08-14' })).toBe(false)
+    expect(matches('due:!2026-08-15', { due: '2026-08-14' })).toBe(true)
+  })
+
+  it('due: no due date or garbage value never matches a comparison', () => {
+    expect(matches('due:<7d', { due: '' })).toBe(false)
+    expect(matches('due:garbage', { due: '2026-08-01' })).toBe(false)
+    expect(matches('due:<garbage', { due: '2026-08-01' })).toBe(false)
+  })
+
+  it('archived: matches the flag (visibility still gated by showArchived upstream)', () => {
+    expect(matches('archived:true', { archived: true })).toBe(true)
+    expect(matches('archived:true', {})).toBe(false)
+    expect(matches('archived:false', {})).toBe(true)
+    expect(matches('archived:false', { archived: true })).toBe(false)
+    expect(matches('archived:maybe', { archived: true })).toBe(false)
+  })
+
+  it('ANDs all terms together', () => {
+    const t: Partial<Task> = { issueType: 'incident', status: 'in-progress', severity: 'sev1' }
+    expect(matches('type:incident status:!done sev:>=sev2', t)).toBe(true)
+    expect(matches('type:incident status:!done sev:>=sev2', { ...t, status: 'done' })).toBe(false)
+    expect(matches('type:incident status:!done sev:>=sev2', { ...t, severity: 'sev3' })).toBe(false)
+    expect(matches('type:incident status:!done sev:>=sev2', { ...t, issueType: 'task' })).toBe(false)
+  })
+})

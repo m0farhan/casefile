@@ -238,6 +238,33 @@ export class PMSettingTab extends PluginSettingTab {
         })
     )
 
+    // ── Issue types ───────────────────────────────────────────────────────────
+    new Setting(containerEl).setName('Issue types').setHeading()
+    containerEl.createEl('p', {
+      cls: 'pm-settings-desc',
+      text: 'Customize issue type labels, colors, and icons. Drag to reorder.'
+    })
+
+    const issueTypeContainer = containerEl.createDiv('pm-settings-statuses')
+    this.renderIssueTypeList(issueTypeContainer)
+
+    new Setting(containerEl).addButton((btn) =>
+      btn
+        .setButtonText('+ add issue type')
+        .setCta()
+        .onClick(() => {
+          const id = 'issuetype-' + makeId().slice(0, 6)
+          this.plugin.settings.issueTypes.push({
+            id,
+            label: 'New issue type',
+            color: '#8a94a0',
+            icon: ''
+          })
+          void this.plugin.saveSettings()
+          this.renderIssueTypeList(issueTypeContainer)
+        })
+    )
+
     if (isTaskNotesInstalled(this.app)) {
       new Setting(containerEl).setName('TaskNotes').setHeading()
 
@@ -286,16 +313,31 @@ export class PMSettingTab extends PluginSettingTab {
     })
   }
 
-  private async remapOrphanTasks(field: 'status' | 'priority', deletedId: string, deletedLabel: string): Promise<void> {
-    const configs = field === 'status' ? this.plugin.settings.statuses : this.plugin.settings.priorities
+  private async remapOrphanTasks(
+    field: 'status' | 'priority' | 'issueType',
+    deletedId: string,
+    deletedLabel: string
+  ): Promise<void> {
+    const configs =
+      field === 'status'
+        ? this.plugin.settings.statuses
+        : field === 'priority'
+          ? this.plugin.settings.priorities
+          : this.plugin.settings.issueTypes
     if (configs.length === 0) return
-    const fallback = configs[0]
+    // Orphaned issue types remap to 'task' (the neutral default); statuses/priorities to the first entry.
+    const fallback = (field === 'issueType' && configs.find((c) => c.id === 'task')) || configs[0]
     const folder = this.plugin.settings.projectsFolder
     const projects = await this.plugin.store.loadAllProjects(folder)
     let remapped = 0
     for (const project of projects) {
-      // A project that defines this status or priority itself is unaffected by the global delete.
-      const own = field === 'status' ? project.config?.statuses : project.config?.priorities
+      // A project that defines this entry itself is unaffected by the global delete.
+      const own =
+        field === 'status'
+          ? project.config?.statuses
+          : field === 'priority'
+            ? project.config?.priorities
+            : project.config?.issueTypes
       if (own?.some((entry) => entry.id === deletedId)) continue
       const ids = flattenTasks(project.tasks)
         .filter(({ task }) => task[field] === deletedId)
@@ -325,6 +367,18 @@ export class PMSettingTab extends PluginSettingTab {
       priorities: this.plugin.settings.priorities,
       onChanged: () => void this.plugin.saveSettings(),
       onDeleted: (deleted) => void this.remapOrphanTasks('priority', deleted.id, deleted.label)
+    })
+  }
+
+  private renderIssueTypeList(container: HTMLElement): void {
+    // ponytail: IssueTypeConfig is structurally a PriorityConfig, so the priority palette editor
+    // is reused as-is. Known ceiling: the min-one Notice says "priority" — generalize
+    // PaletteListEditor with a dedicated entry point if that copy ever matters.
+    renderPriorityListEditor(container, {
+      app: this.app,
+      priorities: this.plugin.settings.issueTypes,
+      onChanged: () => void this.plugin.saveSettings(),
+      onDeleted: (deleted) => void this.remapOrphanTasks('issueType', deleted.id, deleted.label)
     })
   }
 }

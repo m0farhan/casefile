@@ -1,6 +1,7 @@
 import { parsePlainDate, Temporal, today } from '../dates'
 import type { DueDateFilter, FilterState, StatusConfig, Task } from '../types'
 import { isTerminalStatus } from '../utils'
+import { evaluateQuery, parseQuery, type QueryCtx } from './QueryParser'
 import type { FlatTask } from './TaskTreeOps'
 
 export function isFilterActive(filter: FilterState): boolean {
@@ -30,9 +31,29 @@ export function countActiveFilters(filter: FilterState): number {
   return count
 }
 
-export function matchesFilter(task: Task, filter: FilterState, statuses: StatusConfig[] = []): boolean {
+export function matchesFilter(
+  task: Task,
+  filter: FilterState,
+  statuses: StatusConfig[] = [],
+  queryCtx?: Partial<QueryCtx>
+): boolean {
+  // Note: this gate runs before any query term, so `archived:true` in the query
+  // bar only has effect once showArchived is also on — by design.
   if (task.archived && !filter.showArchived) return false
-  const q = filter.text.trim().toLowerCase()
+  const compiled = parseQuery(filter.text)
+  if (compiled.terms.length) {
+    const ctx: QueryCtx = {
+      statuses,
+      priorities: [],
+      severities: [],
+      currentUser: '',
+      today: today(),
+      ...queryCtx
+    }
+    if (!evaluateQuery(compiled, task, ctx)) return false
+  }
+  // Free-text words (non-field terms) keep the original substring semantics below.
+  const q = compiled.freeText.toLowerCase()
   if (q) {
     if (
       !(
@@ -58,10 +79,15 @@ export function matchesFilter(task: Task, filter: FilterState, statuses: StatusC
   return true
 }
 
-export function applyTaskFilter(tasks: Task[], filter: FilterState, statuses: StatusConfig[] = []): Task[] {
+export function applyTaskFilter(
+  tasks: Task[],
+  filter: FilterState,
+  statuses: StatusConfig[] = [],
+  queryCtx?: Partial<QueryCtx>
+): Task[] {
   return tasks
-    .filter((t) => matchesFilter(t, filter, statuses))
-    .map((t) => (t.subtasks.length ? { ...t, subtasks: applyTaskFilter(t.subtasks, filter, statuses) } : t))
+    .filter((t) => matchesFilter(t, filter, statuses, queryCtx))
+    .map((t) => (t.subtasks.length ? { ...t, subtasks: applyTaskFilter(t.subtasks, filter, statuses, queryCtx) } : t))
 }
 
 /**
@@ -69,11 +95,16 @@ export function applyTaskFilter(tasks: Task[], filter: FilterState, statuses: St
  * their dropped ancestor. Used by the gantt view so a matching subtask doesn't
  * disappear when its parent doesn't match.
  */
-export function applyTaskFilterPromote(tasks: Task[], filter: FilterState, statuses: StatusConfig[] = []): Task[] {
+export function applyTaskFilterPromote(
+  tasks: Task[],
+  filter: FilterState,
+  statuses: StatusConfig[] = [],
+  queryCtx?: Partial<QueryCtx>
+): Task[] {
   const result: Task[] = []
   for (const t of tasks) {
-    const filteredSubs = t.subtasks.length ? applyTaskFilterPromote(t.subtasks, filter, statuses) : []
-    if (matchesFilter(t, filter, statuses)) {
+    const filteredSubs = t.subtasks.length ? applyTaskFilterPromote(t.subtasks, filter, statuses, queryCtx) : []
+    if (matchesFilter(t, filter, statuses, queryCtx)) {
       result.push({ ...t, subtasks: filteredSubs })
     } else {
       result.push(...filteredSubs)
@@ -82,8 +113,13 @@ export function applyTaskFilterPromote(tasks: Task[], filter: FilterState, statu
   return result
 }
 
-export function applyTaskFilterFlat(flat: FlatTask[], filter: FilterState, statuses: StatusConfig[] = []): FlatTask[] {
-  return flat.filter(({ task }) => matchesFilter(task, filter, statuses))
+export function applyTaskFilterFlat(
+  flat: FlatTask[],
+  filter: FilterState,
+  statuses: StatusConfig[] = [],
+  queryCtx?: Partial<QueryCtx>
+): FlatTask[] {
+  return flat.filter(({ task }) => matchesFilter(task, filter, statuses, queryCtx))
 }
 
 function matchDueDateFilter(task: Task, filter: DueDateFilter, statuses: StatusConfig[]): boolean {

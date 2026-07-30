@@ -16,6 +16,7 @@ import { flattenTasks } from '../store/TaskTreeOps'
 import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId, getPriorityConfig } from '../utils'
 import { confirmDialog } from '../ui/ModalFactory'
+import { renderKeyChip } from '../ui/composites/issueMeta'
 import { renderTaskFormFields } from './TaskFormFields'
 import { renderTimeTrackingPanel } from './TimeTrackingPanel'
 import { renderSubtasksPanel } from './SubtasksPanel'
@@ -229,15 +230,19 @@ export class TaskModal extends Modal {
     crumb.createSpan({ cls: 'pm-te-crumb-name', text: this.project.title })
     const crumbSep = crumb.createSpan({ cls: 'pm-te-crumb-sep' })
     setIcon(crumbSep, 'chevron-right')
-    const idEl = crumb.createSpan({ cls: 'pm-te-crumb-id pm-te-copyable', text: this.task.id })
-    setTooltip(idEl, 'Copy task ID')
-    idEl.addEventListener(
-      'click',
-      safeAsync(async () => {
-        await navigator.clipboard.writeText(this.task.id)
-        new Notice('Copied task ID')
-      })
-    )
+    if (this.task.key) {
+      renderKeyChip(crumb, this.task.key, { copy: true })
+    } else {
+      const idEl = crumb.createSpan({ cls: 'pm-te-crumb-id pm-te-copyable', text: this.task.id })
+      setTooltip(idEl, 'Copy task ID')
+      idEl.addEventListener(
+        'click',
+        safeAsync(async () => {
+          await navigator.clipboard.writeText(this.task.id)
+          new Notice('Copied task ID')
+        })
+      )
+    }
 
     header.createDiv('pm-te-header-spacer')
 

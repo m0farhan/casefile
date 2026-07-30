@@ -1,9 +1,11 @@
-import type { Task } from '../../types'
+import { setTooltip } from 'obsidian'
+import { DEFAULT_ISSUE_TYPES, type IssueTypeConfig, type Task } from '../../types'
 import { formatDateShort } from '../../utils'
 import { AvatarStack } from '../primitives/AvatarStack'
 import { Chip } from '../primitives/Chip'
 import { ProgressBar } from '../primitives/ProgressBar'
 import { renderDueChip } from './dueChip'
+import { renderIssueTypeIcon, renderKeyChip } from './issueMeta'
 import { renderTagChip } from './tagChip'
 import { renderTimeChip } from './timeChip'
 
@@ -12,6 +14,11 @@ export interface KanbanCardProps {
   priorityColor?: string
   descriptionPreview?: string
   parentTitle?: string
+  /** Resolved issue-type catalog (configFor(project).issueTypes). Defaults apply when absent. */
+  issueTypes?: IssueTypeConfig[]
+  /** Epic ancestor context. TODO(board agent): the card has no project access — fill from
+   *  findEpicAncestor(project, task.id) in KanbanView (label = epic.key || epic.title). */
+  epic?: { label: string; color?: string }
   subtaskProgress?: { done: number; total: number }
   loggedHours: number
   overdue: boolean
@@ -44,6 +51,11 @@ export class KanbanCard {
     }
 
     const titleRow = body.createDiv('pm-kanban-card-title-row')
+    renderIssueTypeIcon(
+      titleRow,
+      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
+    )
+    if (task.key) renderKeyChip(titleRow, task.key)
     titleRow.createSpan({ text: task.title, cls: 'pm-kanban-card-title' })
     if (task.type === 'milestone') {
       new Chip(titleRow)
@@ -68,6 +80,18 @@ export class KanbanCard {
         .setSize('sm')
         .setColor('var(--color-blue)')
         .setTooltip('Recurring')
+    }
+
+    if (props.epic) {
+      const label = props.epic.label.length > 18 ? props.epic.label.slice(0, 18) + '…' : props.epic.label
+      const chip = body.createSpan({ cls: 'pm-epic-chip', text: label })
+      setTooltip(chip, props.epic.label)
+      if (props.epic.color) {
+        chip.setCssStyles({
+          color: props.epic.color,
+          background: `color-mix(in srgb, ${props.epic.color} 15%, transparent)`
+        })
+      }
     }
 
     if (props.descriptionPreview) {

@@ -47,6 +47,18 @@ export function indexRemoveSubtree(project: Project, task: Task): void {
   for (const sub of task.subtasks) indexRemoveSubtree(project, sub)
 }
 
+/** Nearest ancestor (excluding the task itself) whose issueType is 'epic'. O(depth) via parent pointers. */
+export function findEpicAncestor(project: Project, taskId: string): Task | null {
+  let parentId = project.taskIndex.get(taskId)?.parentId ?? null
+  while (parentId) {
+    const entry = project.taskIndex.get(parentId)
+    if (!entry) return null
+    if (entry.task.issueType === 'epic') return entry.task
+    parentId = entry.parentId
+  }
+  return null
+}
+
 /** Update only a task's parentId in the index. The task's own subtree is unaffected. */
 export function indexSetParent(project: Project, id: string, parentId: string | null): void {
   const entry = project.taskIndex.get(id)

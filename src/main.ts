@@ -8,7 +8,15 @@ import { ProjectView, PM_PROJECT_VIEW_TYPE } from './views/ProjectView'
 import { DashboardView, PM_DASHBOARD_VIEW_TYPE } from './views/DashboardView'
 import { registerStyleguide } from './views/styleguide/StyleguideView'
 import { PMViewRouter } from './views/PMViewRouter'
-import { openProjectModal, openTaskModal, openProjectPicker, openTaskPicker, openImportModal } from './ui/ModalFactory'
+import {
+  openProjectModal,
+  openTaskModal,
+  openProjectPicker,
+  openTaskPicker,
+  openImportModal,
+  confirmDialog,
+  promptText
+} from './ui/ModalFactory'
 import { Notifier } from './components/Notifier'
 import { migrateProjects } from './migration'
 import { safeAsync } from './utils'
@@ -122,6 +130,14 @@ export default class PMPlugin extends Plugin {
       name: 'Import notes as tasks',
       callback: () => {
         void this.importNotes()
+      }
+    })
+
+    this.addCommand({
+      id: 'adopt-issue-keys',
+      name: 'Adopt issue keys for a project',
+      callback: () => {
+        void this.adoptIssueKeysFlow()
       }
     })
 
@@ -292,6 +308,44 @@ export default class PMPlugin extends Plugin {
   }
 
   /** Show project picker, then open TaskModal to create a task (optionally pick parent for subtask) */
+  private async adoptIssueKeysFlow(): Promise<void> {
+    if (!(this.store instanceof ProjectStore)) return
+    const store = this.store
+    const projects = await store.loadAllProjects(this.settings.projectsFolder)
+    if (!projects.length) {
+      this.showNotice('No projects yet.')
+      return
+    }
+    openProjectPicker(this, projects, (project) => {
+      void (async () => {
+        const ok = await confirmDialog(
+          this.app,
+          'Adopt issue keys: keys embedded in titles ("ARGUS-4: …") move to a real key field and the prefix is stripped from the title, which renames those task files. Links to them from notes outside this project’s task files will NOT auto-update. Keyless tasks get fresh keys.',
+          'Adopt keys'
+        )
+        if (!ok) return
+        let result = await store.adoptIssueKeys(project)
+        if (!result) {
+          const prefix = await promptText(this.app, 'Key prefix (letters/digits, e.g. SOC)', 'SOC')
+          if (!prefix) return
+          result = await store.adoptIssueKeys(project, prefix.trim())
+          if (!result) {
+            this.showNotice('Invalid prefix — keys not adopted.')
+            return
+          }
+        }
+        const parts = [`${result.prefix}: adopted ${result.adopted}, assigned ${result.assigned}.`]
+        if (result.renamedBasenames.length) {
+          const list = result.renamedBasenames.slice(0, 8).join(', ')
+          const more = result.renamedBasenames.length > 8 ? ` and ${result.renamedBasenames.length - 8} more` : ''
+          parts.push(`Renamed: ${list}${more}. Check hand-written links to these files.`)
+        }
+        new Notice(parts.join('\n'), 10000)
+        this.refreshProjectViews()
+      })()
+    })
+  }
+
   private async pickProjectThenCreateTask(mode: null | 'pick-parent'): Promise<void> {
     const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
     if (!projects.length) {

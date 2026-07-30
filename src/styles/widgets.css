@@ -288,3 +288,55 @@
 .pm-gantt-add-row .pm-prop-add {
   margin-left: 20px;
 }
+
+/* ─ GreySurface issue meta ─ */
+.pm-issuetype-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  --icon-size: 13px;
+  font-size: 12px; /* emoji-icon fallback */
+  vertical-align: middle;
+}
+.pm-key-chip {
+  font-family: var(--gs-font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--gs-ink-subtle);
+  border: 1px solid var(--gs-hairline);
+  border-radius: 4px;
+  padding: 2px 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.pm-key-chip--copy {
+  cursor: pointer;
+}
+.pm-key-chip--copy:hover {
+  color: var(--gs-ink-muted);
+  border-color: var(--gs-hairline-strong);
+}
+.pm-epic-chip {
+  align-self: flex-start;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--gs-purple);
+  background: var(--gs-purple-tint);
+  border-radius: 4px;
+  padding: 1px 6px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Table title cell: sized down, spaced from the title text */
+.pm-table-cell-title .pm-issuetype-icon {
+  --icon-size: 12px;
+  margin-right: 6px;
+}
+.pm-table-cell-title .pm-key-chip {
+  font-size: 10px;
+  padding: 1px 4px;
+  margin-right: 6px;
+}

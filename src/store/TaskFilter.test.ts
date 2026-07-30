@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_STATUSES, makeDefaultFilter, makeTask, type FilterState, type Task } from '../types'
+import { Temporal } from '../dates'
+import {
+  DEFAULT_PRIORITIES,
+  DEFAULT_SEVERITIES,
+  DEFAULT_STATUSES,
+  makeDefaultFilter,
+  makeTask,
+  type FilterState,
+  type Task
+} from '../types'
 import {
   applyTaskFilter,
   applyTaskFilterFlat,
@@ -243,5 +252,79 @@ describe('severity/verdict filters and key search', () => {
     const f: FilterState = { ...makeDefaultFilter(), severities: ['sev1'], verdicts: ['pending'] }
     expect(isFilterActive(f)).toBe(true)
     expect(countActiveFilters(f)).toBe(2)
+  })
+})
+
+describe('query bar (JQL-lite) end to end', () => {
+  const queryCtx = {
+    priorities: DEFAULT_PRIORITIES,
+    severities: DEFAULT_SEVERITIES,
+    currentUser: 'Alice',
+    today: Temporal.PlainDate.from('2026-07-30')
+  }
+  const incident = makeTask({
+    id: 'i1',
+    key: 'SOC-3',
+    title: 'C2 beacon triage',
+    issueType: 'incident',
+    status: 'in-progress',
+    severity: 'sev1',
+    assignees: ['Alice'],
+    due: '2026-07-29'
+  })
+  const q = (text: string): FilterState => filter({ text })
+  const match = (text: string, t: Task): boolean => matchesFilter(t, q(text), DEFAULT_STATUSES, queryCtx)
+
+  it('matches a full structured query plus free text', () => {
+    expect(match('type:incident status:!done sev:>=sev2 beacon', incident)).toBe(true)
+  })
+
+  it('fails when any single term fails', () => {
+    expect(match('type:incident status:!done sev:>=sev2 beacon', { ...incident, status: 'done' })).toBe(false)
+    expect(match('type:incident status:!done sev:>=sev2 beacon', { ...incident, severity: 'sev3' })).toBe(false)
+    expect(match('type:incident status:!done sev:>=sev2 beacon', { ...incident, issueType: 'task' })).toBe(false)
+    expect(match('type:incident status:!done sev:>=sev2 beacon', { ...incident, title: 'Refactor build' })).toBe(false)
+  })
+
+  it('free text alone still matches by title substring (regression)', () => {
+    expect(match('beacon', incident)).toBe(true)
+    expect(match('unrelated', incident)).toBe(false)
+  })
+
+  it('resolves assignee:me through queryCtx.currentUser', () => {
+    expect(match('assignee:me', incident)).toBe(true)
+    expect(match('assignee:me', { ...incident, assignees: ['Bob'] })).toBe(false)
+    // Without a currentUser, 'me' stays a literal name.
+    expect(matchesFilter(incident, q('assignee:me'), DEFAULT_STATUSES)).toBe(false)
+  })
+
+  it('due:overdue works with the injected today and the status catalog', () => {
+    expect(match('due:overdue', incident)).toBe(true)
+    expect(match('due:overdue', { ...incident, status: 'done' })).toBe(false)
+  })
+
+  it('key prefix search works through the query bar', () => {
+    expect(match('key:soc', incident)).toBe(true)
+    expect(match('key:argus', incident)).toBe(false)
+  })
+
+  it('archived:true still requires showArchived (the early gate wins)', () => {
+    const archived = { ...incident, archived: true }
+    expect(matchesFilter(archived, q('archived:true'), DEFAULT_STATUSES, queryCtx)).toBe(false)
+    expect(
+      matchesFilter(archived, filter({ text: 'archived:true', showArchived: true }), DEFAULT_STATUSES, queryCtx)
+    ).toBe(true)
+    expect(
+      matchesFilter(incident, filter({ text: 'archived:true', showArchived: true }), DEFAULT_STATUSES, queryCtx)
+    ).toBe(false)
+  })
+
+  it('an unknown field falls through to free text and filters accordingly', () => {
+    expect(match('flavor:sour', incident)).toBe(false)
+    expect(match('c2:beacon', incident)).toBe(false)
+  })
+
+  it('garbage in the search box never throws', () => {
+    expect(() => match(': ::: status: !>= "', incident)).not.toThrow()
   })
 })

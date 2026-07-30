@@ -1,6 +1,7 @@
-import type { Task } from '../../../types'
+import { DEFAULT_ISSUE_TYPES, type IssueTypeConfig, type Task } from '../../../types'
 import { Chip } from '../../primitives/Chip'
 import { IconButton } from '../../primitives/IconButton'
+import { renderIssueTypeIcon, renderKeyChip } from '../issueMeta'
 import { renderTagChip } from '../tagChip'
 import { makeInlineEdit } from './inlineEdit'
 
@@ -8,6 +9,8 @@ export interface TitleCellProps {
   task: Task
   depth: number
   showTagColors: boolean
+  /** Resolved issue-type catalog (configFor(project).issueTypes). Defaults apply when absent. */
+  issueTypes?: IssueTypeConfig[]
   onTitleClick: () => void
   onTitleSave: (newTitle: string) => Promise<void>
   onAddSubtask: () => void
@@ -20,6 +23,12 @@ export class TitleCell {
     const { task } = props
     this.el = parentRow.createEl('td', { cls: 'pm-table-cell-title' })
     this.el.setCssStyles({ paddingLeft: `${props.depth * 20 + 8}px` })
+
+    renderIssueTypeIcon(
+      this.el,
+      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
+    )
+    if (task.key) renderKeyChip(this.el, task.key)
 
     const titleSpan = this.el.createSpan({ text: task.title, cls: 'pm-task-title-text' })
     titleSpan.addEventListener('click', () => props.onTitleClick())

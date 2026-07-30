@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { makeProject, makeTask, type Task } from '../types'
 import {
   buildTaskIndex,
+  findEpicAncestor,
   findParentId,
   findTaskById,
   indexAddSubtree,
@@ -111,5 +112,46 @@ describe('indexAddSubtree / indexRemoveSubtree / indexSetParent', () => {
     expect(findParentId(project, 'a1x')).toBe('a1')
     // siblings of a1 untouched
     expect(findParentId(project, 'a2')).toBe('a')
+  })
+})
+
+describe('findEpicAncestor', () => {
+  it('finds the nearest epic ancestor, skipping non-epic levels', () => {
+    const project = makeProject('P', 'P.md')
+    project.tasks = [
+      makeTask({
+        id: 'epic-outer',
+        issueType: 'epic',
+        subtasks: [
+          makeTask({
+            id: 'epic-inner',
+            issueType: 'epic',
+            subtasks: [makeTask({ id: 'story', issueType: 'story', subtasks: [makeTask({ id: 'leaf' })] })]
+          })
+        ]
+      })
+    ]
+    rebuildTaskIndex(project)
+    expect(findEpicAncestor(project, 'leaf')?.id).toBe('epic-inner')
+    expect(findEpicAncestor(project, 'story')?.id).toBe('epic-inner')
+  })
+
+  it('excludes the task itself when it is an epic', () => {
+    const project = makeProject('P', 'P.md')
+    project.tasks = [
+      makeTask({ id: 'outer', issueType: 'epic', subtasks: [makeTask({ id: 'inner', issueType: 'epic' })] })
+    ]
+    rebuildTaskIndex(project)
+    expect(findEpicAncestor(project, 'inner')?.id).toBe('outer')
+    expect(findEpicAncestor(project, 'outer')).toBeNull()
+  })
+
+  it('returns null when no ancestor is an epic, for top-level tasks, and for unknown ids', () => {
+    const project = makeProject('P', 'P.md')
+    project.tasks = tree() // all default issueType 'task'
+    rebuildTaskIndex(project)
+    expect(findEpicAncestor(project, 'a1x')).toBeNull()
+    expect(findEpicAncestor(project, 'a')).toBeNull()
+    expect(findEpicAncestor(project, 'nope')).toBeNull()
   })
 })

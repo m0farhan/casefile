@@ -1,0 +1,30 @@
+import { setIcon, setTooltip } from 'obsidian'
+import type { IssueTypeConfig } from '../../types'
+import { isIconName, safeAsync } from '../../utils'
+
+/** Colored issue-type glyph (Lucide id or emoji) with the type label as tooltip. */
+export function renderIssueTypeIcon(el: HTMLElement, cfg: IssueTypeConfig | undefined): void {
+  if (!cfg) return
+  const icon = el.createSpan({ cls: 'pm-issuetype-icon' })
+  icon.setCssStyles({ color: cfg.color })
+  if (cfg.icon && isIconName(cfg.icon)) setIcon(icon, cfg.icon)
+  else icon.setText(cfg.icon)
+  setTooltip(icon, cfg.label)
+}
+
+/** Monospace issue-key chip ("ARGUS-12"). With `copy`, clicking copies the key and flashes a tick. */
+export function renderKeyChip(el: HTMLElement, key: string, opts?: { copy?: boolean }): void {
+  const chip = el.createSpan({ cls: 'pm-key-chip', text: key })
+  if (!opts?.copy) return
+  chip.addClass('pm-key-chip--copy')
+  setTooltip(chip, 'Copy issue key')
+  chip.addEventListener(
+    'click',
+    safeAsync(async (e: MouseEvent) => {
+      e.stopPropagation()
+      await navigator.clipboard.writeText(key)
+      chip.setText('✓')
+      window.setTimeout(() => chip.setText(key), 700)
+    })
+  )
+}

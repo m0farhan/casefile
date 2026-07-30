@@ -144,6 +144,26 @@ export class ProjectModal extends Modal {
       this.project.description = descArea.value
     })
 
+    // ── Issue keys ────────────────────────────────────────────────────────────
+    const keySection = el.createDiv('pm-project-modal-section')
+    keySection.createEl('label', { text: 'Issue key prefix', cls: 'pm-label' })
+    const keyInput = keySection.createEl('input', {
+      type: 'text',
+      value: this.project.keyPrefix,
+      cls: 'pm-input pm-keyprefix-input'
+    })
+    keyInput.placeholder = 'Empty disables keys'
+    keyInput.maxLength = 10
+    keyInput.addEventListener('input', () => {
+      keyInput.value = keyInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+      if (keyInput.value && !/^[A-Z]/.test(keyInput.value)) keyInput.value = ''
+      this.project.keyPrefix = keyInput.value
+    })
+    keySection.createEl('div', {
+      text: 'New tasks are keyed automatically from the prefix plus a sequence number. Changing the prefix later does not re-key existing tasks.',
+      cls: 'pm-modal-hint'
+    })
+
     // ── Team members ──────────────────────────────────────────────────────────
     const memberSection = el.createDiv('pm-modal-section')
     memberSection.createEl('label', { text: 'Team members', cls: 'pm-label' })
