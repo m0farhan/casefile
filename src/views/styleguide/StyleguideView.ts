@@ -71,6 +71,8 @@ export class StyleguideView extends ItemView {
     root.addClass('pm-root', 'pm-styleguide')
     this.group('Tokens')
     this.renderTokens()
+    this.renderContrastCheck()
+    this.renderMotionDemos()
     this.group('Primitives')
     this.renderChips()
     this.renderChipButtons()
@@ -156,6 +158,77 @@ export class StyleguideView extends ItemView {
       const pill = sem.createSpan({ cls: 'pm-sg-pill', text: token.slice('--gs-'.length) })
       pill.style.setProperty('--pm-sg-c', `var(${token})`)
     }
+  }
+
+  /** Runtime WCAG check over the load-bearing pairings — the page can't lie about token drift. */
+  private renderContrastCheck(): void {
+    const sec = this.section('Contrast self-check', 'contrast')
+    const pairs: [string, string, number][] = [
+      ['--gs-ink', '--gs-surface-1', 4.5],
+      ['--gs-ink-subtle', '--gs-surface-1', 4.5],
+      ['--gs-accent-hover', '--gs-surface-1', 4.5], // accent TEXT color
+      ['--gs-sev1', '--gs-surface-1', 4.5],
+      ['--gs-sev2', '--gs-surface-1', 4.5],
+      ['--gs-sev3', '--gs-surface-1', 4.5],
+      ['--gs-sev4', '--gs-surface-1', 4.5],
+      ['--gs-accent', '--gs-surface-1', 3] // non-text (borders/fills) target
+    ]
+    const table = sec.createDiv('pm-sg-contrast')
+    window.requestAnimationFrame(() => {
+      const styles = getComputedStyle(table)
+      const lum = (hex: string): number | null => {
+        const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+        if (!m) return null
+        const [r, g, b] = [0, 2, 4].map((i) => {
+          const c = parseInt(m[1].slice(i, i + 2), 16) / 255
+          return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+        })
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+      }
+      for (const [fg, bg, target] of pairs) {
+        const lf = lum(styles.getPropertyValue(fg))
+        const lb = lum(styles.getPropertyValue(bg))
+        const row = table.createDiv('pm-sg-contrast-row')
+        if (lf === null || lb === null) {
+          row.setText(`${fg} / ${bg}: unresolved`)
+          continue
+        }
+        const ratio = (Math.max(lf, lb) + 0.05) / (Math.min(lf, lb) + 0.05)
+        const pass = ratio >= target
+        row.setText(`${fg} on ${bg}: ${ratio.toFixed(2)}:1 (target ${target}:1) ${pass ? 'pass' : 'FAIL'}`)
+        row.toggleClass('pm-sg-contrast-fail', !pass)
+      }
+    })
+  }
+
+  private renderMotionDemos(): void {
+    const sec = this.section('Motion', 'motion')
+    const row = this.row(sec, 'demos — respect reduced-motion (toggle it in settings to verify)')
+
+    const pulseChip = row.createSpan({ cls: 'pm-sla pm-sla--breach', text: 'Breached +12m' })
+    const pulseBtn = row.createEl('button', { text: 'Pulse', cls: 'pm-sg-btn' })
+    pulseBtn.addEventListener('click', () => {
+      pulseChip.removeClass('gs-pulse-2')
+      void pulseChip.offsetWidth // restart the animation
+      pulseChip.addClass('gs-pulse-2')
+    })
+
+    const enterTarget = row.createSpan({ cls: 'pm-key-chip', text: 'SOC-42' })
+    const enterBtn = row.createEl('button', { text: 'Enter fade', cls: 'pm-sg-btn' })
+    enterBtn.addEventListener('click', () => {
+      enterTarget.removeClass('gs-enter')
+      void enterTarget.offsetWidth
+      enterTarget.addClass('gs-enter')
+    })
+
+    const status = row.createSpan({ cls: 'pm-sg-caption' })
+    const update = () => {
+      const os = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const setting = activeDocument.body.hasClass('gs-reduce-motion')
+      status.setText(`reduced motion: os=${os ? 'on' : 'off'} · setting=${setting ? 'on' : 'off'}`)
+    }
+    update()
+    pulseBtn.addEventListener('click', update)
   }
 
   private renderChips(): void {

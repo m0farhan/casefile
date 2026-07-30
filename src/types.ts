@@ -272,6 +272,8 @@ export interface PMSettings {
   currentUser: string
   /** Where row/card clicks open the task: the modal or the right-leaf detail panel. */
   openTaskIn: 'modal' | 'panel'
+  /** Disables movement effects (FLIP, entrances, pulses); color transitions remain. */
+  reduceAnimations: boolean
   notificationsEnabled: boolean
   notificationLeadDays: number
   autoSchedule: boolean
@@ -412,6 +414,7 @@ export const DEFAULT_SETTINGS: PMSettings = {
   globalTeamMembers: [],
   currentUser: '',
   openTaskIn: 'modal',
+  reduceAnimations: false,
   kanbanShowSubtasks: false,
   kanbanShowDescriptionPreview: false,
   showTagColors: true,

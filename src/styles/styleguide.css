@@ -77,3 +77,31 @@
   color: var(--pm-sg-c);
   background: color-mix(in srgb, var(--pm-sg-c) 15%, transparent);
 }
+
+/* ─ GreySurface styleguide additions ─ */
+.pm-sg-contrast {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--gs-font-mono);
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+.pm-sg-contrast-fail {
+  color: var(--gs-red);
+  font-weight: 600;
+}
+button.pm-sg-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-s);
+  background: var(--gs-surface-1);
+  color: var(--gs-ink-muted);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: none;
+  appearance: none;
+}
+button.pm-sg-btn:hover {
+  border-color: var(--gs-hairline-strong);
+}

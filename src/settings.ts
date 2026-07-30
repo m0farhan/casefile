@@ -142,6 +142,17 @@ export class PMSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
+      .setName('Reduce animations')
+      .setDesc('Disable movement effects (card glides, entrances, pulses). Color transitions remain.')
+      .addToggle((tg) =>
+        tg.setValue(this.plugin.settings.reduceAnimations).onChange(async (v) => {
+          this.plugin.settings.reduceAnimations = v
+          await this.plugin.saveSettings()
+          this.plugin.applyMotionPreference()
+        })
+      )
+
+    new Setting(containerEl)
       .setName('Save tasks on close')
       .setDesc('Automatically save tasks when you close the task modal. When off, only clicking save persists changes.')
       .addToggle((t) =>

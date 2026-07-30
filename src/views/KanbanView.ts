@@ -11,6 +11,7 @@ import { buildTaskContextMenu } from '../ui/TaskContextMenu'
 import { KanbanColumn, type DropNeighbor, type KanbanCardData } from '../ui/composites/KanbanColumn'
 import { setKanbanSocConfig } from '../ui/composites/KanbanCard'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
+import { captureRects, motionOK, playFlip } from '../ui/motion'
 import { computeLanes, isLaneGroup, LANE_GROUPS, type KanbanLaneGroup } from './kanbanLanes'
 import type { SubView } from './SubView'
 
@@ -237,6 +238,17 @@ export class KanbanView implements SubView {
     if (before && findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
       await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
     }
+    // FLIP only on the drop path — background refreshes render instantly
+    // (a change the analyst didn't make animating would be noise, not signal).
+    const first = motionOK(this.plugin) ? captureRects(this.container, '.pm-kanban-card[data-task-id]') : null
     await this.onRefresh()
+    if (first) {
+      playFlip(this.container, '.pm-kanban-card[data-task-id]', first)
+      // The dragged card's rect was already at its destination (dragover does a
+      // live insertBefore), so it gets the landing border-fade instead of a jump.
+      const landed = this.container.querySelector(`.pm-kanban-card[data-task-id="${taskId}"]`)
+      landed?.classList.add('gs-landed')
+      window.setTimeout(() => landed?.classList.remove('gs-landed'), 400)
+    }
   }
 }

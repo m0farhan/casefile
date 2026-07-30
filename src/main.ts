@@ -201,12 +201,18 @@ export default class PMPlugin extends Plugin {
       }
     })
 
+    this.applyMotionPreference()
     this.addSettingTab(new PMSettingTab(this.app, this))
     this.notifier.start()
   }
 
   onunload(): void {
     this.notifier.stop()
+  }
+
+  /** Movement effects are CSS-gated on this body class so modals/popovers inherit it too. */
+  applyMotionPreference(): void {
+    activeDocument.body.classList.toggle('gs-reduce-motion', this.settings.reduceAnimations)
   }
 
   async loadSettings(): Promise<void> {

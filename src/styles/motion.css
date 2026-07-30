@@ -1,0 +1,76 @@
+/* GreySurface motion system. Every MOVEMENT rule (transform/opacity entrance)
+ * sits behind BOTH the OS reduced-motion preference and the plugin's
+ * "Reduce animations" setting (body.gs-reduce-motion — modals and popovers
+ * are body descendants, so the class reaches them). Color/border transitions
+ * stay unguarded: WCAG's concern is motion, not color.
+ * Spec: 150–250ms, ease-out only, no bounce, clinical. */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Card/row enter: fade + 4px rise, for elements new since the last render. */
+  body:not(.gs-reduce-motion) .gs-enter {
+    animation: gs-fade-up 150ms ease-out backwards;
+  }
+
+  /* View switch: content fades in over 120ms. Flag-gated by the host so data
+   * refreshes never re-fade. */
+  body:not(.gs-reduce-motion) .gs-view-enter {
+    animation: gs-fade-in 120ms ease-out backwards;
+  }
+
+  /* Board columns stagger on first render only (host sets the flag), capped
+   * at the 5th column so wide boards don't drag the entrance out. */
+  body:not(.gs-reduce-motion) .gs-stagger .pm-kanban-col {
+    animation: gs-fade-up 180ms ease-out backwards;
+  }
+  body:not(.gs-reduce-motion) .gs-stagger .pm-kanban-col:nth-child(2) {
+    animation-delay: 40ms;
+  }
+  body:not(.gs-reduce-motion) .gs-stagger .pm-kanban-col:nth-child(3) {
+    animation-delay: 80ms;
+  }
+  body:not(.gs-reduce-motion) .gs-stagger .pm-kanban-col:nth-child(4) {
+    animation-delay: 120ms;
+  }
+  body:not(.gs-reduce-motion) .gs-stagger .pm-kanban-col:nth-child(n + 5) {
+    animation-delay: 160ms;
+  }
+
+  /* Target-breach pulse: exactly two quiet pulses, then steady — clinical,
+   * not alarming. Applied by the SLA ticker on a NEW breach only. */
+  body:not(.gs-reduce-motion) .gs-pulse-2 {
+    animation: gs-pulse 900ms ease-in-out 2;
+  }
+}
+
+/* Drop landing: the dragged card's accent border fades back to rest. A color
+ * transition, deliberately outside the motion guards. */
+.gs-landed {
+  border-color: var(--gs-accent) !important;
+  transition: border-color 250ms ease-out;
+}
+
+@keyframes gs-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gs-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes gs-pulse {
+  50% {
+    box-shadow: 0 0 0 3px rgba(235, 87, 87, 0.25);
+  }
+}

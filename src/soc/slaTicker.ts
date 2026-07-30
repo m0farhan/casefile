@@ -58,6 +58,11 @@ export function renderSlaChip(el: HTMLElement, task: Task, policies: Record<stri
 }
 
 function paint(chip: HTMLElement, view: SlaChipView): void {
+  // A chip newly turning breached pulses exactly twice (motion.css), then holds steady red.
+  if (view.breach && !chip.hasClass('pm-sla--breach')) {
+    chip.addClass('gs-pulse-2')
+    window.setTimeout(() => chip.removeClass('gs-pulse-2'), 2000)
+  }
   chip.setText(view.text)
   chip.toggleClass('pm-sla--warn', view.warn)
   chip.toggleClass('pm-sla--breach', view.breach)

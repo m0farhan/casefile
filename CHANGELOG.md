@@ -36,6 +36,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.0.0] - 2026-07-31 — GreySurface PM
+
+Fork of Project Manager 1.8.0 as GreySurface PM: Jira-style project and SOC
+incident tracking, restyled with the GreySurface Linear design system. Data
+stays 100% compatible with upstream's pm-project/pm-task markdown format.
+
+### Added
+
+- Issue keys (PREFIX-N, immutable, auto-assigned on save) with a one-time
+  "Adopt issue keys" migration that lifts keys embedded in titles
+- Issue types (epic/story/task/bug/incident, configurable palette) with
+  colored icons, monospace key chips, and epic context pills
+- Query bar grammar in the search box: field:value terms (status, type,
+  priority, severity, verdict, assignee:me, tag, due:<7d, bucket, progress,
+  key), quoting, negation, ordering — free text still works
+- Kanban swimlanes (epic/assignee/priority/bucket), persisted card order,
+  soft WIP limits, collapsible columns, saved views as one-click chips
+- Right-leaf task detail panel with debounced autosave (titles save on blur)
+- Planning buckets (This week / Next / Later / Someday) + Backlog view
+- SOC incident pack: severity separate from priority, per-severity
+  response/resolution targets with live countdown chips and breach
+  notifications, incident timeline (detected/responded/contained/resolved
+  with auto-stamps), verdict with a soft close guard, defanged indicator
+  table, MITRE ATT&CK technique tagging (bundled list, CC BY 4.0)
+- Append-only activity log on every tracked field change; append-only
+  comments journal stored in the note body
+- Reports view: opened-vs-closed per week, time in status, verdict
+  breakdown, target compliance — raw counts, no interpolation
+- Shift handover note generator and incident templates (3 seeded playbooks)
+- GreySurface Linear reskin (dark, token-driven) with a FLIP motion system,
+  reduced-motion support (OS + setting), and a runtime contrast self-check
+  in the dev styleguide
+- Portable packaging: `pnpm package` produces an offline-installable zip
+
+### Changed
+
+- Progress is editable in the task editor (slider, 25% steps)
+- Notifier checks every 5 minutes (was hourly) to catch target breaches
+
 ## [1.8.0] - 2026-07-03
 
 ### Added

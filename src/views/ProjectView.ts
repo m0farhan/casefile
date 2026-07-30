@@ -41,6 +41,8 @@ export class ProjectView extends ItemView {
   private initialized = false
   /** File path whose default view mode has been applied, so reloads don't reset a user's mode switch. */
   private defaultViewAppliedFor: string | null = null
+  /** View mode of the last renderCurrentView, so only real switches animate (data refreshes never re-fade). */
+  private lastRenderedView: ViewMode | null = null
 
   constructor(leaf: WorkspaceLeaf, plugin: PMPlugin) {
     super(leaf)
@@ -458,6 +460,10 @@ export class ProjectView extends ItemView {
         break
     }
     this.bodyEl.toggleClass('pm-content--kanban', this.currentView === 'kanban')
+    const switched = this.lastRenderedView !== this.currentView
+    this.lastRenderedView = this.currentView
+    this.bodyEl.toggleClass('gs-view-enter', switched)
+    this.bodyEl.toggleClass('gs-stagger', switched && this.currentView === 'kanban')
     this.subview?.render()
   }
 
