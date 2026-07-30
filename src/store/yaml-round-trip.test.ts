@@ -373,3 +373,59 @@ describe('GreySurface PM field round-trips', () => {
     expect(project.nextKeySeq).toBe(7)
   })
 })
+
+describe('comments section round-trip', () => {
+  it('round-trips comments alongside a subtasks section (strip-hazard case)', () => {
+    const child = makeTask({ id: 'c1', title: 'Child' })
+    const original = makeTask({
+      id: 'cmt-1',
+      description: 'Investigating the beacon.',
+      comments: [
+        { at: '2026-07-30 14:32', text: 'Confirmed C2 beacon to 45.33[.]12.8' },
+        { at: '2026-07-30 15:10', text: 'Multi-line\nsecond line' }
+      ],
+      subtasks: [child]
+    })
+    const project = makeProject('Test', 'Projects/Test.md')
+    const md = serializeTask(original, project, null)
+
+    // Section order on disk: description, comments, link, subtasks.
+    expect(md.indexOf('## Comments')).toBeGreaterThan(md.indexOf('Investigating'))
+    expect(md.indexOf('Project: [[')).toBeGreaterThan(md.indexOf('## Comments'))
+    expect(md.indexOf('## Subtasks')).toBeGreaterThan(md.indexOf('Project: [['))
+
+    const { frontmatter, body } = parseFrontmatter(md)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    const { task } = hydrateTaskFromFile(frontmatter, body, 'Projects/Test_tasks/t.md')
+    expect(task.description).toBe('Investigating the beacon.')
+    expect(task.comments).toEqual(original.comments)
+  })
+
+  it('preserves foreign lines inside the comments section verbatim', () => {
+    const body = [
+      'Desc line.',
+      '',
+      '## Comments',
+      '',
+      '> **2026-07-30 14:32** — Real entry',
+      'A hand-written stray line',
+      '',
+      'Project: [[Test|Test]]'
+    ].join('\n')
+    const { task } = hydrateTaskFromFile({ id: 'x' }, body, 'p.md')
+    expect(task.comments).toEqual([
+      { at: '2026-07-30 14:32', text: 'Real entry' },
+      { at: '', text: 'A hand-written stray line' }
+    ])
+    expect(task.description).toBe('Desc line.')
+
+    const md = serializeTask(task, makeProject('Test', 'Projects/Test.md'), null)
+    expect(md).toContain('> **2026-07-30 14:32** — Real entry')
+    expect(md).toContain('A hand-written stray line')
+  })
+
+  it('a task without comments emits no section', () => {
+    const md = serializeTask(makeTask({ id: 'n1' }), makeProject('T', 'Projects/T.md'), null)
+    expect(md).not.toContain('## Comments')
+  })
+})

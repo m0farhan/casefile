@@ -265,3 +265,56 @@
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+
+/* ─ GreySurface SOC ambient ─ */
+/* Severity + sla + ioc-count chips on incident cards (chip bases shared with the table) */
+.pm-kanban-card-soc {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pm-sev-badge {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: 2px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  /* color + tint background set inline from the severity config */
+}
+.pm-sla {
+  font-family: var(--gs-font-mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  color: var(--gs-ink-subtle);
+  transition:
+    color 150ms ease-out,
+    background 150ms ease-out;
+}
+.pm-sla--warn {
+  color: var(--gs-sla-warn);
+  background: var(--gs-amber-tint);
+}
+.pm-sla--breach {
+  color: var(--gs-sla-breach);
+  background: var(--gs-red-tint);
+}
+.pm-ioc-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+.pm-ioc-count-icon {
+  display: inline-flex;
+}
+.pm-ioc-count-icon svg {
+  width: 11px;
+  height: 11px;
+}

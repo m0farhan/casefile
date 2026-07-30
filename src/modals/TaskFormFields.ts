@@ -8,6 +8,7 @@ import { PRIORITY_CHEVRONS } from '../ui/StatusBadge'
 import { isTerminalStatus, stringToColor } from '../utils'
 import { completionOutcome, relativeDue } from '../dates'
 import { renderCustomFieldInput } from './CustomFieldInputs'
+import attackTechniques from '../data/attack-techniques.json'
 import {
   renderSelectControl,
   renderDateControl,
@@ -49,7 +50,7 @@ const REPEAT_OPTIONS: SelectItem[] = [
  */
 export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFieldsContext): void {
   const { task, project, plugin, rerender, shownExtras } = ctx
-  const { statuses, priorities, issueTypes } = plugin.store.configFor(project)
+  const { statuses, priorities, issueTypes, severities, verdicts } = plugin.store.configFor(project)
   const grid = container.createDiv('pm-prop-grid')
 
   // Type
@@ -174,6 +175,52 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     },
     'flag'
   )
+
+  // Severity | Verdict — incidents only, always a full pair so the grid never de-aligns
+  if (task.issueType === 'incident') {
+    renderPropRow(
+      grid,
+      'Severity',
+      () => {
+        const cell = createDiv('pm-prop-value')
+        renderSelectControl({
+          container: cell,
+          value: task.severity,
+          options: [
+            { id: '', label: 'None' },
+            ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
+          ],
+          onChange: (id) => {
+            task.severity = id
+            rerender()
+          }
+        })
+        return cell
+      },
+      'shield-alert'
+    )
+    renderPropRow(
+      grid,
+      'Verdict',
+      () => {
+        const cell = createDiv('pm-prop-value')
+        renderSelectControl({
+          container: cell,
+          value: task.verdict,
+          options: [
+            { id: '', label: 'None' },
+            ...verdicts.map((v) => ({ id: v.id, label: v.label, color: v.color, icon: v.icon || undefined }))
+          ],
+          onChange: (id) => {
+            task.verdict = id
+            rerender()
+          }
+        })
+        return cell
+      },
+      'scale'
+    )
+  }
 
   // Progress | Bucket share a row (milestones have no progress, so Bucket pairs with a spacer)
   if (task.type !== 'milestone') {
@@ -378,6 +425,36 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     'tag'
   )
   tagsRow.addClass('pm-prop-row--wide')
+
+  // Techniques (MITRE ATT&CK) — all issue types, wide row like Tags. Chips show the bare
+  // technique id; the picker shows "id name" and searches both. The multiselect composite
+  // has no per-chip link-out, so chips are plain (no attack.mitre.org link).
+  const attackRow = renderPropRow(
+    grid,
+    'Techniques',
+    () => {
+      const cell = createDiv('pm-prop-value')
+      renderMultiSelect({
+        container: cell,
+        search: true,
+        addLabel: 'Add technique',
+        addLabelMore: 'Add another',
+        placeholder: 'Search techniques…',
+        labelFor: (id) => id,
+        selected: () => task.attack,
+        options: () => attackTechniques.map((t) => ({ id: t.id, label: `${t.id} ${t.name}` })),
+        add: (id) => {
+          if (!task.attack.includes(id)) task.attack.push(id)
+        },
+        remove: (id) => {
+          task.attack = task.attack.filter((a) => a !== id)
+        }
+      })
+      return cell
+    },
+    'crosshair'
+  )
+  attackRow.addClass('pm-prop-row--wide')
 
   // Depends on (extra)
   if (task.dependencies.length > 0 || shownExtras.has('depends')) {

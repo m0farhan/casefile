@@ -2,7 +2,11 @@ import { ItemView, Notice, WorkspaceLeaf, TFile, setIcon } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from '../modals/DescriptionEditor'
+import { renderCommentsSection, type CommentsSectionHandle } from '../soc/CommentsSection'
 import { renderTaskFormFields } from '../modals/TaskFormFields'
+import { renderLifecyclePanel } from '../soc/LifecyclePanel'
+import { renderIocSection } from '../soc/IocSection'
+import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderSubtasksPanel } from '../modals/SubtasksPanel'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
@@ -29,7 +33,10 @@ export class TaskDetailView extends ItemView {
   private task: Task | null = null
   /** Last title actually persisted; debounced saves always send this, never the in-flight edit. */
   private persistedTitle = ''
+  /** Status before the in-flight edit — lets the rerender hook detect a change and run the verdict guard. */
+  private lastStatus = ''
   private descEditor: DescriptionEditorHandle | null = null
+  private commentsSection: CommentsSectionHandle | null = null
   private saveTimer: number | null = null
   private dirty = false
   private shownExtras = new Set<string>()
@@ -72,6 +79,8 @@ export class TaskDetailView extends ItemView {
     await this.flushPendingSave()
     this.descEditor?.destroy()
     this.descEditor = null
+    this.commentsSection?.destroy()
+    this.commentsSection = null
     this.contentEl.empty()
   }
 
@@ -88,7 +97,28 @@ export class TaskDetailView extends ItemView {
     this.project = project
     this.task = JSON.parse(JSON.stringify(live)) as Task
     this.persistedTitle = this.task.title
+    this.lastStatus = this.task.status
     this.dirty = false
+  }
+
+  /**
+   * Status changes can't ride the debounced autosave directly: closing an
+   * unverdicted incident must first pass the verdict guard, and a debounce
+   * can't await a modal. The guard resolves immediately for every
+   * non-guarded case, so all status changes route through here.
+   */
+  private async onStatusChanged(task: Task): Promise<void> {
+    if (!this.project) return
+    const prev = this.lastStatus
+    const patch = await guardVerdictOnClose(this.plugin, this.project, task, task.status)
+    if (patch === null) {
+      task.status = prev // user cancelled the close — revert the clone
+    } else {
+      this.lastStatus = task.status
+      if (patch.verdict) task.verdict = patch.verdict
+      this.scheduleSave()
+    }
+    this.render()
   }
 
   private scheduleSave(): void {
@@ -207,6 +237,10 @@ export class TaskDetailView extends ItemView {
       // Reparenting is a modal affordance; the panel keeps hierarchy read-only.
       setParentId: () => {},
       rerender: () => {
+        if (task.status !== this.lastStatus) {
+          void this.onStatusChanged(task)
+          return
+        }
         this.scheduleSave()
         this.render()
       },
@@ -219,6 +253,17 @@ export class TaskDetailView extends ItemView {
       plugin: this.plugin,
       project,
       task
+    })
+    if (task.issueType === 'incident') {
+      renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave() })
+      renderIocSection(body, task, { onChange: () => this.scheduleSave() })
+    }
+    this.commentsSection?.destroy()
+    this.commentsSection = renderCommentsSection(body, this.plugin, project, task, {
+      onChange: () => {
+        this.scheduleSave()
+        this.render()
+      }
     })
     renderSubtasksPanel(body, task, this.plugin, config.statuses)
     renderTimeTrackingPanel(body, task)

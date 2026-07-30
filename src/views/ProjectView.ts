@@ -8,9 +8,11 @@ import type { TableViewState } from './table/TableView'
 import { GanttView } from './gantt/GanttView'
 import { KanbanView } from './KanbanView'
 import { BacklogView } from './BacklogView'
+import { ReportsView } from './reports/ReportsView'
 import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
+import { tickAllSlaChips } from '../soc/slaTicker'
 
 export const PM_PROJECT_VIEW_TYPE = 'gspm-project'
 
@@ -107,6 +109,12 @@ export class ProjectView extends ItemView {
     this.toolbarEl = root.createDiv('pm-toolbar')
     this.headerEl = root.createDiv('pm-project-header-mount')
     this.bodyEl = root.createDiv('pm-content')
+
+    // One shared 30s tick advances every registered SLA chip (text/class only,
+    // no re-render). Obsidian clears registered intervals when the view closes.
+    // Two-line form (Notifier precedent): the inline shape crashes obsidianmd/no-sample-code.
+    const slaTickId = window.setInterval(() => tickAllSlaChips(), 30_000)
+    this.registerInterval(slaTickId)
 
     this.keydownHandler = (e: KeyboardEvent) => {
       this.subview?.handleKeyDown?.(e)
@@ -344,7 +352,8 @@ export class ProjectView extends ItemView {
         { id: 'table', icon: 'table', label: 'Table' },
         { id: 'gantt', icon: 'git-fork', label: 'Gantt' },
         { id: 'kanban', icon: 'layout-dashboard', label: 'Board' },
-        { id: 'backlog', icon: 'rows-3', label: 'Backlog' }
+        { id: 'backlog', icon: 'rows-3', label: 'Backlog' },
+        { id: 'reports', icon: 'bar-chart-3', label: 'Reports' }
       ],
       active: this.currentView,
       onChange: (mode) => {
@@ -443,6 +452,9 @@ export class ProjectView extends ItemView {
         break
       case 'backlog':
         this.subview = new BacklogView(this.bodyEl, this.project, this.plugin, () => this.refreshProject(), this.filter)
+        break
+      case 'reports':
+        this.subview = new ReportsView(this.bodyEl, this.project, this.plugin, () => this.refreshProject(), this.filter)
         break
     }
     this.bodyEl.toggleClass('pm-content--kanban', this.currentView === 'kanban')

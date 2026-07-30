@@ -1,7 +1,9 @@
 import { Menu } from 'obsidian'
 import { getStatusConfig, dueUrgency, isTerminalStatus, safeAsync, stringifyCustomValue } from '../../utils'
 import { totalLoggedHours } from '../../store/TaskTreeOps'
-import type { IssueTypeConfig, Task } from '../../types'
+import type { ResolvedProjectConfig, Task } from '../../types'
+import { renderSeverityBadge, renderSlaChip } from '../../soc/slaTicker'
+import { guardVerdictOnClose } from '../../soc/verdictGuard'
 import { updateSelectCheckboxes, getVisibleTaskIds } from './TableRenderer'
 import type { TableContext, TableState } from './TableRenderer'
 import { openTaskModal } from '../../ui/ModalFactory'
@@ -26,7 +28,7 @@ export function renderTaskRow(
   task: Task,
   depth: number,
   ctx: TableContext,
-  issueTypes?: IssueTypeConfig[]
+  cfg?: ResolvedProjectConfig
 ): void {
   const isDone = isTerminalStatus(task.status, ctx.statuses)
   const statusConfig = getStatusConfig(ctx.statuses, task.status)
@@ -83,7 +85,7 @@ export function renderTaskRow(
     task,
     depth,
     showTagColors: ctx.plugin.settings.showTagColors,
-    issueTypes,
+    issueTypes: cfg?.issueTypes,
     onTitleClick: () => {
       openTaskModal(ctx.plugin, ctx.project, {
         task,
@@ -110,12 +112,16 @@ export function renderTaskRow(
     task,
     statuses: ctx.statuses,
     onChange: safeAsync(async (status) => {
-      await ctx.plugin.store.updateTask(ctx.project, task.id, { status })
+      // Closing an unverdicted incident prompts for a verdict; null = cancel.
+      // Nothing to undo on cancel — the badge only repaints via onRefresh.
+      const extra = await guardVerdictOnClose(ctx.plugin, ctx.project, task, status)
+      if (extra === null) return
+      await ctx.plugin.store.updateTask(ctx.project, task.id, { status, ...extra })
       await ctx.onRefresh()
     })
   })
 
-  new PriorityCell(row, {
+  const priorityCell = new PriorityCell(row, {
     task,
     priorities: ctx.priorities,
     onChange: safeAsync(async (priority) => {
@@ -123,6 +129,15 @@ export function renderTaskRow(
       await ctx.onRefresh()
     })
   })
+  // Ambient SOC context rides in the priority cell — no new sortable column in
+  // v1, and priority is the work-order neighbor severity reads best against.
+  if (task.severity && cfg) {
+    renderSeverityBadge(
+      priorityCell.el,
+      cfg.severities.find((s) => s.id === task.severity)
+    )
+  }
+  renderSlaChip(priorityCell.el, task, ctx.plugin.settings.slaPolicies)
 
   new AssigneesCell(row, task.assignees)
 

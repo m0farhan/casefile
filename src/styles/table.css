@@ -415,3 +415,11 @@ button.pm-chip-rm {
 .pm-table-add-row td {
   padding: 8px 10px;
 }
+
+/* ─ GreySurface SOC ambient ─ */
+/* Severity badge + sla chip ride in the priority cell (no new column in v1) */
+.pm-table-cell .pm-sev-badge,
+.pm-table-cell .pm-sla {
+  margin-left: 6px;
+  vertical-align: middle;
+}

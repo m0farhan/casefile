@@ -1,4 +1,4 @@
-import { MarkdownView, Plugin, Notice } from 'obsidian'
+import { MarkdownView, Menu, Plugin, Notice, TFile } from 'obsidian'
 import { DEFAULT_SETTINGS, type PMSettings, type Project, type Task } from './types'
 import { flattenTasks, findTask } from './store/TaskTreeOps'
 import { ProjectStore } from './store'
@@ -19,6 +19,8 @@ import {
   promptText
 } from './ui/ModalFactory'
 import { Notifier } from './components/Notifier'
+import { buildHandover } from './soc/handover'
+import { ensureFolder } from './store/vaultFs'
 import { migrateProjects } from './migration'
 import { safeAsync } from './utils'
 
@@ -140,6 +142,22 @@ export default class PMPlugin extends Plugin {
       name: 'Adopt issue keys for a project',
       callback: () => {
         void this.adoptIssueKeysFlow()
+      }
+    })
+
+    this.addCommand({
+      id: 'new-incident-from-template',
+      name: 'New incident from template',
+      callback: () => {
+        void this.newIncidentFromTemplate()
+      }
+    })
+
+    this.addCommand({
+      id: 'generate-shift-handover',
+      name: 'Generate shift handover',
+      callback: () => {
+        void this.generateShiftHandover()
       }
     })
 
@@ -316,6 +334,54 @@ export default class PMPlugin extends Plugin {
   }
 
   /** Show project picker, then open TaskModal to create a task (optionally pick parent for subtask) */
+  private async newIncidentFromTemplate(): Promise<void> {
+    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
+    if (!projects.length) {
+      this.showNotice('No projects yet. Create a project first.')
+      return
+    }
+    openProjectPicker(this, projects, (project) => {
+      const templates = this.settings.incidentTemplates
+      if (!templates.length) {
+        this.showNotice('No incident templates configured in settings.')
+        return
+      }
+      const menu = new Menu()
+      for (const tpl of templates) {
+        menu.addItem((item) =>
+          item
+            .setTitle(tpl.name)
+            .setIcon('siren')
+            .onClick(() => {
+              this.openTaskModalForProject(project, null, {
+                ...tpl.taskDefaults,
+                tags: [...(tpl.taskDefaults.tags ?? [])],
+                attack: [...(tpl.taskDefaults.attack ?? [])],
+                description: tpl.bodyMarkdown,
+                detectedAt: new Date().toISOString()
+              })
+            })
+        )
+      }
+      menu.showAtPosition({ x: window.innerWidth / 2 - 100, y: window.innerHeight / 3 })
+    })
+  }
+
+  private async generateShiftHandover(): Promise<void> {
+    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
+    const md = buildHandover(projects, this.settings, new Date().toISOString())
+    const path = this.settings.handoverPath || 'SOC/Handover.md'
+    const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+    if (folder) await ensureFolder(this.app, folder)
+    const existing = this.app.vault.getAbstractFileByPath(path)
+    if (existing instanceof TFile) {
+      await this.app.vault.modify(existing, md)
+    } else {
+      await this.app.vault.create(path, md)
+    }
+    await this.app.workspace.openLinkText(path, '', true)
+  }
+
   private async adoptIssueKeysFlow(): Promise<void> {
     if (!(this.store instanceof ProjectStore)) return
     const store = this.store

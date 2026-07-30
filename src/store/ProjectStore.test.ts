@@ -1211,3 +1211,48 @@ describe('activity log + incident lifecycle stamps', () => {
     expect(rt.activity).toEqual([{ at: '2026-07-30T10:00:00.000Z', field: 'sla', from: 'response', to: 'breached' }])
   })
 })
+
+describe('comments persistence', () => {
+  it('appending a comment via updateTask survives a full rewrite and reload', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Journal', 'Projects')
+    const t = await addNamed(store, project, 'Investigated')
+
+    await store.updateTask(project, t.id, {
+      comments: [{ at: '2026-07-30 14:32', text: 'First finding' }]
+    })
+
+    const file = vault.getAbstractFileByPath(project.filePath)
+    if (!(file instanceof TFile)) throw new Error('missing file')
+    const reloaded = expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(file))
+    const rt = expectDefined(findTask(reloaded.tasks, t.id))
+    await new ProjectStore(app, () => SETTINGS).loadTaskBody(rt)
+    expect(rt.comments).toEqual([{ at: '2026-07-30 14:32', text: 'First finding' }])
+  })
+
+  it('a frontmatter-only save of an UNHYDRATED task leaves on-disk comments intact', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Keep', 'Projects')
+    const t = await addNamed(store, project, 'Commented')
+    await store.updateTask(project, t.id, { comments: [{ at: '2026-07-30 09:00', text: 'Keep me' }] })
+
+    // Fresh store = fresh hydratedBodies; cache-loaded task body is unread.
+    const file = vault.getAbstractFileByPath(project.filePath)
+    if (!(file instanceof TFile)) throw new Error('missing file')
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const p2 = expectDefined(await store2.loadProject(file))
+    const t2 = expectDefined(findTask(p2.tasks, t.id))
+
+    // 'fm' save (status) then a 'full' save (title rename) — the dangerous path.
+    await store2.updateTask(p2, t2.id, { status: 'in-progress' })
+    await store2.updateTask(p2, t2.id, { title: 'Commented renamed' })
+
+    const store3 = new ProjectStore(app, () => SETTINGS)
+    const file3 = vault.getAbstractFileByPath(project.filePath)
+    if (!(file3 instanceof TFile)) throw new Error('missing file')
+    const p3 = expectDefined(await store3.loadProject(file3))
+    const t3 = expectDefined(findTask(p3.tasks, t2.id))
+    await store3.loadTaskBody(t3)
+    expect(t3.comments).toEqual([{ at: '2026-07-30 09:00', text: 'Keep me' }])
+  })
+})

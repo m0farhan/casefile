@@ -7,18 +7,25 @@ import { safeAsync, getDefaultStatusId, getDefaultPriorityId, getPriorityConfig 
 import { confirmDialog } from '../ui/ModalFactory'
 import { renderKeyChip } from '../ui/composites/issueMeta'
 import { renderTaskFormFields } from './TaskFormFields'
+import { renderLifecyclePanel } from '../soc/LifecyclePanel'
+import { renderIocSection } from '../soc/IocSection'
+import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderTimeTrackingPanel } from './TimeTrackingPanel'
 import { renderSubtasksPanel } from './SubtasksPanel'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from './DescriptionEditor'
+import { renderCommentsSection, type CommentsSectionHandle } from '../soc/CommentsSection'
 
 export class TaskModal extends Modal {
   private task: Task
   private isNew: boolean
   private originalParentId: string | null
+  /** Live status at open time — the verdict guard runs only when the save changes it. */
+  private originalStatus: string
   private cancelled = false
   private saved = false
   private persistPromise: Promise<void> | null = null
   private descEditor: DescriptionEditorHandle | null = null
+  private commentsSection: CommentsSectionHandle | null = null
   private shownExtras = new Set<string>()
   private saveKeyHandler: ((e: KeyboardEvent) => void) | null = null
 
@@ -52,6 +59,7 @@ export class TaskModal extends Modal {
       this.isNew = true
     }
     this.originalParentId = this.parentId
+    this.originalStatus = this.task.status
   }
 
   onOpen(): void {
@@ -83,6 +91,8 @@ export class TaskModal extends Modal {
     }
     this.descEditor?.destroy()
     this.descEditor = null
+    this.commentsSection?.destroy()
+    this.commentsSection = null
     this.contentEl.empty()
   }
 
@@ -297,6 +307,21 @@ export class TaskModal extends Modal {
       }
     })
 
+    // ── Incident sections (timeline + indicators) ───────────────────────────
+    // onChange is a no-op here: the modal persists the whole clone on Save.
+    if (this.task.issueType === 'incident') {
+      renderLifecyclePanel(body, this.task, { onChange: () => {} })
+      renderIocSection(body, this.task, { onChange: () => {} })
+    }
+
+    // Comments render for every task with a hydrated body (new tasks have none yet).
+    if (!this.isNew) {
+      this.commentsSection?.destroy()
+      this.commentsSection = renderCommentsSection(body, this.plugin, this.project, this.task, {
+        onChange: () => this.render()
+      })
+    }
+
     // ── Subtasks ────────────────────────────────────────────────────────────
     renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses)
 
@@ -343,6 +368,11 @@ export class TaskModal extends Modal {
           return
         }
         clearTitleError()
+        if (this.task.status !== this.originalStatus) {
+          const patch = await guardVerdictOnClose(this.plugin, this.project, this.task, this.task.status)
+          if (patch === null) return // user cancelled the close — keep the modal open, save nothing
+          if (patch.verdict) this.task.verdict = patch.verdict
+        }
         await this.persistTask()
         this.saved = true
         this.close()

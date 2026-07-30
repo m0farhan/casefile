@@ -1,5 +1,14 @@
-import { setTooltip } from 'obsidian'
-import { DEFAULT_ISSUE_TYPES, type IssueTypeConfig, type Task } from '../../types'
+import { setIcon, setTooltip } from 'obsidian'
+import {
+  DEFAULT_ISSUE_TYPES,
+  DEFAULT_SEVERITIES,
+  DEFAULT_SLA_POLICIES,
+  type IssueTypeConfig,
+  type SeverityConfig,
+  type SlaPolicy,
+  type Task
+} from '../../types'
+import { renderSeverityBadge, renderSlaChip } from '../../soc/slaTicker'
 import { formatDateShort } from '../../utils'
 import { AvatarStack } from '../primitives/AvatarStack'
 import { Chip } from '../primitives/Chip'
@@ -27,6 +36,24 @@ export interface KanbanCardProps {
   onContextMenu: (e: MouseEvent) => void
   onDragStart: () => void
   onDragEnd: () => void
+}
+
+interface KanbanSocConfig {
+  severities: SeverityConfig[]
+  slaPolicies: Record<string, SlaPolicy>
+}
+
+/**
+ * ponytail: module-level config bridge. KanbanColumn forwards card fields
+ * explicitly and is outside this change's file set, so per-card props can't
+ * reach here through it. Severities/SLA policies are global-only in v1, so a
+ * board-scoped setter (KanbanView calls it before building columns) is exact.
+ * Promote to real KanbanCardData props when KanbanColumn is open for edit.
+ */
+let socConfig: KanbanSocConfig | null = null
+
+export function setKanbanSocConfig(cfg: KanbanSocConfig): void {
+  socConfig = cfg
 }
 
 export class KanbanCard {
@@ -93,6 +120,22 @@ export class KanbanCard {
         })
       }
     }
+
+    const soc = body.createDiv('pm-kanban-card-soc')
+    if (task.issueType === 'incident') {
+      renderSeverityBadge(
+        soc,
+        (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
+      )
+      renderSlaChip(soc, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
+    }
+    if (task.iocs.length) {
+      const iocChip = soc.createSpan({ cls: 'pm-ioc-count' })
+      setIcon(iocChip.createSpan({ cls: 'pm-ioc-count-icon' }), 'crosshair')
+      iocChip.createSpan({ text: String(task.iocs.length) })
+      setTooltip(iocChip, `${task.iocs.length} indicator${task.iocs.length === 1 ? '' : 's'}`)
+    }
+    if (!soc.hasChildNodes()) soc.remove()
 
     if (props.descriptionPreview) {
       body.createDiv({ cls: 'pm-kanban-card-description', text: props.descriptionPreview })

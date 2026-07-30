@@ -9,6 +9,8 @@ import { dueUrgency, isTerminalStatus, getPriorityConfig, safeAsync } from '../u
 import { openTaskModal } from '../ui/ModalFactory'
 import { buildTaskContextMenu } from '../ui/TaskContextMenu'
 import { KanbanColumn, type DropNeighbor, type KanbanCardData } from '../ui/composites/KanbanColumn'
+import { setKanbanSocConfig } from '../ui/composites/KanbanCard'
+import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { computeLanes, isLaneGroup, LANE_GROUPS, type KanbanLaneGroup } from './kanbanLanes'
 import type { SubView } from './SubView'
 
@@ -34,6 +36,7 @@ export class KanbanView implements SubView {
 
   private renderBoard(): void {
     this.config = this.plugin.store.configFor(this.project)
+    setKanbanSocConfig({ severities: this.config.severities, slaPolicies: this.plugin.settings.slaPolicies })
     this.container.empty()
     this.container.addClass('pm-kanban-view')
 
@@ -217,8 +220,15 @@ export class KanbanView implements SubView {
 
   private async handleDrop(taskId: string, newStatus: TaskStatus, before: DropNeighbor | null): Promise<void> {
     if (!this.dragTask || this.dragTask.id !== taskId) return
-    if (newStatus !== this.dragTask.status) {
-      await this.plugin.store.updateTask(this.project, taskId, { status: newStatus })
+    // Capture now — dragend nulls this.dragTask before the guard's modal settles.
+    const task = this.dragTask
+    if (newStatus !== task.status) {
+      const extra = await guardVerdictOnClose(this.plugin, this.project, task, newStatus)
+      if (extra === null) {
+        this.renderBoard() // cancelled: snap the live-moved card back
+        return
+      }
+      await this.plugin.store.updateTask(this.project, taskId, { status: newStatus, ...extra })
     }
     // reorderTask persists sibling order through the shared parent's list, so a
     // neighbor under a different parent (possible when subtask cards are shown)

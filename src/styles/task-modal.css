@@ -264,3 +264,65 @@ textarea.pm-modal-description:focus {
 .pm-confirm-modal {
   max-width: 380px;
 }
+
+/* ─ GreySurface verdict guard ─ */
+.pm-verdict-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0;
+}
+button.pm-verdict-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-s);
+  background: var(--gs-surface-1);
+  color: var(--gs-ink);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: none;
+  appearance: none;
+  transition:
+    border-color 150ms ease-out,
+    background 150ms ease-out;
+}
+button.pm-verdict-option:hover {
+  border-color: var(--gs-hairline-strong);
+  background: var(--gs-surface-3);
+}
+.pm-verdict-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pm-glyph-color, var(--gs-ink-subtle));
+}
+.pm-verdict-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+button.pm-verdict-skip,
+button.pm-verdict-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--gs-ink-subtle);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: none;
+  appearance: none;
+}
+button.pm-verdict-skip:hover,
+button.pm-verdict-cancel:hover {
+  color: var(--gs-ink);
+  border-color: var(--gs-hairline-strong);
+}

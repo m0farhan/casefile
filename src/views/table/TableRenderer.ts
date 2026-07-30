@@ -241,9 +241,9 @@ function renderWindowRows(ctx: TableContext): void {
   tbody.empty()
   if (start > 0) spacerRow(tbody, colCount, start * state.rowHeight)
   // Resolved once per repaint (configFor scans the task tree for in-use extras).
-  const issueTypes = ctx.plugin.store.configFor(ctx.project).issueTypes
+  const cfg = ctx.plugin.store.configFor(ctx.project)
   for (let i = start; i < end; i++) {
-    renderTaskRow(tbody, rows[i].task, rows[i].depth, ctx, issueTypes)
+    renderTaskRow(tbody, rows[i].task, rows[i].depth, ctx, cfg)
   }
   if (end < rows.length) spacerRow(tbody, colCount, (rows.length - end) * state.rowHeight)
 
