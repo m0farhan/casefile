@@ -63,4 +63,6 @@ export interface TaskSource {
   scheduleAfterChange(project: Project, changedTaskId?: string): Promise<number>
   saveTaskAttachment(project: Project, task: Task, fileName: string, data: ArrayBuffer): Promise<TFile>
   findTaskFileConflict(project: Project, task: Task): TaskFileNameConflictError | null
+  /** Append one audit-log entry directly (SLA breach events etc.) and save. */
+  appendActivity(project: Project, taskId: string, entry: Task['activity'][number]): Promise<void>
 }

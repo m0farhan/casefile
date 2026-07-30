@@ -1093,3 +1093,121 @@ describe('issue keys', () => {
     ).toEqual(['Alpha', 'XX-1: Beta'])
   })
 })
+
+describe('activity log + incident lifecycle stamps', () => {
+  it('appends one entry per tracked field change through updateTask', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Audit', 'Projects')
+    const t = await addNamed(store, project, 'Traced')
+
+    await store.updateTask(project, t.id, { status: 'in-progress', priority: 'high' })
+
+    expect(t.activity.map((a) => [a.field, a.from, a.to])).toEqual([
+      ['status', 'todo', 'in-progress'],
+      ['priority', 'medium', 'high']
+    ])
+    expect(t.activity[0].at).toBeTruthy()
+  })
+
+  it('logs nothing for unchanged fields or untracked fields', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Quiet', 'Projects')
+    const t = await addNamed(store, project, 'Silent')
+
+    await store.updateTask(project, t.id, { status: 'todo', progress: 50, title: 'Silent' })
+    expect(t.activity).toEqual([])
+  })
+
+  it('whole-task patches (editor deep clones) diff against the live task, not double-log', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Clone', 'Projects')
+    const t = await addNamed(store, project, 'Edited')
+    await store.updateTask(project, t.id, { status: 'in-progress' })
+    expect(t.activity.length).toBe(1)
+
+    // Editor-style save: deep clone with one more change; clone carries the existing log.
+    const edited = JSON.parse(JSON.stringify(t)) as Task
+    edited.verdict = 'pending'
+    await store.updateTask(project, t.id, edited)
+
+    const live = expectDefined(findTask(project.tasks, t.id))
+    expect(live.activity.map((a) => a.field)).toEqual(['status', 'verdict'])
+  })
+
+  it('bulk updateTasks logs per task without cross-task bleed', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Bulk', 'Projects')
+    const a = await addNamed(store, project, 'A')
+    const b = await addNamed(store, project, 'B')
+
+    await store.updateTasks(project, [a.id, b.id], { status: 'done' })
+
+    expect(a.activity.length).toBe(1)
+    expect(b.activity.length).toBe(1)
+    expect(a.activity[0]).not.toBe(b.activity[0])
+  })
+
+  it('auto-stamps respondedAt on first incident status change, never overwrites, manual wins', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('IR', 'Projects')
+    const inc = makeTask({ title: 'Incident', issueType: 'incident', severity: 'sev2' })
+    await store.insertTask(project, inc, null)
+
+    await store.updateTask(project, inc.id, { status: 'in-progress' })
+    const stamped = inc.respondedAt
+    expect(stamped).toBeTruthy()
+
+    await store.updateTask(project, inc.id, { status: 'todo' })
+    expect(inc.respondedAt).toBe(stamped) // never overwritten
+
+    const manual = '2026-07-30T00:00:00.000Z'
+    await store.updateTask(project, inc.id, { status: 'in-progress', respondedAt: manual })
+    expect(inc.respondedAt).toBe(manual) // an explicit differing value is a manual edit — it wins
+  })
+
+  it('manual respondedAt in the same patch wins over the auto-stamp', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('IRM', 'Projects')
+    const inc = makeTask({ title: 'Incident', issueType: 'incident' })
+    await store.insertTask(project, inc, null)
+
+    const manual = '2026-07-30T00:00:00.000Z'
+    await store.updateTask(project, inc.id, { status: 'in-progress', respondedAt: manual })
+    expect(inc.respondedAt).toBe(manual)
+  })
+
+  it('auto-stamps resolvedAt when an incident enters a terminal status', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('IRR', 'Projects')
+    const inc = makeTask({ title: 'Incident', issueType: 'incident' })
+    await store.insertTask(project, inc, null)
+
+    await store.updateTask(project, inc.id, { status: 'done' })
+    expect(inc.resolvedAt).toBeTruthy()
+    expect(inc.respondedAt).toBeTruthy() // first status change too
+
+    // Non-incidents never get stamps.
+    const plain = await addNamed(store, project, 'Plain')
+    await store.updateTask(project, plain.id, { status: 'done' })
+    expect(plain.resolvedAt).toBe('')
+  })
+
+  it('appendActivity writes a direct entry and persists it', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Direct', 'Projects')
+    const t = await addNamed(store, project, 'Breach me')
+
+    await store.appendActivity(project, t.id, {
+      at: '2026-07-30T10:00:00.000Z',
+      field: 'sla',
+      from: 'response',
+      to: 'breached'
+    })
+
+    const file = vault.getAbstractFileByPath(project.filePath)
+    if (!(file instanceof TFile)) throw new Error('missing file')
+    const reloaded = expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(file))
+    const rt = expectDefined(findTask(reloaded.tasks, t.id))
+    expect(rt.activity).toEqual([{ at: '2026-07-30T10:00:00.000Z', field: 'sla', from: 'response', to: 'breached' }])
+  })
+})

@@ -896,10 +896,63 @@ export class ProjectStore implements TaskSource {
     else if (!nowComplete && wasComplete) patch.completed = ''
   }
 
+  /** Fields whose changes land in the append-only audit log. A const list, not config. */
+  private static readonly ACTIVITY_FIELDS = ['status', 'severity', 'priority', 'verdict', 'assignees', 'due'] as const
+
+  /**
+   * Append audit-log entries for tracked field changes onto the patch, and
+   * auto-stamp incident lifecycle timestamps. Runs beside stampCompletion in
+   * both update paths, so drag-drop, inline edits and bulk ops are covered.
+   * The task editor saves whole-task patches (deep clones), so diffs compare
+   * patch values against the live task; a patch that explicitly carries a
+   * lifecycle timestamp different from the live one is a manual edit and wins.
+   */
+  private stampActivity(project: Project, task: Task, patch: Partial<Task>): void {
+    const at = new Date().toISOString()
+    const entries: Task['activity'] = []
+    for (const field of ProjectStore.ACTIVITY_FIELDS) {
+      const next = patch[field]
+      if (next === undefined) continue
+      const prev = task[field]
+      const prevStr = Array.isArray(prev) ? prev.join(', ') : String(prev)
+      const nextStr = Array.isArray(next) ? next.join(', ') : String(next)
+      if (prevStr === nextStr) continue
+      entries.push({ at, field, from: prevStr, to: nextStr })
+    }
+
+    // Incident lifecycle auto-stamps (manual edits in the patch always win).
+    const issueType = patch.issueType ?? task.issueType
+    if (issueType === 'incident' && patch.status !== undefined && patch.status !== task.status) {
+      const manualResponded = patch.respondedAt !== undefined && patch.respondedAt !== task.respondedAt
+      if (!manualResponded && !task.respondedAt) patch.respondedAt = at
+      const manualResolved = patch.resolvedAt !== undefined && patch.resolvedAt !== task.resolvedAt
+      if (!manualResolved && !task.resolvedAt && isTerminalStatus(patch.status, this.statusesFor(project))) {
+        patch.resolvedAt = at
+      }
+    }
+
+    if (entries.length) {
+      const base = patch.activity ?? task.activity
+      patch.activity = [...base, ...entries]
+    }
+  }
+
+  /** Append one audit-log entry directly (breach events etc.) and save. */
+  async appendActivity(project: Project, taskId: string, entry: Task['activity'][number]): Promise<void> {
+    const task = findTaskById(project, taskId)
+    if (!task) return
+    updateTaskInTree(project.tasks, taskId, { activity: [...task.activity, entry] })
+    this.markDirty(project, [taskId], 'fm')
+    await this.saveProject(project)
+  }
+
   async updateTask(project: Project, taskId: string, patch: Partial<Task>): Promise<void> {
     const task = findTaskById(project, taskId)
     const oldTitle = task?.title
-    if (task) this.stampCompletion(project, task, patch)
+    if (task) {
+      this.stampCompletion(project, task, patch)
+      this.stampActivity(project, task, patch)
+    }
     // The task editor saves the whole task, so a patch can add, rename, remove,
     // or reorder subtasks. Snapshot the pre-edit subtree to diff against once the
     // tree has the new one.
@@ -986,6 +1039,7 @@ export class ProjectStore implements TaskSource {
       // doesn't bleed onto the next iteration through the same reference.
       const p = { ...raw }
       this.stampCompletion(project, task, p)
+      this.stampActivity(project, task, p)
       const oldTitle = task.title
       updateTaskInTree(project.tasks, id, p)
       const titleChanged = p.title !== undefined && p.title !== oldTitle
