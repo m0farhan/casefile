@@ -11,7 +11,7 @@ import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
 
-export const PM_PROJECT_VIEW_TYPE = 'pm-project'
+export const PM_PROJECT_VIEW_TYPE = 'gspm-project'
 
 interface ProjectViewState {
   filePath: string

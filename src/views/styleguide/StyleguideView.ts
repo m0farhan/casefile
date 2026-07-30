@@ -35,7 +35,7 @@ import { ViewSwitcher } from '../../ui/primitives/ViewSwitcher'
 import { renderPriorityBadge, renderStatusBadge, renderStatusDot } from '../../ui/StatusBadge'
 import { safeAsync } from '../../utils'
 
-export const PM_STYLEGUIDE_VIEW_TYPE = 'pm-styleguide'
+export const PM_STYLEGUIDE_VIEW_TYPE = 'gspm-styleguide'
 
 const noop = (): void => undefined
 const noopAsync = (): Promise<void> => Promise.resolve()

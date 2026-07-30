@@ -1,10 +1,10 @@
 {
-  "id": "project-manager",
-  "name": "Project Manager",
-  "version": "1.8.0",
-  "minAppVersion": "1.7.2",
-  "description": "Full-featured project management: stunning Gantt charts, Kanban boards, Table views, customizable fields, due date notifications.",
-  "author": "Stepan Kropachev",
-  "authorUrl": "https://github.com/StepanKropachev",
-  "isDesktopOnly": false
+	"id": "greysurface-pm",
+	"name": "GreySurface PM",
+	"version": "2.0.0",
+	"minAppVersion": "1.7.2",
+	"description": "Jira-style project & SOC incident tracking in Obsidian: issue keys, epics, kanban swimlanes, SLA timers, IOC tracking, reports and shift handover. Fork of Project Manager by Stepan Kropachev.",
+	"author": "Farhan (fork of Stepan Kropachev's Project Manager)",
+	"authorUrl": "https://github.com/StepanKropachev/obsidian-pm",
+	"isDesktopOnly": false
 }

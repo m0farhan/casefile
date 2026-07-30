@@ -153,6 +153,31 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     'flag'
   )
 
+  // Progress (milestones are always 0, so no slider there; spacer keeps Due|Start paired)
+  if (task.type !== 'milestone') {
+    renderPropRow(
+      grid,
+      'Progress',
+      () => {
+        const cell = createDiv('pm-prop-value pm-prop-progress')
+        const slider = cell.createEl('input', { type: 'range', cls: 'slider' })
+        slider.min = '0'
+        slider.max = '100'
+        slider.step = '25'
+        slider.value = String(task.progress ?? 0)
+        const label = cell.createSpan({ cls: 'pm-prop-progress-label', text: `${Math.round(task.progress ?? 0)}%` })
+        slider.addEventListener('input', () => label.setText(`${slider.value}%`))
+        slider.addEventListener('change', () => {
+          task.progress = Number(slider.value)
+          rerender()
+        })
+        return cell
+      },
+      'gauge'
+    )
+    grid.createDiv()
+  }
+
   // Due (Date for milestones)
   renderPropRow(
     grid,

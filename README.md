@@ -1,5 +1,23 @@
 <div align="center">
 
+# GreySurface PM
+
+Jira-style project & SOC incident tracking for Obsidian. A personal fork of
+[Project Manager](https://github.com/StepanKropachev/obsidian-pm) by Stepan
+Kropachev (MIT — upstream license retained in LICENSE), extended with issue
+keys, issue types/epics, kanban swimlanes, a query bar, severity/SLA tracking,
+IOC lists, MITRE ATT&CK tagging, comments/activity history, reports and shift
+handover, restyled with the GreySurface Linear design system.
+
+Data stays 100% compatible with upstream's `pm-project`/`pm-task` markdown
+format. See [INSTALL.md](INSTALL.md) for installing on another machine.
+If the upstream plugin is installed in the same vault, keep it disabled while
+this one is enabled — never run both.
+
+Upstream documentation follows (still accurate unless noted).
+
+---
+
 # Project Manager for Obsidian
 *Full-featured project management, natively in your vault.*
 

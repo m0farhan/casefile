@@ -32,11 +32,11 @@ export async function migrateProjects(plugin: PMPlugin): Promise<void> {
       migrated++
     } catch (e) {
       console.error(`[PM] Migration failed for ${file.path}:`, e)
-      new Notice(`Project Manager: Migration failed for "${file.basename}". Check console for details.`)
+      new Notice(`GreySurface PM: Migration failed for "${file.basename}". Check console for details.`)
     }
   }
 
   if (migrated > 0) {
-    new Notice(`Project Manager: Migrated ${migrated} project(s) to new format.`)
+    new Notice(`GreySurface PM: Migrated ${migrated} project(s) to new format.`)
   }
 }

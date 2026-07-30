@@ -3,7 +3,7 @@ import type PMPlugin from '../main'
 import { renderProjectListToolbar, renderProjectListContent } from './ProjectListRenderer'
 import type { ProjectListContext } from './ProjectListRenderer'
 
-export const PM_DASHBOARD_VIEW_TYPE = 'pm-dashboard'
+export const PM_DASHBOARD_VIEW_TYPE = 'gspm-dashboard'
 
 export class DashboardView extends ItemView {
   private plugin: PMPlugin

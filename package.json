@@ -1,7 +1,7 @@
 {
-  "name": "project-manager",
-  "version": "1.8.0",
-  "description": "Obsidian Project Manager Plugin",
+  "name": "greysurface-pm",
+  "version": "2.0.0",
+  "description": "GreySurface PM - Jira-style SOC project management for Obsidian (fork of obsidian-pm)",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -21,7 +21,8 @@
     "fix:format": "oxfmt ./src",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "package": "node scripts/package.mjs"
   },
   "devDependencies": {
     "@2bad/axiom": "2.0.0",
