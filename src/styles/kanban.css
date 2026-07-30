@@ -100,7 +100,9 @@
   border-radius: var(--radius-m);
   overflow: hidden;
   cursor: pointer;
-  transition: background 150ms ease-out, border-color 150ms ease-out;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out;
   position: relative;
 }
 .pm-kanban-card:hover {

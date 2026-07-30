@@ -127,7 +127,7 @@ export class StyleguideView extends ItemView {
       }
     }
     // Resolve after attach so the label shows the real cascade value, not a guess.
-    requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       for (const [el, token, out] of pending) {
         out.setText(getComputedStyle(el).getPropertyValue(token).trim() || '(unresolved)')
       }
