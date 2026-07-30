@@ -6,6 +6,7 @@ import type { TaskSource } from './store'
 import { PMSettingTab } from './settings'
 import { ProjectView, PM_PROJECT_VIEW_TYPE } from './views/ProjectView'
 import { DashboardView, PM_DASHBOARD_VIEW_TYPE } from './views/DashboardView'
+import { TaskDetailView, GSPM_TASK_DETAIL_VIEW_TYPE } from './views/TaskDetailView'
 import { registerStyleguide } from './views/styleguide/StyleguideView'
 import { PMViewRouter } from './views/PMViewRouter'
 import {
@@ -60,6 +61,7 @@ export default class PMPlugin extends Plugin {
 
     this.registerView(PM_PROJECT_VIEW_TYPE, (leaf) => new ProjectView(leaf, this))
     this.registerView(PM_DASHBOARD_VIEW_TYPE, (leaf) => new DashboardView(leaf, this))
+    this.registerView(GSPM_TASK_DETAIL_VIEW_TYPE, (leaf) => new TaskDetailView(leaf, this))
     if (__STYLEGUIDE__) registerStyleguide(this)
 
     this.app.workspace.onLayoutReady(
@@ -235,29 +237,22 @@ export default class PMPlugin extends Plugin {
   }
 
   async cleanupStaleProjectFilters(): Promise<void> {
-    const filters = this.settings.projectFilters
-    const cleaned: typeof filters = {}
     let dirty = false
-    for (const [path, entry] of Object.entries(filters)) {
-      if (this.app.vault.getAbstractFileByPath(path)) {
-        cleaned[path] = entry
-      } else {
-        dirty = true
+    const prune = <T>(record: Record<string, T>): Record<string, T> => {
+      const kept: Record<string, T> = {}
+      for (const [path, entry] of Object.entries(record)) {
+        if (this.app.vault.getAbstractFileByPath(path)) {
+          kept[path] = entry
+        } else {
+          dirty = true
+        }
       }
+      return kept
     }
-    const cleanedCollapsed: typeof this.settings.collapsedTasks = {}
-    for (const [path, ids] of Object.entries(this.settings.collapsedTasks)) {
-      if (this.app.vault.getAbstractFileByPath(path)) {
-        cleanedCollapsed[path] = ids
-      } else {
-        dirty = true
-      }
-    }
-    if (dirty) {
-      this.settings.projectFilters = cleaned
-      this.settings.collapsedTasks = cleanedCollapsed
-      await this.saveSettings()
-    }
+    this.settings.projectFilters = prune(this.settings.projectFilters)
+    this.settings.collapsedTasks = prune(this.settings.collapsedTasks)
+    this.settings.collapsedKanbanColumns = prune(this.settings.collapsedKanbanColumns)
+    if (dirty) await this.saveSettings()
   }
 
   /**
@@ -290,6 +285,19 @@ export default class PMPlugin extends Plugin {
     if (!task) return
     task.collapsed = !task.collapsed
     await this.persistCollapsedState(project)
+  }
+
+  isKanbanColumnCollapsed(project: Project, statusId: string): boolean {
+    return (this.settings.collapsedKanbanColumns[project.filePath] ?? []).includes(statusId)
+  }
+
+  /** Flip a kanban column's collapsed flag and persist. Mirrors toggleTaskCollapsed. */
+  async toggleKanbanColumnCollapsed(project: Project, statusId: string): Promise<void> {
+    const current = this.settings.collapsedKanbanColumns[project.filePath] ?? []
+    this.settings.collapsedKanbanColumns[project.filePath] = current.includes(statusId)
+      ? current.filter((id) => id !== statusId)
+      : [...current, statusId]
+    await this.saveSettings()
   }
 
   async saveSettings(): Promise<void> {

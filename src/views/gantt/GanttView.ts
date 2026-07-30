@@ -311,7 +311,12 @@ export class GanttView implements SubView {
   }
 
   private getVisibleTasks(): Task[] {
-    return applyTaskFilterPromote(this.project.tasks, this.filter, this.plugin.store.configFor(this.project).statuses)
+    const cfg = this.plugin.store.configFor(this.project)
+    return applyTaskFilterPromote(this.project.tasks, this.filter, cfg.statuses, {
+      priorities: cfg.priorities,
+      severities: cfg.severities,
+      currentUser: this.plugin.settings.currentUser
+    })
   }
 
   private scrollToToday(): void {

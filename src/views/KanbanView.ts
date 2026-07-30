@@ -2,11 +2,14 @@ import { Menu } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task, TaskStatus, FilterState, ResolvedProjectConfig } from '../types'
 import { flattenTasks, totalLoggedHours } from '../store/TaskTreeOps'
+import { findEpicAncestor, findParentId } from '../store/TaskIndex'
 import { matchesFilter } from '../store/TaskFilter'
-import { dueUrgency, isTerminalStatus, getPriorityConfig } from '../utils'
+import type { QueryCtx } from '../store/QueryParser'
+import { dueUrgency, isTerminalStatus, getPriorityConfig, safeAsync } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
 import { buildTaskContextMenu } from '../ui/TaskContextMenu'
-import { KanbanColumn, type KanbanCardData } from '../ui/composites/KanbanColumn'
+import { KanbanColumn, type DropNeighbor, type KanbanCardData } from '../ui/composites/KanbanColumn'
+import { computeLanes, isLaneGroup, LANE_GROUPS, type KanbanLaneGroup } from './kanbanLanes'
 import type { SubView } from './SubView'
 
 export class KanbanView implements SubView {
@@ -34,25 +37,93 @@ export class KanbanView implements SubView {
     this.container.empty()
     this.container.addClass('pm-kanban-view')
 
-    const board = this.container.createDiv('pm-kanban-board')
+    const groupBy = this.laneGroup()
+    this.container.toggleClass('pm-kanban-view--lanes', groupBy !== 'none')
+    this.renderLanesBar(groupBy)
 
-    for (const status of this.config.statuses) {
-      const tasks = this.getTasksForStatus(status.id)
-      const cards = tasks.map((task) => this.buildCardData(task))
-      new KanbanColumn(board, {
-        status,
-        cards,
-        onCardClick: (task) => this.openTask(task),
-        onCardContextMenu: (task, e) => this.openContextMenu(task, e),
-        onCardDragStart: (task) => {
-          this.dragTask = task
-        },
-        onCardDragEnd: () => {
-          this.dragTask = null
-        },
-        onDrop: (taskId, newStatus) => this.handleDrop(taskId, newStatus)
-      })
+    const lanes = computeLanes(this.visibleTasks(), groupBy, {
+      epicOf: (id) => findEpicAncestor(this.project, id),
+      priorities: this.config.priorities
+    })
+
+    for (const lane of lanes) {
+      if (groupBy !== 'none') {
+        const header = this.container.createDiv('pm-kanban-lane-header')
+        header.createSpan({ text: lane.label, cls: 'pm-kanban-lane-label' })
+        header.createSpan({ text: String(lane.tasks.length), cls: 'pm-kanban-lane-count' })
+      }
+      const board = this.container.createDiv('pm-kanban-board')
+      for (const status of this.config.statuses) {
+        const tasks = lane.tasks.filter((t) => t.status === status.id)
+        // The epic chip is noise inside its own epic's lane — the lane header already says it.
+        const cards = tasks.map((task) => this.buildCardData(task, groupBy !== 'epic'))
+        new KanbanColumn(board, {
+          status,
+          cards,
+          collapsed: this.plugin.isKanbanColumnCollapsed(this.project, status.id),
+          onToggleCollapse: safeAsync(async () => {
+            await this.plugin.toggleKanbanColumnCollapsed(this.project, status.id)
+            this.renderBoard()
+          }),
+          onCardClick: (task) => this.openTask(task),
+          onCardContextMenu: (task, e) => this.openContextMenu(task, e),
+          onCardDragStart: (task) => {
+            this.dragTask = task
+          },
+          onCardDragEnd: () => {
+            this.dragTask = null
+          },
+          onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before)
+        })
+      }
     }
+  }
+
+  private renderLanesBar(groupBy: KanbanLaneGroup): void {
+    const bar = this.container.createDiv('pm-kanban-lanes-bar')
+    // Wrapping label: implicit association, no document-wide id to collide across leaves.
+    const label = bar.createEl('label', { text: 'Lanes', cls: 'pm-kanban-lanes-label' })
+    const select = label.createEl('select', { cls: 'pm-kanban-lanes-select' })
+    for (const g of LANE_GROUPS) {
+      select.createEl('option', { text: g.label, value: g.id })
+    }
+    select.value = groupBy
+    select.addEventListener(
+      'change',
+      safeAsync(async () => {
+        await this.setLaneGroup(isLaneGroup(select.value) ? select.value : 'none')
+        this.renderBoard()
+      })
+    )
+  }
+
+  /** Persisted per project alongside the filter, in settings.projectFilters. */
+  private laneGroup(): KanbanLaneGroup {
+    const v = this.plugin.settings.projectFilters[this.project.filePath]?.kanbanLane
+    return isLaneGroup(v) ? v : 'none'
+  }
+
+  private async setLaneGroup(groupBy: KanbanLaneGroup): Promise<void> {
+    const filters = this.plugin.settings.projectFilters
+    const entry = (filters[this.project.filePath] ??= { filter: this.filter, activeSavedViewId: null })
+    entry.kanbanLane = groupBy
+    await this.plugin.saveSettings()
+  }
+
+  /** Context for query-bar field terms (prio:>=high, sev:, assignee:me). */
+  private queryCtx(): Partial<QueryCtx> {
+    return {
+      priorities: this.config.priorities,
+      severities: this.config.severities,
+      currentUser: this.plugin.settings.currentUser
+    }
+  }
+
+  private visibleTasks(): Task[] {
+    const candidates = this.config.kanbanShowSubtasks
+      ? flattenTasks(this.project.tasks).map((ft) => ft.task)
+      : this.project.tasks
+    return candidates.filter((t) => matchesFilter(t, this.filter, this.config.statuses, this.queryCtx()))
   }
 
   /**
@@ -60,25 +131,13 @@ export class KanbanView implements SubView {
    * for the cards on the board, then re-render once so previews fill in.
    */
   private async hydrateDescriptions(): Promise<void> {
-    const candidates = this.config.kanbanShowSubtasks
-      ? flattenTasks(this.project.tasks).map((ft) => ft.task)
-      : this.project.tasks
-    const pending = candidates.filter(
-      (t) => t.filePath && !t.description && matchesFilter(t, this.filter, this.config.statuses)
-    )
+    const pending = this.visibleTasks().filter((t) => t.filePath && !t.description)
     if (!pending.length) return
     await Promise.all(pending.map((t) => this.plugin.store.loadTaskBody(t)))
     if (pending.some((t) => t.description)) this.renderBoard()
   }
 
-  private getTasksForStatus(status: TaskStatus): Task[] {
-    const candidates = this.config.kanbanShowSubtasks
-      ? flattenTasks(this.project.tasks).map((ft) => ft.task)
-      : this.project.tasks
-    return candidates.filter((t) => t.status === status && matchesFilter(t, this.filter, this.config.statuses))
-  }
-
-  private buildCardData(task: Task): KanbanCardData {
+  private buildCardData(task: Task, showEpic: boolean): KanbanCardData {
     const priorityConfig = getPriorityConfig(this.config.priorities, task.priority)
     const priorityColor =
       priorityConfig && task.priority !== 'medium' && task.priority !== 'low' ? priorityConfig.color : undefined
@@ -102,6 +161,17 @@ export class KanbanView implements SubView {
       if (parent) parentTitle = parent.title
     }
 
+    let epic: KanbanCardData['epic']
+    if (showEpic) {
+      const epicTask = findEpicAncestor(this.project, task.id)
+      if (epicTask) {
+        epic = {
+          label: epicTask.key || epicTask.title,
+          color: this.config.issueTypes.find((t) => t.id === epicTask.issueType)?.color
+        }
+      }
+    }
+
     let subtaskProgress: { done: number; total: number } | undefined
     if (task.subtasks.length) {
       const done = task.subtasks.filter((s) => isTerminalStatus(s.status, this.config.statuses)).length
@@ -113,6 +183,8 @@ export class KanbanView implements SubView {
       priorityColor,
       descriptionPreview,
       parentTitle,
+      issueTypes: this.config.issueTypes,
+      epic,
       subtaskProgress,
       loggedHours: totalLoggedHours(task),
       overdue: dueUrgency(task, this.config.statuses) === 'overdue',
@@ -143,10 +215,18 @@ export class KanbanView implements SubView {
     menu.showAtMouseEvent(e)
   }
 
-  private async handleDrop(taskId: string, newStatus: TaskStatus): Promise<void> {
+  private async handleDrop(taskId: string, newStatus: TaskStatus, before: DropNeighbor | null): Promise<void> {
     if (!this.dragTask || this.dragTask.id !== taskId) return
-    if (newStatus === this.dragTask.status) return
-    await this.plugin.store.updateTask(this.project, this.dragTask.id, { status: newStatus })
+    if (newStatus !== this.dragTask.status) {
+      await this.plugin.store.updateTask(this.project, taskId, { status: newStatus })
+    }
+    // reorderTask persists sibling order through the shared parent's list, so a
+    // neighbor under a different parent (possible when subtask cards are shown)
+    // can't be persisted — skip the reorder silently, keeping the status change.
+    // With subtasks hidden both cards are top-level, so the parents match (null).
+    if (before && findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
+      await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
+    }
     await this.onRefresh()
   }
 }

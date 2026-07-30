@@ -83,7 +83,8 @@ export class PrimaryRow {
       .setShape('pill')
       .setActive(this.props.activeSavedViewId === sv.id)
       .onClick(() => {
-        this.props.onSavedViewSelect(sv.id)
+        // Quick-filter toggle: clicking the active chip clears back to the default view.
+        this.props.onSavedViewSelect(this.props.activeSavedViewId === sv.id ? null : sv.id)
       })
       .onContextMenu((e) => {
         e.preventDefault()

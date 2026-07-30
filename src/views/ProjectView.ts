@@ -7,6 +7,7 @@ import { TableView } from './table/TableView'
 import type { TableViewState } from './table/TableView'
 import { GanttView } from './gantt/GanttView'
 import { KanbanView } from './KanbanView'
+import { BacklogView } from './BacklogView'
 import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
@@ -342,7 +343,8 @@ export class ProjectView extends ItemView {
       options: [
         { id: 'table', icon: 'table', label: 'Table' },
         { id: 'gantt', icon: 'git-fork', label: 'Gantt' },
-        { id: 'kanban', icon: 'layout-dashboard', label: 'Board' }
+        { id: 'kanban', icon: 'layout-dashboard', label: 'Board' },
+        { id: 'backlog', icon: 'rows-3', label: 'Backlog' }
       ],
       active: this.currentView,
       onChange: (mode) => {
@@ -438,6 +440,9 @@ export class ProjectView extends ItemView {
       }
       case 'kanban':
         this.subview = new KanbanView(this.bodyEl, this.project, this.plugin, () => this.refreshProject(), this.filter)
+        break
+      case 'backlog':
+        this.subview = new BacklogView(this.bodyEl, this.project, this.plugin, () => this.refreshProject(), this.filter)
         break
     }
     this.bodyEl.toggleClass('pm-content--kanban', this.currentView === 'kanban')

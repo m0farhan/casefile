@@ -1,15 +1,4 @@
-import {
-  App,
-  ButtonComponent,
-  Component,
-  ExtraButtonComponent,
-  Menu,
-  Modal,
-  MarkdownRenderer,
-  Notice,
-  setIcon,
-  setTooltip
-} from 'obsidian'
+import { App, ButtonComponent, ExtraButtonComponent, Menu, Modal, Notice, setIcon, setTooltip } from 'obsidian'
 import type PMPlugin from '../main'
 import { type Project, type Task, makeTask } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
@@ -20,7 +9,7 @@ import { renderKeyChip } from '../ui/composites/issueMeta'
 import { renderTaskFormFields } from './TaskFormFields'
 import { renderTimeTrackingPanel } from './TimeTrackingPanel'
 import { renderSubtasksPanel } from './SubtasksPanel'
-import { NoteLinkSuggest } from './NoteLinkSuggest'
+import { renderDescriptionEditor, type DescriptionEditorHandle } from './DescriptionEditor'
 
 export class TaskModal extends Modal {
   private task: Task
@@ -29,7 +18,7 @@ export class TaskModal extends Modal {
   private cancelled = false
   private saved = false
   private persistPromise: Promise<void> | null = null
-  private noteSuggest: NoteLinkSuggest | null = null
+  private descEditor: DescriptionEditorHandle | null = null
   private shownExtras = new Set<string>()
   private saveKeyHandler: ((e: KeyboardEvent) => void) | null = null
 
@@ -92,8 +81,8 @@ export class TaskModal extends Modal {
       this.modalEl.removeEventListener('keydown', this.saveKeyHandler)
       this.saveKeyHandler = null
     }
-    this.noteSuggest?.destroy()
-    this.noteSuggest = null
+    this.descEditor?.destroy()
+    this.descEditor = null
     this.contentEl.empty()
   }
 
@@ -109,26 +98,6 @@ export class TaskModal extends Modal {
     })()
     this.persistPromise = p
     return p
-  }
-
-  private async insertAttachments(
-    descArea: HTMLTextAreaElement,
-    items: { blob: Blob; name: string }[],
-    autoResize: () => void
-  ): Promise<void> {
-    for (const { blob, name } of items) {
-      try {
-        const buffer = await blob.arrayBuffer()
-        const file = await this.plugin.store.saveTaskAttachment(this.project, this.task, name, buffer)
-        const snippet = `![[${file.name}]]`
-        descArea.setRangeText(snippet, descArea.selectionStart, descArea.selectionEnd, 'end')
-        this.task.description = descArea.value
-        autoResize()
-      } catch (err) {
-        console.error('Failed to save attachment', err)
-        new Notice('Failed to save attachment')
-      }
-    }
   }
 
   private async runPersist(): Promise<void> {
@@ -315,217 +284,18 @@ export class TaskModal extends Modal {
     body.createEl('hr', { cls: 'pm-te-divider' })
 
     // ── Description (preview / edit) ─────────────────────────────────────────
-    const descSection = body.createDiv('pm-modal-section pm-modal-desc-section')
-    descSection.createEl('h4', { text: 'Description', cls: 'pm-modal-section-title' })
-
-    const descPreview = descSection.createDiv('pm-modal-desc-preview')
-    const descArea = descSection.createEl('textarea', { cls: 'pm-modal-description' })
-    descArea.placeholder = 'Add a description…'
-    descArea.value = this.task.description
-
-    const autoResize = () => {
-      const saved: [HTMLElement, number][] = []
-      let ancestor = descArea.parentElement
-      while (ancestor) {
-        if (ancestor.scrollTop > 0) saved.push([ancestor, ancestor.scrollTop])
-        ancestor = ancestor.parentElement
+    this.descEditor?.destroy()
+    this.descEditor = renderDescriptionEditor(body, {
+      app: this.app,
+      plugin: this.plugin,
+      project: this.project,
+      task: this.task,
+      onNavigateAway: () => {
+        this.saved = false
+        this.cancelled = false
+        this.close()
       }
-      descArea.setCssProps({ '--desc-height': 'auto' })
-      descArea.setCssProps({ '--desc-height': descArea.scrollHeight + 'px' })
-      for (const [el, top] of saved) el.scrollTop = top
-    }
-
-    const hasContent = () => this.task.description.trim().length > 0
-    const sourcePath = this.task.filePath || this.project.filePath || ''
-
-    let descComp = new Component()
-    descComp.load()
-
-    const toggleCheckbox = (index: number) => {
-      let count = 0
-      this.task.description = this.task.description.replace(
-        /^([ \t]*[-*+] \[)([ x])(\])/gm,
-        (match, pre, state, post) => {
-          if (count++ === index) return pre + (state === ' ' ? 'x' : ' ') + post
-          return match
-        }
-      )
-      descArea.value = this.task.description
-      void renderPreview()
-    }
-
-    const attachCheckboxListeners = () => {
-      descPreview.querySelectorAll('input[type="checkbox"]').forEach((el, i) => {
-        const cb = el as HTMLInputElement
-        cb.removeAttribute('disabled')
-        cb.addEventListener('click', (e) => {
-          e.preventDefault()
-          toggleCheckbox(i)
-        })
-      })
-    }
-
-    // MarkdownRenderer emits external anchors with target="_blank"; Electron
-    // silently drops file:// under that, so route file:// clicks through window.open.
-    const attachFileLinkHandlers = () => {
-      descPreview.querySelectorAll<HTMLAnchorElement>('a.external-link').forEach((a) => {
-        if (!a.href.startsWith('file://')) return
-        a.addEventListener('click', (e) => {
-          e.preventDefault()
-          activeWindow.open(a.href)
-        })
-      })
-    }
-
-    const renderPreview = async () => {
-      descComp.unload()
-      descComp = new Component()
-      descComp.load()
-      descPreview.empty()
-      await MarkdownRenderer.render(this.app, this.task.description, descPreview, sourcePath, descComp)
-      attachCheckboxListeners()
-      attachFileLinkHandlers()
-    }
-
-    const showEdit = (caret?: number) => {
-      descPreview.classList.add('pm-hidden')
-      descArea.classList.remove('pm-hidden')
-      descArea.value = this.task.description
-      window.setTimeout(() => {
-        autoResize()
-        descArea.focus()
-        if (caret !== undefined) descArea.setSelectionRange(caret, caret)
-      }, 0)
-    }
-
-    const showPreview = () => {
-      if (!hasContent()) return
-      void renderPreview()
-      descArea.classList.add('pm-hidden')
-      descPreview.classList.remove('pm-hidden')
-    }
-
-    descArea.addEventListener('input', () => {
-      this.task.description = descArea.value
-      autoResize()
     })
-    descArea.addEventListener('blur', () => showPreview())
-
-    descArea.addEventListener('paste', (e) => {
-      const items = e.clipboardData?.items
-      if (!items) return
-      const attachments: { blob: Blob; name: string }[] = []
-      for (const item of Array.from(items)) {
-        if (item.kind === 'file' && item.type.startsWith('image/')) {
-          const file = item.getAsFile()
-          if (file) {
-            const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-            const sub = (item.type.split('/')[1] || 'png').split('+')[0]
-            const ext = sub === 'jpeg' ? 'jpg' : sub
-            attachments.push({ blob: file, name: `Pasted-${stamp}.${ext}` })
-          }
-        }
-      }
-      if (attachments.length === 0) return
-      e.preventDefault()
-      void this.insertAttachments(descArea, attachments, autoResize)
-    })
-
-    descSection.addEventListener('dragover', (e) => {
-      if (!e.dataTransfer) return
-      if (!Array.from(e.dataTransfer.types).includes('Files')) return
-      e.preventDefault()
-    })
-
-    descSection.addEventListener('drop', (e) => {
-      const files = e.dataTransfer?.files
-      if (!files || files.length === 0) return
-      e.preventDefault()
-      if (descArea.classList.contains('pm-hidden')) {
-        showEdit()
-        descArea.selectionStart = descArea.selectionEnd = descArea.value.length
-      }
-      const attachments = Array.from(files).map((f) => ({ blob: f, name: f.name }))
-      void this.insertAttachments(descArea, attachments, autoResize)
-    })
-
-    // Note link suggest (inline [[ autocomplete)
-    this.noteSuggest?.destroy()
-    this.noteSuggest = new NoteLinkSuggest(this.app, descArea, (newValue) => {
-      this.task.description = newValue
-      autoResize()
-    })
-    this.noteSuggest.attach(descSection)
-
-    // Walk the rendered text and the markdown source in step, skipping the source
-    // characters that produced no output, so a caret in the preview lands on the
-    // character that rendered it rather than on the syntax around it.
-    const sourceOffsetOf = (renderedIndex: number) => {
-      const rendered = descPreview.textContent || ''
-      const src = this.task.description
-      const plain = (c: string) => (/\s/.test(c) ? ' ' : c)
-      let cursor = 0
-      for (let i = 0; i < renderedIndex && i < rendered.length; i++) {
-        const ch = plain(rendered[i])
-        while (cursor < src.length && plain(src[cursor]) !== ch) cursor++
-        cursor++
-      }
-      return Math.min(cursor, src.length)
-    }
-
-    const clickedSourceOffset = (e: MouseEvent) => {
-      const doc = descPreview.ownerDocument
-      const caret = doc.caretPositionFromPoint?.(e.clientX, e.clientY)
-      const node = caret?.offsetNode
-      if (!node || node.nodeType !== Node.TEXT_NODE || !descPreview.contains(node)) return undefined
-      const walker = doc.createTreeWalker(descPreview, NodeFilter.SHOW_TEXT)
-      let rendered = 0
-      let current = walker.nextNode()
-      while (current && current !== node) {
-        rendered += (current.textContent || '').length
-        current = walker.nextNode()
-      }
-      return current ? sourceOffsetOf(rendered + caret.offset) : undefined
-    }
-
-    descPreview.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement
-      if (target.instanceOf(HTMLInputElement) && target.type === 'checkbox') return
-
-      const link = target.closest('a')
-
-      if (link) {
-        // Internal link (Obsidian note link)
-        if (link.classList.contains('internal-link')) {
-          e.preventDefault()
-          e.stopPropagation()
-          const href = link.getAttribute('data-href') || link.getAttribute('href') || ''
-          this.saved = false
-          this.cancelled = false
-          this.close()
-          void this.app.workspace.openLinkText(href, sourcePath)
-          return
-        }
-        // External link - let browser handle it
-        return
-      }
-
-      if (target.instanceOf(HTMLImageElement)) return
-
-      const selection = activeWindow.getSelection()
-      if (selection && !selection.isCollapsed && descPreview.contains(selection.anchorNode)) return
-
-      // Click on non-link text = edit
-      showEdit(clickedSourceOffset(e))
-    })
-
-    if (hasContent()) {
-      descArea.classList.add('pm-hidden')
-      void renderPreview()
-    } else {
-      descPreview.classList.add('pm-hidden')
-      window.setTimeout(autoResize, 0)
-    }
 
     // ── Subtasks ────────────────────────────────────────────────────────────
     renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses)

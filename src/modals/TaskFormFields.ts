@@ -1,5 +1,6 @@
 import type PMPlugin from '../main'
-import type { Project, Task, TaskType, Recurrence } from '../types'
+import type { IssueBucket, Project, Task, TaskType, Recurrence } from '../types'
+import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { wouldCreateCycle } from '../store/Scheduler'
 import { renderPropRow } from '../ui/FormField'
@@ -174,7 +175,7 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     'flag'
   )
 
-  // Progress (milestones are always 0, so no slider there; spacer keeps Due|Start paired)
+  // Progress | Bucket share a row (milestones have no progress, so Bucket pairs with a spacer)
   if (task.type !== 'milestone') {
     renderPropRow(
       grid,
@@ -196,8 +197,26 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       },
       'gauge'
     )
-    grid.createDiv()
   }
+  renderPropRow(
+    grid,
+    'Bucket',
+    () => {
+      const cell = createDiv('pm-prop-value')
+      renderSelectControl({
+        container: cell,
+        value: task.bucket,
+        options: BUCKETS.map((b) => ({ id: b.id, label: b.label })),
+        onChange: (id) => {
+          task.bucket = id as IssueBucket
+          rerender()
+        }
+      })
+      return cell
+    },
+    'inbox'
+  )
+  if (task.type === 'milestone') grid.createDiv()
 
   // Due (Date for milestones)
   renderPropRow(

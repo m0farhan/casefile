@@ -67,7 +67,13 @@ export function hydrateSavedViews(raw: unknown[]): SavedView[] {
       const filter = (v.filter ?? {}) as Record<string, unknown>
       const viewMode = v.viewMode
       const validViewMode: ViewMode | undefined =
-        viewMode === 'table' || viewMode === 'gantt' || viewMode === 'kanban' ? viewMode : undefined
+        viewMode === 'table' ||
+        viewMode === 'gantt' ||
+        viewMode === 'kanban' ||
+        viewMode === 'backlog' ||
+        viewMode === 'reports'
+          ? viewMode
+          : undefined
       return {
         id: (v.id as string) ?? '',
         name: (v.name as string) ?? 'Untitled',
@@ -205,7 +211,13 @@ function hydrateProjectConfig(raw: unknown): ProjectConfig | undefined {
   if (priorities) config.priorities = priorities
   const issueTypes = hydrateIssueTypeList(r.issueTypes)
   if (issueTypes) config.issueTypes = issueTypes
-  if (r.defaultView === 'table' || r.defaultView === 'gantt' || r.defaultView === 'kanban') {
+  if (
+    r.defaultView === 'table' ||
+    r.defaultView === 'gantt' ||
+    r.defaultView === 'kanban' ||
+    r.defaultView === 'backlog' ||
+    r.defaultView === 'reports'
+  ) {
     config.defaultView = r.defaultView
   }
   if (typeof r.autoSchedule === 'boolean') config.autoSchedule = r.autoSchedule

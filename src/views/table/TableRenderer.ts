@@ -151,7 +151,12 @@ function fillTableBody(ctx: TableContext): void {
 
   let flat = flattenTasks(ctx.project.tasks)
   const hasActiveFilter = isFilterActive(ctx.state.filter)
-  flat = applyTaskFilterFlat(flat, ctx.state.filter, ctx.statuses)
+  const cfg = ctx.plugin.store.configFor(ctx.project)
+  flat = applyTaskFilterFlat(flat, ctx.state.filter, ctx.statuses, {
+    priorities: ctx.priorities,
+    severities: cfg.severities,
+    currentUser: ctx.plugin.settings.currentUser
+  })
 
   const filteredIds = new Set(flat.map((f) => f.task.id))
 
@@ -235,8 +240,10 @@ function renderWindowRows(ctx: TableContext): void {
 
   tbody.empty()
   if (start > 0) spacerRow(tbody, colCount, start * state.rowHeight)
+  // Resolved once per repaint (configFor scans the task tree for in-use extras).
+  const issueTypes = ctx.plugin.store.configFor(ctx.project).issueTypes
   for (let i = start; i < end; i++) {
-    renderTaskRow(tbody, rows[i].task, rows[i].depth, ctx)
+    renderTaskRow(tbody, rows[i].task, rows[i].depth, ctx, issueTypes)
   }
   if (end < rows.length) spacerRow(tbody, colCount, (rows.length - end) * state.rowHeight)
 

@@ -234,3 +234,63 @@
   font-size: 12px;
   color: var(--text-muted);
 }
+
+/* ─ GreySurface backlog view ─ */
+.pm-backlog {
+  padding: 8px 16px;
+  overflow-y: auto;
+}
+.pm-backlog-section {
+  margin-bottom: 16px;
+}
+.pm-backlog-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--gs-hairline-strong);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gs-ink-subtle);
+}
+.pm-backlog-header-count {
+  color: var(--gs-ink-tertiary);
+}
+.pm-backlog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px;
+  border-bottom: 1px solid var(--gs-hairline);
+  cursor: pointer;
+  transition: background 150ms ease-out;
+}
+.pm-backlog-row:hover {
+  background: var(--gs-hover-step);
+}
+.pm-backlog-title {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+.pm-backlog-status {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--pm-chip-color, var(--gs-ink-subtle));
+  background: color-mix(in srgb, var(--pm-chip-color, var(--gs-ink-subtle)) 15%, var(--gs-surface-1));
+  border-radius: var(--radius-s);
+  padding: 1px 7px;
+}
+.pm-backlog-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+.pm-backlog-due-icon {
+  display: inline-flex;
+  --icon-size: 12px;
+}

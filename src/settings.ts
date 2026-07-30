@@ -51,6 +51,35 @@ export class PMSettingTab extends PluginSettingTab {
           })
       )
 
+    new Setting(containerEl)
+      .setName('Open tasks in')
+      .setDesc(
+        'Where clicking a task opens it. The side panel autosaves and suits triage runs; new tasks always use the dialog.'
+      )
+      .addDropdown((dd) =>
+        dd
+          .addOption('modal', 'Dialog')
+          .addOption('panel', 'Side panel')
+          .setValue(this.plugin.settings.openTaskIn)
+          .onChange(async (v) => {
+            this.plugin.settings.openTaskIn = v as PMSettings['openTaskIn']
+            await this.plugin.saveSettings()
+          })
+      )
+
+    new Setting(containerEl)
+      .setName('Current user')
+      .setDesc('Your assignee name — makes assignee:me work in the search bar.')
+      .addText((text) =>
+        text
+          .setPlaceholder('Farhan')
+          .setValue(this.plugin.settings.currentUser)
+          .onChange(async (v) => {
+            this.plugin.settings.currentUser = v.trim()
+            await this.plugin.saveSettings()
+          })
+      )
+
     new Setting(containerEl).setName('Default gantt granularity').addDropdown((dd) =>
       dd
         .addOption('day', 'Day')

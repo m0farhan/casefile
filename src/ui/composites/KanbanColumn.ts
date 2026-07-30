@@ -1,6 +1,7 @@
 import { setIcon } from 'obsidian'
-import type { Task } from '../../types'
+import type { IssueTypeConfig, Task } from '../../types'
 import { formatBadgeText, isIconName, safeAsync } from '../../utils'
+import { IconButton } from '../primitives/IconButton'
 import { KanbanCard } from './KanbanCard'
 
 export interface KanbanColumnStatus {
@@ -8,6 +9,8 @@ export interface KanbanColumnStatus {
   label: string
   color: string
   icon: string
+  /** Soft WIP limit; count renders 'n / limit' in amber when exceeded. */
+  wipLimit?: number
 }
 
 export interface KanbanCardData {
@@ -15,20 +18,30 @@ export interface KanbanCardData {
   priorityColor?: string
   descriptionPreview?: string
   parentTitle?: string
+  issueTypes?: IssueTypeConfig[]
+  epic?: { label: string; color?: string }
   subtaskProgress?: { done: number; total: number }
   loggedHours: number
   overdue: boolean
   showTagColors: boolean
 }
 
+/** The card the dragged task landed next to, for persisting the drop order. */
+export interface DropNeighbor {
+  targetId: string
+  position: 'before' | 'after'
+}
+
 export interface KanbanColumnProps {
   status: KanbanColumnStatus
   cards: KanbanCardData[]
+  collapsed: boolean
+  onToggleCollapse: () => void
   onCardClick: (task: Task) => void
   onCardContextMenu: (task: Task, e: MouseEvent) => void
   onCardDragStart: (task: Task) => void
   onCardDragEnd: () => void
-  onDrop: (taskId: string, newStatus: string) => Promise<void>
+  onDrop: (taskId: string, newStatus: string, before: DropNeighbor | null) => Promise<void>
 }
 
 export class KanbanColumn {
@@ -38,6 +51,11 @@ export class KanbanColumn {
     const col = parentEl.createDiv('pm-kanban-col')
     col.dataset.status = props.status.id
     this.el = col
+
+    if (props.collapsed) {
+      this.renderCollapsed(col, props)
+      return
+    }
 
     const header = col.createDiv('pm-kanban-col-header')
     header.style.setProperty('--col-color', props.status.color)
@@ -56,10 +74,11 @@ export class KanbanColumn {
     badge.style.color = props.status.color
 
     const headerRight = titleRow.createDiv('pm-kanban-col-header-right')
-    headerRight.createSpan({
-      text: String(props.cards.length),
-      cls: 'pm-kanban-col-count'
-    })
+    renderCount(headerRight, props.cards.length, props.status.wipLimit)
+    new IconButton(headerRight)
+      .setIcon('chevron-left')
+      .setTooltip('Collapse column')
+      .onClick(() => props.onToggleCollapse())
 
     const cardsEl = col.createDiv('pm-kanban-cards')
     cardsEl.dataset.status = props.status.id
@@ -70,6 +89,8 @@ export class KanbanColumn {
         priorityColor: card.priorityColor,
         descriptionPreview: card.descriptionPreview,
         parentTitle: card.parentTitle,
+        issueTypes: card.issueTypes,
+        epic: card.epic,
         subtaskProgress: card.subtaskProgress,
         loggedHours: card.loggedHours,
         overdue: card.overdue,
@@ -106,10 +127,66 @@ export class KanbanColumn {
         cardsEl.removeClass('pm-kanban-drop-target')
         const taskId = e.dataTransfer?.getData('text/plain') ?? ''
         if (!taskId) return
-        await props.onDrop(taskId, props.status.id)
+        await props.onDrop(taskId, props.status.id, getDropNeighbor(cardsEl))
       })
     )
   }
+
+  /** Narrow vertical strip: rotated label + count; clicking anywhere expands. */
+  private renderCollapsed(col: HTMLElement, props: KanbanColumnProps): void {
+    col.addClass('pm-kanban-col--collapsed')
+    col.setAttribute('role', 'button')
+    col.setAttribute('tabindex', '0')
+    col.setAttribute('aria-label', `Expand ${props.status.label} column`)
+
+    const topBar = col.createDiv('pm-kanban-col-topbar')
+    topBar.setCssStyles({ background: props.status.color })
+
+    const label = col.createSpan({ text: props.status.label, cls: 'pm-kanban-col-collapsed-label' })
+    label.setCssStyles({ color: props.status.color })
+    renderCount(col, props.cards.length, props.status.wipLimit)
+
+    col.addEventListener('click', () => props.onToggleCollapse())
+    col.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        props.onToggleCollapse()
+      }
+    })
+  }
+}
+
+function renderCount(parent: HTMLElement, count: number, wipLimit: number | undefined): void {
+  const over = wipLimit !== undefined && count > wipLimit
+  const el = parent.createSpan({
+    text: over ? `${count} / ${wipLimit}` : String(count),
+    cls: 'pm-kanban-col-count'
+  })
+  if (over) el.addClass('pm-kanban-col-count--over')
+}
+
+/**
+ * Where did the drag land? The dragover handler live-moves the dragged card,
+ * so at drop time its DOM position IS the drop position: report the card after
+ * it ('before' that card), else the card before it ('after'), else null.
+ */
+function getDropNeighbor(cardsEl: HTMLElement): DropNeighbor | null {
+  const dragging = cardsEl.querySelector('.pm-kanban-card--dragging')
+  if (!dragging) return null
+  const next = siblingCard(dragging, 'next')
+  if (next?.dataset.taskId) return { targetId: next.dataset.taskId, position: 'before' }
+  const prev = siblingCard(dragging, 'previous')
+  if (prev?.dataset.taskId) return { targetId: prev.dataset.taskId, position: 'after' }
+  return null
+}
+
+function siblingCard(from: Element, dir: 'next' | 'previous'): HTMLElement | null {
+  let el = dir === 'next' ? from.nextElementSibling : from.previousElementSibling
+  while (el) {
+    if (el.instanceOf(HTMLElement) && el.classList.contains('pm-kanban-card')) return el
+    el = dir === 'next' ? el.nextElementSibling : el.previousElementSibling
+  }
+  return null
 }
 
 function getDragAfterElement(container: HTMLElement, y: number): Element | null {

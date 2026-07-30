@@ -1,6 +1,7 @@
 import { type App, ButtonComponent, Modal } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
+import { GSPM_TASK_DETAIL_VIEW_TYPE } from '../views/TaskDetailView'
 import { TaskModal } from '../modals/TaskModal'
 import { ProjectModal } from '../modals/ProjectModal'
 import { ProjectPickerModal, TaskPickerModal } from '../modals/PickerModals'
@@ -222,7 +223,28 @@ export interface OpenTaskModalOpts {
   onSave: (task: Task) => void | Promise<void>
 }
 
+/** Reveal (or create) the right-leaf task detail panel for an existing task. */
+export function openTaskDetailPanel(plugin: PMPlugin, project: Project, taskId: string): void {
+  void (async () => {
+    const leaf = plugin.app.workspace.getRightLeaf(false)
+    if (!leaf) return
+    await leaf.setViewState({
+      type: GSPM_TASK_DETAIL_VIEW_TYPE,
+      active: true,
+      state: { projectPath: project.filePath, taskId }
+    })
+    await plugin.app.workspace.revealLeaf(leaf)
+  })()
+}
+
 export function openTaskModal(plugin: PMPlugin, project: Project, opts: OpenTaskModalOpts): void {
+  // Every view routes task-opening through this factory, so the modal-vs-panel
+  // setting lives here. New-task creation always uses the modal — a panel for a
+  // not-yet-persisted task has no autosave target.
+  if (opts.task && plugin.settings.openTaskIn === 'panel') {
+    openTaskDetailPanel(plugin, project, opts.task.id)
+    return
+  }
   const open = (): void => {
     new TaskModal(
       plugin.app,

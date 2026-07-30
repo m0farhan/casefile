@@ -177,3 +177,91 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ─ GreySurface board upgrades ─ */
+
+/* Lanes selector, right side of the board area */
+.pm-kanban-lanes-bar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 8px 16px 0;
+}
+.pm-kanban-lanes-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gs-ink-subtle);
+}
+.pm-kanban-lanes-select {
+  padding: 2px 6px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-s);
+  background: var(--gs-surface-2);
+  color: var(--gs-ink-muted);
+  font-size: 12px;
+  transition: border-color 150ms ease-out;
+}
+.pm-kanban-lanes-select:hover {
+  border-color: var(--gs-hairline-strong);
+}
+
+/* Swimlanes: the view scrolls vertically, each lane's board row is fixed-height */
+.pm-kanban-view--lanes {
+  overflow-y: auto;
+}
+.pm-kanban-view--lanes .pm-kanban-board {
+  flex: 0 0 auto;
+  height: 320px;
+}
+.pm-kanban-lane-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 12px 16px 0;
+}
+/* Hairline between lanes, not above the first one */
+.pm-kanban-board + .pm-kanban-lane-header {
+  border-top: 1px solid var(--gs-hairline);
+}
+.pm-kanban-lane-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gs-ink-subtle);
+}
+.pm-kanban-lane-count {
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+
+/* WIP limit exceeded */
+.pm-kanban-col-count--over {
+  color: var(--gs-amber);
+  background: var(--gs-amber-tint);
+}
+
+/* Collapsed column: narrow vertical strip, click anywhere to expand */
+.pm-kanban-col--collapsed {
+  width: 36px;
+  min-width: 36px;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: background 150ms ease-out;
+}
+.pm-kanban-col--collapsed:hover {
+  background: var(--gs-surface-2);
+}
+.pm-kanban-col--collapsed .pm-kanban-col-topbar {
+  align-self: stretch;
+}
+.pm-kanban-col-collapsed-label {
+  writing-mode: vertical-rl;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}

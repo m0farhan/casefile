@@ -1,6 +1,7 @@
 import { Menu, Notice } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Task, Project } from '../types'
+import { BUCKETS } from '../types'
 import { safeAsync } from '../utils'
 import { openTaskModal, confirmDialog, confirmDuplicateSubtasks } from './ModalFactory'
 
@@ -57,6 +58,23 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
         })
       )
   )
+  menu.addItem((item) => {
+    item.setTitle('Move to bucket').setIcon('inbox')
+    const sub = (item as unknown as { setSubmenu: () => Menu }).setSubmenu()
+    for (const bucket of BUCKETS) {
+      sub.addItem((bi) =>
+        bi
+          .setTitle(bucket.label)
+          .setChecked(task.bucket === bucket.id)
+          .onClick(
+            safeAsync(async () => {
+              await ctx.plugin.store.updateTask(ctx.project, task.id, { bucket: bucket.id })
+              await ctx.onRefresh()
+            })
+          )
+      )
+    }
+  })
   menu.addSeparator()
   if (task.archived) {
     menu.addItem((item) =>

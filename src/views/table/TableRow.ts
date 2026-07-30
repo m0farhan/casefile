@@ -1,7 +1,7 @@
 import { Menu } from 'obsidian'
 import { getStatusConfig, dueUrgency, isTerminalStatus, safeAsync, stringifyCustomValue } from '../../utils'
 import { totalLoggedHours } from '../../store/TaskTreeOps'
-import type { Task } from '../../types'
+import type { IssueTypeConfig, Task } from '../../types'
 import { updateSelectCheckboxes, getVisibleTaskIds } from './TableRenderer'
 import type { TableContext, TableState } from './TableRenderer'
 import { openTaskModal } from '../../ui/ModalFactory'
@@ -21,7 +21,13 @@ import { TitleCell } from '../../ui/composites/cells/TitleCell'
 
 // ─── Row orchestrator ──────────────────────────────────────────────────────────
 
-export function renderTaskRow(tbody: HTMLElement, task: Task, depth: number, ctx: TableContext): void {
+export function renderTaskRow(
+  tbody: HTMLElement,
+  task: Task,
+  depth: number,
+  ctx: TableContext,
+  issueTypes?: IssueTypeConfig[]
+): void {
   const isDone = isTerminalStatus(task.status, ctx.statuses)
   const statusConfig = getStatusConfig(ctx.statuses, task.status)
 
@@ -77,6 +83,7 @@ export function renderTaskRow(tbody: HTMLElement, task: Task, depth: number, ctx
     task,
     depth,
     showTagColors: ctx.plugin.settings.showTagColors,
+    issueTypes,
     onTitleClick: () => {
       openTaskModal(ctx.plugin, ctx.project, {
         task,
