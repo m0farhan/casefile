@@ -43,7 +43,7 @@
   display: flex;
   align-items: flex-end;
   padding: 0 12px 10px;
-  box-shadow: inset 0 -2px 0 var(--background-modifier-border);
+  border-bottom: 1px solid var(--gs-hairline);
   flex-shrink: 0;
   background: var(--background-primary);
   box-sizing: border-box;
@@ -66,9 +66,9 @@
   align-items: center;
   gap: 6px;
   padding-right: 8px;
-  box-shadow: inset 0 -1px 0 var(--background-modifier-border);
+  border-bottom: 1px solid var(--gs-hairline);
   cursor: default;
-  transition: background 0.1s;
+  transition: background 0.15s ease-out;
   box-sizing: border-box;
 }
 .pm-gantt-label-row:hover {
@@ -114,7 +114,7 @@
   flex-shrink: 0;
   position: relative;
   z-index: 6;
-  transition: background 0.15s;
+  transition: background 0.15s ease-out;
 }
 .pm-gantt-resize-handle:hover,
 .pm-gantt-resize-handle:active {
@@ -153,10 +153,8 @@
 .pm-gantt-band-even {
   fill: rgba(0, 0, 0, 0);
 }
+/* plugin is dark-only via the token remap — light-theme rgba pairs are dead */
 .pm-gantt-band-odd {
-  fill: rgba(0, 0, 0, 0.025);
-}
-.theme-dark .pm-gantt-band-odd {
   fill: rgba(255, 255, 255, 0.025);
 }
 
@@ -197,18 +195,16 @@
   fill: var(--text-normal);
   text-anchor: middle;
   dominant-baseline: central;
-  font-weight: 700;
+  font-weight: 600;
 }
 .pm-gantt-header-tick {
   stroke: var(--background-modifier-border);
   stroke-width: 1;
 }
 
+/* header bg is already surface-2, so weekend shading there steps to surface-3 */
 .pm-gantt-weekend-header {
-  fill: rgba(0, 0, 0, 0.04);
-}
-.theme-dark .pm-gantt-weekend-header {
-  fill: rgba(255, 255, 255, 0.04);
+  fill: var(--gs-surface-3);
 }
 
 .pm-gantt-gridline-v {
@@ -221,10 +217,7 @@
   stroke-width: 0.5;
 }
 .pm-gantt-weekend {
-  fill: rgba(0, 0, 0, 0.025);
-}
-.theme-dark .pm-gantt-weekend {
-  fill: rgba(255, 255, 255, 0.025);
+  fill: var(--gs-surface-2);
 }
 
 .pm-gantt-row-hover {
@@ -247,7 +240,7 @@
 /* Gantt bars */
 .pm-gantt-bar {
   cursor: pointer;
-  transition: filter 0.15s;
+  transition: filter 0.15s ease-out;
 }
 .pm-gantt-bar:hover {
   filter: brightness(1.15);
@@ -268,12 +261,12 @@
 
 /* Today line */
 .pm-gantt-today-line {
-  stroke: color-mix(in srgb, var(--color-red) 65%, transparent);
+  stroke: var(--gs-accent);
   stroke-width: 1.5;
   stroke-dasharray: 5 4;
 }
 .pm-gantt-today-diamond {
-  fill: color-mix(in srgb, var(--color-red) 65%, transparent);
+  fill: var(--gs-accent);
 }
 
 /* Dependency arrows */

@@ -20,12 +20,12 @@
 .pm-modal-heading {
   margin: 0 0 4px;
   font-size: 20px;
-  font-weight: 700;
+  font-weight: 600;
 }
 .pm-modal-subheading {
   margin: 8px 0 4px;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .pm-project-modal-header {
@@ -67,15 +67,16 @@
 }
 .pm-icon-picker-btn {
   font-size: 32px;
-  background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
+  background: var(--gs-surface-1);
+  border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-m);
   padding: 6px 10px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 150ms ease-out;
   line-height: 1;
 }
 .pm-icon-picker-btn:hover {
+  border-color: var(--gs-hairline-strong);
   background: var(--background-modifier-hover);
 }
 .pm-icon-grid {
@@ -84,13 +85,12 @@
   left: 0;
   z-index: 200;
   background: var(--background-primary);
-  border: 1px solid var(--background-modifier-border);
+  border: 1px solid var(--gs-hairline-strong);
   border-radius: var(--radius-m);
   padding: 8px;
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
 }
 .pm-icon-option {
   font-size: 20px;
@@ -99,7 +99,7 @@
   background: transparent;
   border-radius: var(--radius-s);
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background 150ms ease-out;
   line-height: 1;
 }
 .pm-icon-option:hover {
@@ -126,12 +126,16 @@
   border-radius: 50%;
   border: 2px solid transparent;
   cursor: pointer;
-  transition:
-    transform 0.15s,
-    box-shadow 0.15s;
 }
-.pm-color-swatch:hover {
-  transform: scale(1.15);
+@media (prefers-reduced-motion: no-preference) {
+  .pm-color-swatch {
+    transition:
+      transform 150ms ease-out,
+      box-shadow 150ms ease-out;
+  }
+  .pm-color-swatch:hover {
+    transform: scale(1.05);
+  }
 }
 .pm-color-swatch--selected {
   border-color: var(--text-normal);
@@ -161,15 +165,16 @@
 .pm-input {
   width: 100%;
   padding: 7px 10px;
-  border: 1px solid var(--background-modifier-border);
+  border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-s);
-  background: var(--background-secondary);
+  background: var(--gs-surface-1);
   color: var(--text-normal);
   font-size: 13px;
   box-sizing: border-box;
 }
 .pm-input:focus {
-  border-color: var(--interactive-accent);
+  border-color: var(--gs-hairline-strong);
+  box-shadow: var(--gs-focus-ring);
   outline: none;
 }
 .pm-select {

@@ -9,7 +9,7 @@
 
 .pm-sg-group {
   font-size: var(--font-ui-large);
-  font-weight: 700;
+  font-weight: 600;
   margin-top: var(--size-4-8);
 }
 
@@ -45,4 +45,35 @@
 
 .pm-sg-row .pm-kanban-card {
   width: 280px;
+}
+
+/* Tokens section. Each item sets --pm-sg-c: var(--gs-*) inline; swatch and
+   pill both read it so the preview is the token, not a copied value. */
+.pm-sg-token {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pm-sg-swatch {
+  width: 40px;
+  height: 28px;
+  background: var(--pm-sg-c);
+  border: 1px solid var(--gs-hairline);
+  border-radius: 6px;
+}
+
+.pm-sg-swatch-label {
+  font-family: var(--gs-font-mono);
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+
+.pm-sg-pill {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 500;
+  color: var(--pm-sg-c);
+  background: color-mix(in srgb, var(--pm-sg-c) 15%, transparent);
 }

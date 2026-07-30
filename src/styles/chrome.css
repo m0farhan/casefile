@@ -17,15 +17,17 @@
   flex: 1 1 200px;
   min-width: 160px;
   padding: 6px 10px;
-  border: 1px solid var(--background-modifier-border);
+  border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-s);
-  background: var(--background-primary);
+  background: var(--gs-surface-2);
   color: var(--text-normal);
   font-size: var(--font-ui-smaller);
 }
-.pm-project-header-search:focus {
+.pm-project-header-search:focus,
+.pm-project-header-search:focus-visible {
   outline: none;
-  border-color: var(--interactive-accent);
+  border-color: var(--gs-hairline-strong);
+  box-shadow: var(--gs-focus-ring);
 }
 
 .pm-project-header-actions {
@@ -71,8 +73,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 16px;
-  background: var(--background-secondary);
+  padding: 8px 16px;
+  background: var(--gs-surface-1);
+  border-bottom: 1px solid var(--gs-hairline);
   flex-shrink: 0;
   flex-wrap: wrap;
 }
@@ -97,15 +100,19 @@
   line-height: 1;
   padding: 2px;
   border-radius: var(--radius-s);
-  transition: transform 0.15s;
+  color: var(--gs-ink-muted);
+  transition:
+    background 0.15s ease-out,
+    color 0.15s ease-out;
 }
 .pm-toolbar-icon:hover {
-  transform: scale(1.15);
+  background: var(--gs-hover-step);
+  color: var(--gs-ink);
 }
 
 .pm-toolbar-title {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
   margin: 0;
   padding: 2px 6px;
   border-radius: var(--radius-s);
@@ -137,8 +144,8 @@
   background: transparent;
   color: var(--text-muted);
   transition:
-    background 0.12s,
-    color 0.12s;
+    background 0.15s ease-out,
+    color 0.15s ease-out;
 }
 .pm-view-switcher .pm-view-btn.clickable-icon:hover {
   background: transparent;
@@ -165,11 +172,12 @@
   justify-content: center;
   height: 100%;
   gap: 12px;
-  color: var(--text-muted);
+  color: var(--gs-ink-subtle);
   padding: 40px;
 }
 .pm-empty-icon {
-  font-size: 48px;
+  font-size: 24px;
+  color: var(--gs-ink-tertiary);
 }
 
 /* ---------------------------------------------------------------------------
@@ -191,12 +199,11 @@
   overflow: hidden;
   cursor: pointer;
   background: var(--background-secondary);
-  transition: all 0.2s;
+  transition: border-color 0.15s ease-out;
   position: relative;
 }
 .pm-project-card:hover {
-  box-shadow: 0 4px 16px var(--pm-shadow-ambient);
-  border-color: var(--background-modifier-border);
+  border-color: var(--gs-hairline-strong);
 }
 
 .pm-project-card-bar {

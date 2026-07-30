@@ -1,14 +1,156 @@
-/* Root layout plus the two plugin tokens with no Obsidian equivalent
-   (theme-dependent, overridden for dark mode in widgets.css). Everything
-   else uses Obsidian theme variables directly. */
-.pm-root {
-  --pm-ghost-border: rgba(0, 0, 0, 0.06);
-  --pm-shadow-ambient: rgba(0, 0, 0, 0.06);
+/* GreySurface token layer.
+ *
+ * Strategy: define the --gs-* design tokens AND remap the Obsidian theme
+ * variable names the inherited stylesheets consume, scoped to every mount
+ * point the plugin owns. The plugin therefore renders identically under any
+ * Obsidian theme (dark-only by design: SOC analyst, dim room).
+ *
+ * Scope list must cover every DOM mount:
+ *  - .pm-root                     project/dashboard/styleguide leaves
+ *  - .pm-modal                    task/project modals (Obsidian modal container)
+ *  - .pm-prompt-modal/.pm-confirm-modal/.import-modal-container  ModalFactory
+ *  - .pm-pop                      Popover — can mount on document.body
+ *  - .pm-notice                   styled Notices (pmNotice helper)
+ * Left native on purpose: Obsidian Menu (context menus), NoteLinkSuggest,
+ * the plugin settings tab (should match Obsidian's settings UI).
+ *
+ * New CSS should use --gs-* names directly; the Obsidian-name remaps exist
+ * only so the inherited upstream styles pick up the skin without churn.
+ */
+.pm-root,
+.pm-modal,
+.pm-prompt-modal,
+.pm-confirm-modal,
+.import-modal-container,
+.pm-pop,
+.pm-notice {
+  /* --- Core (GreySurface Linear DS, verbatim) --- */
+  --gs-canvas: #010102;
+  --gs-surface-1: #0f1011;
+  --gs-surface-2: #141516;
+  --gs-surface-3: #18191a;
+  --gs-surface-4: #191a1b;
+  --gs-hairline: #23252a;
+  --gs-hairline-strong: #34343a;
+  --gs-hairline-3: #3e3e44;
+  --gs-ink: #f7f8f8;
+  --gs-ink-muted: #d0d6e0;
+  --gs-ink-subtle: #8a8f98;
+  --gs-ink-tertiary: #62666d; /* 3.30:1 on surface-1 — decorative/disabled only */
+  --gs-accent: #5e6ad2; /* 4.05:1 — fills/borders/focus only, never small text */
+  --gs-accent-hover: #828fff; /* 6.64:1 — the accent for TEXT */
+  --gs-accent-press: #5e69d1;
+  --gs-accent-tint: rgba(94, 106, 210, 0.08);
+  --gs-focus-ring: 0 0 0 2px rgba(94, 105, 209, 0.5);
+  --gs-hover-step: rgba(255, 255, 255, 0.045);
 
+  /* --- Palette extension (DS has no danger/warn; all AA on surface-1) --- */
+  --gs-red: #eb5757;
+  --gs-amber: #f2994a;
+  --gs-yellow: #f2c94c;
+  --gs-green: #4cb782;
+  --gs-green-solid: #27a644; /* DS success, solid fills only */
+  --gs-blue: #4ea7fc;
+  --gs-purple: #b59aff;
+  --gs-teal: #2fbfa4;
+  /* 15% tints precomposited on surface-1 for chip backgrounds */
+  --gs-red-tint: #301b1c;
+  --gs-amber-tint: #31251a;
+  --gs-yellow-tint: #312c1a;
+  --gs-green-tint: #182922;
+  --gs-blue-tint: #182734;
+  --gs-purple-tint: #282535;
+  --gs-teal-tint: #16292a;
+
+  /* --- Semantic aliases (features consume these, never raw hues) --- */
+  --gs-sev1: var(--gs-red);
+  --gs-sev2: var(--gs-amber);
+  --gs-sev3: var(--gs-yellow);
+  --gs-sev4: var(--gs-blue);
+  --gs-sev-info: var(--gs-ink-subtle);
+  --gs-sla-ok: var(--gs-green);
+  --gs-sla-warn: var(--gs-amber);
+  --gs-sla-breach: var(--gs-red);
+  --gs-verdict-true-positive: var(--gs-red);
+  --gs-verdict-false-positive: var(--gs-green);
+  --gs-verdict-benign-true-positive: var(--gs-teal);
+  --gs-verdict-duplicate: var(--gs-ink-subtle);
+  --gs-verdict-pending: var(--gs-amber);
+  --gs-ioc-ip: var(--gs-blue);
+  --gs-ioc-domain: var(--gs-teal);
+  --gs-ioc-hash: var(--gs-purple);
+  --gs-ioc-url: var(--gs-amber);
+  --gs-ioc-email: var(--gs-ink-subtle);
+  --gs-issue-epic: var(--gs-purple);
+  --gs-issue-story: var(--gs-green);
+  --gs-issue-task: var(--gs-blue);
+  --gs-issue-bug: var(--gs-red);
+  --gs-issue-incident: var(--gs-amber);
+
+  /* --- Type --- */
+  --gs-font-text: 'SF Pro Display', -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* ponytail: system stack; bundle Jakarta 500/600 (~135KB data-URI) if the identity gap ever bothers */
+  --gs-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /* --- Obsidian variable remap: the inherited 2,800 lines read these --- */
+  --background-primary: var(--gs-surface-1);
+  --background-secondary: var(--gs-surface-2);
+  --background-modifier-hover: var(--gs-hover-step);
+  --background-modifier-border: var(--gs-hairline);
+  --background-modifier-border-hover: var(--gs-hairline-strong);
+  --background-modifier-border-focus: var(--gs-hairline-strong);
+  --background-modifier-form-field: var(--gs-surface-2);
+  --background-modifier-error: var(--gs-red-tint);
+  --text-normal: var(--gs-ink);
+  --text-muted: var(--gs-ink-subtle);
+  --text-faint: var(--gs-ink-tertiary);
+  --text-accent: var(--gs-accent-hover);
+  --text-on-accent: #ffffff;
+  --text-error: var(--gs-red);
+  --interactive-accent: var(--gs-accent);
+  --interactive-accent-hover: var(--gs-accent-hover);
+  --interactive-normal: var(--gs-surface-2);
+  --interactive-hover: var(--gs-surface-3);
+  --color-red: var(--gs-red);
+  --color-orange: var(--gs-amber);
+  --color-green: var(--gs-green);
+  --color-blue: var(--gs-blue);
+  --color-purple: var(--gs-purple);
+  --radius-s: 6px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+  --font-interface: var(--gs-font-text);
+  --font-monospace: var(--gs-font-mono);
+  --font-ui-smaller: 12px;
+  --font-ui-small: 13px;
+  --font-ui-medium: 14px;
+  --font-ui-large: 16px;
+  --shadow-s: none; /* no shadows on dark; depth = surface ladder */
+  --input-height: 32px;
+
+  /* --- Legacy plugin tokens (now theme-constant) --- */
+  --pm-ghost-border: var(--gs-hairline);
+  --pm-shadow-ambient: transparent; /* kills every ambient card shadow */
+
+  color-scheme: dark;
+}
+
+.pm-root {
   font-family: var(--font-interface);
   color: var(--text-normal);
+  background: var(--gs-canvas);
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
+
+/* Modal chrome sits outside the upstream selectors — pin it to the ladder. */
+.pm-modal.modal,
+.pm-prompt-modal.modal,
+.pm-confirm-modal.modal,
+.modal.import-modal-container {
+  background: var(--gs-surface-2);
+  border: 1px solid var(--gs-hairline);
+  color: var(--gs-ink);
 }

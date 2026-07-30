@@ -10,9 +10,6 @@
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
-  /* shadow-s matches Obsidian's native menu/dropdown shadow; shadow-l is modal-scale
-     and reads as an oversized drop on a small popover */
-  box-shadow: var(--shadow-s);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -47,7 +44,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .pm-pop--sheet {
-    animation: pm-sheet-in 0.18s cubic-bezier(0.2, 0.7, 0.3, 1);
+    animation: pm-sheet-in 200ms ease-out;
   }
 }
 
@@ -295,11 +292,13 @@ button.pm-pop-item--danger {
   font-size: var(--font-ui-smaller);
   font-family: inherit;
 }
-/* The date input carries a type attribute, so Obsidian core adds a box-shadow ring on
-   focus that the attribute-less text inputs never get. Suppress it so both look the same. */
+/* One focus treatment for every pop field: the DS ring. The input-prefixed selector is
+   still needed to outrank the box-shadow ring Obsidian core adds on typed inputs. */
+.pm-pop-field:focus,
 input.pm-pop-field:focus {
-  box-shadow: none;
-  border-color: var(--background-modifier-border);
+  box-shadow: var(--gs-focus-ring);
+  border-color: var(--gs-hairline-strong);
+  outline: none;
 }
 .pm-pop-actions {
   display: flex;
@@ -489,7 +488,7 @@ input.pm-pop-field:focus {
   color: var(--text-normal);
   font-family: inherit;
   font-size: 24px;
-  font-weight: 650;
+  font-weight: 600; /* DS weight cap */
   line-height: 1.25;
   letter-spacing: -0.01em;
 }

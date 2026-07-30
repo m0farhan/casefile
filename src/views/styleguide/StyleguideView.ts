@@ -69,6 +69,8 @@ export class StyleguideView extends ItemView {
     const root = this.contentEl
     root.empty()
     root.addClass('pm-root', 'pm-styleguide')
+    this.group('Tokens')
+    this.renderTokens()
     this.group('Primitives')
     this.renderChips()
     this.renderChipButtons()
@@ -103,6 +105,57 @@ export class StyleguideView extends ItemView {
   private row(sec: HTMLElement, caption: string): HTMLElement {
     sec.createDiv({ cls: 'pm-sg-caption', text: caption })
     return sec.createDiv('pm-sg-row')
+  }
+
+  private renderTokens(): void {
+    const sec = this.section('GreySurface tokens', 'tokens')
+    const swatchRows: [string, string[]][] = [
+      ['surface ladder', ['--gs-canvas', '--gs-surface-1', '--gs-surface-2', '--gs-surface-3', '--gs-surface-4']],
+      ['ink scale', ['--gs-ink', '--gs-ink-muted', '--gs-ink-subtle', '--gs-ink-tertiary']],
+      ['hairlines', ['--gs-hairline', '--gs-hairline-strong', '--gs-hairline-3']],
+      ['accent states', ['--gs-accent', '--gs-accent-hover', '--gs-accent-press', '--gs-accent-tint']]
+    ]
+    const pending: [HTMLElement, string, HTMLElement][] = []
+    for (const [caption, tokens] of swatchRows) {
+      const row = this.row(sec, caption)
+      for (const token of tokens) {
+        const item = row.createDiv('pm-sg-token')
+        item.style.setProperty('--pm-sg-c', `var(${token})`)
+        const swatch = item.createDiv('pm-sg-swatch')
+        item.createDiv({ cls: 'pm-sg-swatch-label', text: token })
+        pending.push([swatch, token, item.createDiv('pm-sg-swatch-label')])
+      }
+    }
+    // Resolve after attach so the label shows the real cascade value, not a guess.
+    requestAnimationFrame(() => {
+      for (const [el, token, out] of pending) {
+        out.setText(getComputedStyle(el).getPropertyValue(token).trim() || '(unresolved)')
+      }
+    })
+    const sem = this.row(sec, 'Semantic')
+    const semanticTokens = [
+      '--gs-sev1',
+      '--gs-sev2',
+      '--gs-sev3',
+      '--gs-sev4',
+      '--gs-sla-ok',
+      '--gs-sla-warn',
+      '--gs-sla-breach',
+      '--gs-issue-epic',
+      '--gs-issue-story',
+      '--gs-issue-task',
+      '--gs-issue-bug',
+      '--gs-issue-incident',
+      '--gs-ioc-ip',
+      '--gs-ioc-domain',
+      '--gs-ioc-hash',
+      '--gs-ioc-url',
+      '--gs-ioc-email'
+    ]
+    for (const token of semanticTokens) {
+      const pill = sem.createSpan({ cls: 'pm-sg-pill', text: token.slice('--gs-'.length) })
+      pill.style.setProperty('--pm-sg-c', `var(${token})`)
+    }
   }
 
   private renderChips(): void {

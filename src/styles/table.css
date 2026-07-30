@@ -14,11 +14,16 @@
   justify-content: space-between;
   padding: 6px 12px;
   margin: 0 16px 6px;
-  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary));
-  border: 1px dashed var(--background-modifier-border);
+  background: var(--gs-surface-3);
+  border: none;
+  border-top: 1px solid var(--gs-hairline);
   border-radius: var(--radius-m);
   flex-shrink: 0;
-  animation: pm-bulk-bar-in 0.15s ease-out;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pm-bulk-bar {
+    animation: pm-bulk-bar-in 0.15s ease-out;
+  }
 }
 @keyframes pm-bulk-bar-in {
   from {
@@ -83,8 +88,8 @@ button.pm-chip-btn--active:hover {
 
 /* -- Selected Row ----------------------------------------------------------- */
 .pm-table-row--selected {
-  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
-  box-shadow: inset 3px 0 0 var(--interactive-accent);
+  background: var(--gs-accent-tint);
+  box-shadow: inset 3px 0 0 var(--gs-accent);
 }
 
 .pm-table-wrapper {
@@ -101,15 +106,15 @@ button.pm-chip-btn--active:hover {
 .pm-table thead th {
   position: sticky;
   top: 0;
-  background: var(--background-primary);
-  border-bottom: 2px solid var(--background-modifier-border);
+  background: var(--gs-surface-1);
+  border-bottom: 1px solid var(--gs-hairline-strong);
   padding: 8px 10px;
   text-align: left;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--gs-ink-subtle);
   white-space: nowrap;
   z-index: 10;
   user-select: none;
@@ -226,9 +231,9 @@ button.pm-chip-btn--active:hover {
   height: 26px;
   border-radius: 50%;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-on-accent);
-  border: 2px solid var(--background-primary);
+  border: 1px solid var(--gs-hairline);
   flex-shrink: 0;
 }
 .pm-avatar--sm {
@@ -257,8 +262,8 @@ button.pm-chip-btn--active:hover {
 }
 .pm-progress-track {
   flex: 1;
-  height: 6px;
-  background: var(--background-modifier-border);
+  height: 4px;
+  background: var(--gs-hairline);
   border-radius: 99px;
   overflow: hidden;
 }
@@ -268,12 +273,17 @@ button.pm-chip-btn--active:hover {
 .pm-progress-fill {
   height: 100%;
   border-radius: 99px;
-  background: var(--pm-progress-color, var(--interactive-accent));
-  transition: width 0.3s ease;
+  background: var(--pm-progress-color, var(--gs-accent));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pm-progress-fill {
+    /* ponytail: width not scaleX — fill % is set inline by the renderer; one 4px bar, layout cost nil */
+    transition: width 0.15s ease-out;
+  }
 }
 .pm-progress-label {
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
+  font-size: 12px;
+  color: var(--gs-ink-subtle);
   min-width: 28px;
 }
 
@@ -303,14 +313,16 @@ button.pm-chip-btn--active:hover {
   transition: background 0.15s;
 }
 .pm-chip--solid {
-  background: color-mix(in srgb, var(--pm-chip-color) 10%, transparent);
-  border-color: color-mix(in srgb, var(--pm-chip-color) 20%, transparent);
+  /* subdued tint, not full saturation; color-mix required — chip color is data-driven */
+  background: color-mix(in srgb, var(--pm-chip-color) 15%, var(--gs-surface-1));
+  color: var(--pm-chip-color);
 }
 .pm-chip--outline {
-  border-color: var(--background-modifier-border);
+  border-color: var(--gs-hairline);
+  color: var(--gs-ink-muted);
 }
 .pm-chip--plain {
-  color: var(--text-normal);
+  color: var(--gs-ink-muted);
 }
 .pm-chip--tag {
   padding: 2px 6px;
@@ -362,7 +374,7 @@ button.pm-chip-btn--pill {
   background: var(--background-modifier-hover);
 }
 .pm-chip--solid.pm-chip--interactive:hover {
-  background: color-mix(in srgb, var(--pm-chip-color) 18%, transparent);
+  background: color-mix(in srgb, var(--pm-chip-color) 22%, var(--gs-surface-1));
 }
 button.pm-chip-rm {
   display: inline-flex;

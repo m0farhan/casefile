@@ -57,7 +57,7 @@ export class ImportModal extends Modal {
     const { contentEl } = this
     contentEl.empty()
     contentEl.addClass('import-modal')
-    this.modalEl.addClass('import-modal-container')
+    this.modalEl.addClass('import-modal-container', 'pm-modal')
 
     // Load all markdown files from vault
     this.loadVaultFiles()
