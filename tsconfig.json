@@ -1,0 +1,21 @@
+{
+  "extends": "@2bad/tsconfig",
+  "include": ["src/**/*.ts"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": false,
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "exactOptionalPropertyTypes": false,
+    "noUncheckedIndexedAccess": false,
+    "noPropertyAccessFromIndexSignature": false,
+    "noImplicitOverride": false
+  }
+}

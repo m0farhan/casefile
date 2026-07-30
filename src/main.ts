@@ -1,0 +1,378 @@
+import { MarkdownView, Plugin, Notice } from 'obsidian'
+import { DEFAULT_SETTINGS, type PMSettings, type Project, type Task } from './types'
+import { flattenTasks, findTask } from './store/TaskTreeOps'
+import { ProjectStore } from './store'
+import type { TaskSource } from './store'
+import { PMSettingTab } from './settings'
+import { ProjectView, PM_PROJECT_VIEW_TYPE } from './views/ProjectView'
+import { DashboardView, PM_DASHBOARD_VIEW_TYPE } from './views/DashboardView'
+import { registerStyleguide } from './views/styleguide/StyleguideView'
+import { PMViewRouter } from './views/PMViewRouter'
+import { openProjectModal, openTaskModal, openProjectPicker, openTaskPicker, openImportModal } from './ui/ModalFactory'
+import { Notifier } from './components/Notifier'
+import { migrateProjects } from './migration'
+import { safeAsync } from './utils'
+
+export default class PMPlugin extends Plugin {
+  settings: PMSettings = { ...DEFAULT_SETTINGS }
+  store!: TaskSource
+  notifier!: Notifier
+  router!: PMViewRouter
+  undoStack: Array<{ undo: () => Promise<void>; redo: () => Promise<void> }> = []
+  redoStack: Array<{ undo: () => Promise<void>; redo: () => Promise<void> }> = []
+
+  pushUndo(entry: { undo: () => Promise<void>; redo: () => Promise<void> }): void {
+    this.undoStack.push(entry)
+    if (this.undoStack.length > 20) this.undoStack.shift()
+    this.redoStack = []
+  }
+
+  async undoLastAction(): Promise<void> {
+    const entry = this.undoStack.pop()
+    if (entry) {
+      await entry.undo()
+      this.redoStack.push(entry)
+    }
+  }
+
+  async redoLastAction(): Promise<void> {
+    const entry = this.redoStack.pop()
+    if (entry) {
+      await entry.redo()
+      this.undoStack.push(entry)
+    }
+  }
+
+  async onload(): Promise<void> {
+    await this.loadSettings()
+    this.store = new ProjectStore(this.app, () => this.settings)
+    this.store.registerCacheInvalidation(this)
+    this.notifier = new Notifier(this)
+    this.router = new PMViewRouter(this)
+
+    this.registerView(PM_PROJECT_VIEW_TYPE, (leaf) => new ProjectView(leaf, this))
+    this.registerView(PM_DASHBOARD_VIEW_TYPE, (leaf) => new DashboardView(leaf, this))
+    if (__STYLEGUIDE__) registerStyleguide(this)
+
+    this.app.workspace.onLayoutReady(
+      safeAsync(async () => {
+        await migrateProjects(this)
+        await this.cleanupStaleProjectFilters()
+      })
+    )
+
+    this.addRibbonIcon('chart-gantt', 'Project manager', async () => {
+      await this.router.openDashboard()
+    })
+
+    this.addCommand({
+      id: 'open-projects',
+      name: 'Open projects pane',
+      callback: () => {
+        void this.router.openDashboard()
+      }
+    })
+
+    this.addCommand({
+      id: 'new-project',
+      name: 'Create new project',
+      callback: () => {
+        openProjectModal(this, {
+          onSave: async (project) => {
+            await this.router.openProjectByPath(project.filePath)
+          }
+        })
+      }
+    })
+
+    this.addCommand({
+      id: 'new-task',
+      name: 'Create new task',
+      callback: () => {
+        void this.pickProjectThenCreateTask(null)
+      }
+    })
+
+    this.addCommand({
+      id: 'new-subtask',
+      name: 'Create new subtask',
+      callback: () => {
+        void this.pickProjectThenCreateTask('pick-parent')
+      }
+    })
+
+    this.addCommand({
+      id: 'undo-last-action',
+      name: 'Undo last action',
+      callback: () => {
+        void this.undoLastAction()
+      }
+    })
+
+    this.addCommand({
+      id: 'redo-last-action',
+      name: 'Redo last action',
+      callback: () => {
+        void this.redoLastAction()
+      }
+    })
+
+    this.addCommand({
+      id: 'import-notes-as-tasks',
+      name: 'Import notes as tasks',
+      callback: () => {
+        void this.importNotes()
+      }
+    })
+
+    this.addCommand({
+      id: 'create-task-from-selection',
+      name: 'Create task from selection',
+      editorCheckCallback: (checking, editor) => {
+        const selection = editor.getSelection().trim()
+        if (!selection) return false
+        if (checking) return true
+        void this.createTaskFromText(selection)
+        return true
+      }
+    })
+
+    this.registerEvent(
+      this.app.workspace.on('editor-menu', (menu, editor) => {
+        const selection = editor.getSelection().trim()
+        if (!selection) return
+        menu.addItem((item) =>
+          item
+            .setTitle('Create task from selection')
+            .setIcon('list-plus')
+            .onClick(() => void this.createTaskFromText(selection))
+        )
+      })
+    )
+
+    this.addCommand({
+      id: 'open-current-as-project',
+      name: 'Open current file as project',
+      checkCallback: (checking: boolean) => {
+        const md = this.app.workspace.getActiveViewOfType(MarkdownView)
+        const file = md?.file
+        if (!file) return false
+        const cache = this.app.metadataCache.getFileCache(file)
+        if (cache?.frontmatter?.['pm-project'] !== true) return false
+        if (checking) return true
+        void md.leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: file.path } })
+        return true
+      }
+    })
+
+    this.addSettingTab(new PMSettingTab(this.app, this))
+    this.notifier.start()
+  }
+
+  onunload(): void {
+    this.notifier.stop()
+  }
+
+  async loadSettings(): Promise<void> {
+    const saved = (await this.loadData()) as Partial<PMSettings> | null
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {})
+    if (!saved?.statuses?.length) this.settings.statuses = DEFAULT_SETTINGS.statuses
+    if (!saved?.priorities?.length) this.settings.priorities = DEFAULT_SETTINGS.priorities
+    if (!this.settings.projectFilters) this.settings.projectFilters = {}
+    if (!this.settings.collapsedTasks) this.settings.collapsedTasks = {}
+
+    let migrated = false
+    for (const s of this.settings.statuses) {
+      if (s.complete === undefined) {
+        s.complete = s.id === 'done' || s.id === 'cancelled'
+        migrated = true
+      }
+    }
+
+    // ganttHideDone was a global gantt toggle; replaced by per-project filter.statuses
+    // excluding terminal statuses. Seed projects whose filter has no status selection yet.
+    const legacy = (saved ?? {}) as { ganttHideDone?: boolean }
+    if (legacy.ganttHideDone === true) {
+      const nonTerminal = this.settings.statuses.filter((s) => !s.complete).map((s) => s.id)
+      for (const entry of Object.values(this.settings.projectFilters)) {
+        if (entry.filter.statuses.length === 0) {
+          entry.filter.statuses = nonTerminal
+        }
+      }
+      migrated = true
+    }
+
+    if (migrated) await this.saveSettings()
+  }
+
+  async cleanupStaleProjectFilters(): Promise<void> {
+    const filters = this.settings.projectFilters
+    const cleaned: typeof filters = {}
+    let dirty = false
+    for (const [path, entry] of Object.entries(filters)) {
+      if (this.app.vault.getAbstractFileByPath(path)) {
+        cleaned[path] = entry
+      } else {
+        dirty = true
+      }
+    }
+    const cleanedCollapsed: typeof this.settings.collapsedTasks = {}
+    for (const [path, ids] of Object.entries(this.settings.collapsedTasks)) {
+      if (this.app.vault.getAbstractFileByPath(path)) {
+        cleanedCollapsed[path] = ids
+      } else {
+        dirty = true
+      }
+    }
+    if (dirty) {
+      this.settings.projectFilters = cleaned
+      this.settings.collapsedTasks = cleanedCollapsed
+      await this.saveSettings()
+    }
+  }
+
+  /**
+   * Overlay the persisted collapsed-task state onto a freshly loaded project.
+   * Projects with no record yet keep whatever legacy frontmatter said.
+   */
+  applyCollapsedState(project: Project): void {
+    const ids = this.settings.collapsedTasks[project.filePath]
+    if (!ids) return
+    const set = new Set(ids)
+    for (const { task } of flattenTasks(project.tasks)) {
+      task.collapsed = set.has(task.id)
+    }
+  }
+
+  /** Persist the project's current collapsed flags. Call after toggling task.collapsed. */
+  async persistCollapsedState(project: Project): Promise<void> {
+    this.settings.collapsedTasks[project.filePath] = flattenTasks(project.tasks)
+      .filter((f) => f.task.collapsed)
+      .map((f) => f.task.id)
+    await this.saveSettings()
+  }
+
+  /**
+   * Flip a task's collapsed flag and persist. Resolves the task by id against
+   * the live tree so it works even when a view renders filtered clones.
+   */
+  async toggleTaskCollapsed(project: Project, taskId: string): Promise<void> {
+    const task = findTask(project.tasks, taskId)
+    if (!task) return
+    task.collapsed = !task.collapsed
+    await this.persistCollapsedState(project)
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings)
+  }
+
+  showNotice(msg: string, duration = 3000): void {
+    new Notice(msg, duration)
+  }
+
+  /** Re-render every open project view, e.g. after a settings change affects rendering. */
+  refreshProjectViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
+      if (leaf.view instanceof ProjectView) void leaf.view.refreshProject()
+    }
+  }
+
+  /** Show project picker, then open TaskModal to create a task (optionally pick parent for subtask) */
+  private async pickProjectThenCreateTask(mode: null | 'pick-parent'): Promise<void> {
+    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
+    if (!projects.length) {
+      this.showNotice('No projects yet. Create a project first.')
+      return
+    }
+    openProjectPicker(this, projects, (project) => {
+      if (mode === 'pick-parent') {
+        const flat = flattenTasks(project.tasks)
+        if (!flat.length) {
+          this.showNotice('No tasks in this project. Create a task first.')
+          return
+        }
+        openTaskPicker(
+          this,
+          flat.map((f) => f.task),
+          (parentTask) => {
+            this.openTaskModalForProject(project, parentTask.id)
+          }
+        )
+      } else {
+        this.openTaskModalForProject(project, null)
+      }
+    })
+  }
+
+  private openTaskModalForProject(project: Project, parentId: string | null, defaults?: Partial<Task>): void {
+    openTaskModal(this, project, {
+      parentId,
+      defaults,
+      onSave: async () => {
+        await this.store.saveProject(project)
+        await this.router.openProjectByPath(project.filePath)
+      }
+    })
+  }
+
+  /** Open the task modal pre-filled from selected text, targeting a chosen project. */
+  private async createTaskFromText(text: string): Promise<void> {
+    const trimmed = text.trim()
+    if (!trimmed) return
+
+    const newlineIdx = trimmed.indexOf('\n')
+    const defaults: Partial<Task> =
+      newlineIdx === -1
+        ? { title: trimmed }
+        : { title: trimmed.slice(0, newlineIdx).trim(), description: trimmed.slice(newlineIdx + 1).trim() }
+
+    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
+    if (!projects.length) {
+      this.showNotice('No projects yet. Create a project first.')
+      return
+    }
+    if (projects.length === 1) {
+      this.openTaskModalForProject(projects[0], null, defaults)
+      return
+    }
+    openProjectPicker(this, projects, (project) => {
+      this.openTaskModalForProject(project, null, defaults)
+    })
+  }
+
+  private async importNotes(): Promise<void> {
+    const activeLeaves = this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)
+    let activeProject: Project | null = null
+
+    for (const leaf of activeLeaves) {
+      if (!(leaf.view instanceof ProjectView)) continue
+      if (leaf.view.project) {
+        activeProject = leaf.view.project
+        break
+      }
+    }
+
+    if (activeProject) {
+      const project = activeProject
+      const onImportComplete = async () => {
+        await this.router.openProjectByPath(project.filePath)
+      }
+      openImportModal(this, activeProject, onImportComplete)
+      return
+    }
+
+    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
+    if (!projects.length) {
+      this.showNotice('No projects yet. Create a project first.')
+      return
+    }
+
+    openProjectPicker(this, projects, (project) => {
+      const onImportComplete = async () => {
+        await this.router.openProjectByPath(project.filePath)
+      }
+      openImportModal(this, project, onImportComplete)
+    })
+  }
+}

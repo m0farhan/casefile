@@ -1,0 +1,469 @@
+import { App, ButtonComponent, Modal } from 'obsidian'
+import type PMPlugin from '../main'
+import { type Project, type ProjectConfig, type CustomFieldDef, makeId, makeProject } from '../types'
+import { rebuildTaskIndex } from '../store'
+import { safeAsync } from '../utils'
+import { renderAddButton } from '../ui/composites/addButton'
+import { Avatar } from '../ui/primitives/Avatar'
+import { IconButton } from '../ui/primitives/IconButton'
+import { renderPriorityListEditor, renderStatusListEditor } from '../ui/PaletteListEditor'
+
+const PROJECT_COLORS = [
+  '#8b72be',
+  '#7c6b9a',
+  '#b07d9e',
+  '#c47070',
+  '#b8a06b',
+  '#79b58d',
+  '#6ba8a0',
+  '#7a9ec4',
+  '#767491',
+  '#8aab6b'
+]
+
+const PROJECT_ICONS = ['📋', '🚀', '💡', '🎯', '🔬', '🏗', '📊', '🎨', '📱', '🛠', '📝', '⚡']
+
+/**
+ * Project create/edit modal.
+ *
+ * Obsidian renders modals outside `.pm-root` in the DOM. We apply `.pm-modal`
+ * to re-declare `--pm-*` CSS variables, then use CSS classes from styles.css.
+ * Remaining inline styles are only for dynamic runtime values (computed colors,
+ * avatar hashes, display toggles) that cannot be expressed in static CSS.
+ */
+export class ProjectModal extends Modal {
+  private project: Project
+  private isNew: boolean
+
+  constructor(
+    app: App,
+    private plugin: PMPlugin,
+    existingProject: Project | null,
+    private onSave: (project: Project) => void | Promise<void>
+  ) {
+    super(app)
+    if (existingProject) {
+      this.project = JSON.parse(JSON.stringify(existingProject)) as Project
+      // The JSON round-trip turns the taskIndex Map into a plain object.
+      rebuildTaskIndex(this.project)
+      this.isNew = false
+    } else {
+      this.project = makeProject('New Project', '')
+      this.isNew = true
+    }
+  }
+
+  onOpen(): void {
+    this.modalEl.addClass('pm-modal', 'pm-modal--project')
+    const el = this.contentEl
+    el.empty()
+    el.addClass('pm-project-modal')
+    this.buildForm(el)
+  }
+
+  onClose(): void {
+    this.contentEl.empty()
+  }
+
+  private buildForm(el: HTMLElement): void {
+    // ── Header ────────────────────────────────────────────────────────────────
+    const header = el.createDiv('pm-project-modal-header')
+    header.createSpan({ text: '✦', cls: 'pm-project-modal-header-icon' })
+    header.createEl('h2', {
+      text: this.isNew ? 'New project' : 'Project settings',
+      cls: 'pm-modal-heading'
+    })
+
+    // ── Icon + Title ──────────────────────────────────────────────────────────
+    const topRow = el.createDiv('pm-project-top-row')
+
+    // Icon picker
+    const iconWrap = topRow.createDiv('pm-icon-picker')
+    const iconBtn = iconWrap.createEl('button', { text: this.project.icon, cls: 'pm-icon-picker-btn' })
+
+    const iconGrid = iconWrap.createDiv('pm-icon-grid')
+    iconGrid.addClass('pm-hidden')
+    for (const emoji of PROJECT_ICONS) {
+      const btn = iconGrid.createEl('button', { text: emoji, cls: 'pm-icon-option' })
+      btn.addEventListener('click', () => {
+        this.project.icon = emoji
+        iconBtn.textContent = emoji
+        iconGrid.addClass('pm-hidden')
+      })
+    }
+    iconBtn.addEventListener('click', () => {
+      iconGrid.toggleClass('pm-hidden', !iconGrid.hasClass('pm-hidden'))
+    })
+
+    // Title
+    const titleWrap = topRow.createDiv('pm-project-title-wrap')
+    titleWrap.createEl('label', { text: 'Project name', cls: 'pm-label' })
+    const titleInput = titleWrap.createEl('input', {
+      type: 'text',
+      value: this.project.title,
+      cls: 'pm-input pm-input--lg'
+    })
+    titleInput.placeholder = 'My awesome project'
+    titleInput.addEventListener('input', () => {
+      this.project.title = titleInput.value
+    })
+    window.setTimeout(() => {
+      titleInput.focus()
+      titleInput.select()
+    }, 50)
+
+    // ── Color ─────────────────────────────────────────────────────────────────
+    const colorSection = el.createDiv('pm-project-modal-section')
+    colorSection.createEl('label', { text: 'Color', cls: 'pm-label' })
+    const colorPalette = colorSection.createDiv('pm-color-palette')
+    for (const color of PROJECT_COLORS) {
+      const swatch = colorPalette.createEl('button', { cls: 'pm-color-swatch' })
+      swatch.setCssStyles({ background: color })
+      if (color === this.project.color) swatch.addClass('pm-color-swatch--selected')
+      swatch.addEventListener('click', () => {
+        this.project.color = color
+        colorPalette.querySelectorAll('.pm-color-swatch').forEach((s) => s.removeClass('pm-color-swatch--selected'))
+        swatch.addClass('pm-color-swatch--selected')
+      })
+    }
+    const customColor = colorPalette.createEl('input', { type: 'color', cls: 'pm-color-custom' })
+    customColor.value = this.project.color
+    customColor.title = 'Custom color'
+    customColor.addEventListener('change', () => {
+      this.project.color = customColor.value
+      colorPalette.querySelectorAll('.pm-color-swatch').forEach((s) => s.removeClass('pm-color-swatch--selected'))
+    })
+
+    // ── Description ───────────────────────────────────────────────────────────
+    const descSection = el.createDiv('pm-project-modal-section')
+    descSection.createEl('label', { text: 'Description', cls: 'pm-label' })
+    const descArea = descSection.createEl('textarea', { cls: 'pm-input pm-project-desc' })
+    descArea.placeholder = 'What is this project about?'
+    descArea.value = this.project.description
+    descArea.addEventListener('input', () => {
+      this.project.description = descArea.value
+    })
+
+    // ── Team members ──────────────────────────────────────────────────────────
+    const memberSection = el.createDiv('pm-modal-section')
+    memberSection.createEl('label', { text: 'Team members', cls: 'pm-label' })
+    const memberWrap = memberSection.createDiv('pm-member-list')
+    const renderMembers = () => {
+      memberWrap.empty()
+      for (let i = 0; i < this.project.teamMembers.length; i++) {
+        const row = memberWrap.createDiv('pm-member-row')
+        const name = this.project.teamMembers[i] || '?'
+        new Avatar(row).setName(name)
+        const input = row.createEl('input', {
+          type: 'text',
+          value: this.project.teamMembers[i],
+          cls: 'pm-input pm-member-input'
+        })
+        input.placeholder = 'Name'
+        input.addEventListener('change', () => {
+          this.project.teamMembers[i] = input.value
+          renderMembers()
+        })
+        new IconButton(row)
+          .setIcon('x')
+          .setTooltip('Remove member')
+          .onClick(() => {
+            this.project.teamMembers.splice(i, 1)
+            renderMembers()
+          })
+      }
+      renderAddButton(memberWrap, 'Add member', () => {
+        this.project.teamMembers.push('')
+        renderMembers()
+        window.setTimeout(() => {
+          const inputs = memberWrap.querySelectorAll('input')
+          inputs[inputs.length - 1]?.focus()
+        }, 50)
+      })
+    }
+    renderMembers()
+
+    // ── Custom fields ─────────────────────────────────────────────────────────
+    const cfSection = el.createDiv('pm-modal-section')
+    const cfHeader = cfSection.createDiv('pm-modal-section-header')
+    cfHeader.createSpan({ text: 'Custom fields', cls: 'pm-modal-subheading' })
+    cfHeader.createSpan({ text: 'Extra properties for tasks', cls: 'pm-modal-hint' })
+
+    const cfList = cfSection.createDiv('pm-cf-list')
+    const renderCFs = () => {
+      cfList.empty()
+      for (let i = 0; i < this.project.customFields.length; i++) {
+        this.renderCustomFieldEditor(cfList, this.project.customFields[i], i, renderCFs)
+      }
+      renderAddButton(cfList, 'Add custom field', () => {
+        this.project.customFields.push({
+          id: makeId(),
+          name: 'New Field',
+          type: 'text',
+          options: []
+        })
+        renderCFs()
+      })
+    }
+    renderCFs()
+
+    // ── Statuses ──────────────────────────────────────────────────────────────
+    this.renderPaletteOverride(el, {
+      heading: 'Statuses',
+      hint: 'The workflow for this project',
+      toggleLabel: 'Use custom statuses instead of the global ones',
+      addLabel: 'Add status',
+      get: () => this.project.config?.statuses,
+      set: (statuses) => this.patchConfig('statuses', statuses),
+      copyGlobal: () => this.plugin.settings.statuses.map((s) => ({ ...s })),
+      makeEntry: () => ({
+        id: 'status-' + makeId().slice(0, 6),
+        label: 'New status',
+        color: '#8a94a0',
+        icon: '',
+        complete: false
+      }),
+      renderEditor: (container, statuses) =>
+        renderStatusListEditor(container, {
+          app: this.app,
+          statuses,
+          // The modal edits a clone; everything persists on Save.
+          onChanged: () => {}
+        })
+    })
+
+    // ── Priorities ────────────────────────────────────────────────────────────
+    this.renderPaletteOverride(el, {
+      heading: 'Priorities',
+      hint: 'The priority scale for this project',
+      toggleLabel: 'Use custom priorities instead of the global ones',
+      addLabel: 'Add priority',
+      get: () => this.project.config?.priorities,
+      set: (priorities) => this.patchConfig('priorities', priorities),
+      copyGlobal: () => this.plugin.settings.priorities.map((p) => ({ ...p })),
+      makeEntry: () => ({
+        id: 'priority-' + makeId().slice(0, 6),
+        label: 'New priority',
+        color: '#8a94a0',
+        icon: ''
+      }),
+      renderEditor: (container, priorities) =>
+        renderPriorityListEditor(container, {
+          app: this.app,
+          priorities,
+          onChanged: () => {}
+        })
+    })
+
+    // ── View & scheduling overrides ──────────────────────────────────────────
+    const behaviorSection = el.createDiv('pm-modal-section')
+    const behaviorHeader = behaviorSection.createDiv('pm-modal-section-header')
+    behaviorHeader.createSpan({ text: 'View & scheduling', cls: 'pm-modal-subheading' })
+    behaviorHeader.createSpan({ text: 'Overrides for this project', cls: 'pm-modal-hint' })
+    const behaviorGrid = behaviorSection.createDiv('pm-config-override-grid')
+
+    this.renderOverrideSelect(behaviorGrid, 'Default view', 'defaultView', [
+      { value: 'table', label: 'Table' },
+      { value: 'gantt', label: 'Gantt' },
+      { value: 'kanban', label: 'Board' }
+    ])
+    this.renderOverrideSelect(behaviorGrid, 'Auto-schedule', 'autoSchedule', [
+      { value: true, label: 'On' },
+      { value: false, label: 'Off' }
+    ])
+    this.renderOverrideSelect(behaviorGrid, 'Subtasks on board', 'kanbanShowSubtasks', [
+      { value: true, label: 'Show' },
+      { value: false, label: 'Hide' }
+    ])
+    this.renderOverrideSelect(behaviorGrid, 'Description preview on board', 'kanbanShowDescriptionPreview', [
+      { value: true, label: 'Show' },
+      { value: false, label: 'Hide' }
+    ])
+
+    // ── Footer ────────────────────────────────────────────────────────────────
+    const footer = el.createDiv('pm-modal-footer')
+    footer.createDiv('pm-footer-spacer')
+
+    new ButtonComponent(footer).setButtonText('Cancel').onClick(() => this.close())
+
+    new ButtonComponent(footer)
+      .setButtonText(this.isNew ? '+ Create project' : 'Save')
+      .setCta()
+      .onClick(
+        safeAsync(async () => {
+          const title = titleInput.value.trim()
+          if (!title) {
+            titleInput.addClass('pm-input-error')
+            titleInput.focus()
+            return
+          }
+          this.project.title = title
+
+          if (this.isNew) {
+            this.project.filePath = `${this.plugin.settings.projectsFolder}/${title.replace(/[\\/:*?"<>|]/g, '-')}.md`
+            await this.plugin.store.ensureFolder(this.plugin.settings.projectsFolder)
+          }
+
+          await this.plugin.store.saveProject(this.project)
+          await this.onSave(this.project)
+          this.close()
+        })
+      )
+  }
+
+  /** Set or clear one override; the config object is dropped entirely when its last field clears. */
+  private patchConfig<K extends keyof ProjectConfig>(key: K, value: ProjectConfig[K] | undefined): void {
+    const entries = Object.entries({ ...this.project.config, [key]: value }).filter(([, v]) => v !== undefined)
+    this.project.config = entries.length ? Object.fromEntries(entries) : undefined
+  }
+
+  private renderPaletteOverride<T>(
+    el: HTMLElement,
+    opts: {
+      heading: string
+      hint: string
+      toggleLabel: string
+      addLabel: string
+      get: () => T[] | undefined
+      set: (items: T[] | undefined) => void
+      copyGlobal: () => T[]
+      makeEntry: () => T
+      renderEditor: (container: HTMLElement, items: T[]) => void
+    }
+  ): void {
+    const section = el.createDiv('pm-modal-section')
+    const header = section.createDiv('pm-modal-section-header')
+    header.createSpan({ text: opts.heading, cls: 'pm-modal-subheading' })
+    header.createSpan({ text: opts.hint, cls: 'pm-modal-hint' })
+
+    const toggle = section.createEl('label', { cls: 'pm-status-toggle' })
+    const checkbox = toggle.createEl('input', { type: 'checkbox' })
+    checkbox.checked = !!opts.get()?.length
+    toggle.createSpan({ text: opts.toggleLabel })
+
+    const editor = section.createDiv('pm-settings-statuses')
+    const footer = section.createDiv()
+    const renderEditor = () => {
+      editor.empty()
+      footer.empty()
+      const own = opts.get()
+      if (!own?.length) return
+      opts.renderEditor(editor, own)
+      renderAddButton(footer, opts.addLabel, () => {
+        own.push(opts.makeEntry())
+        renderEditor()
+      })
+    }
+    checkbox.addEventListener('change', () => {
+      // Starting from a copy of the global list keeps existing task values valid.
+      opts.set(checkbox.checked ? opts.copyGlobal() : undefined)
+      renderEditor()
+    })
+    renderEditor()
+  }
+
+  private renderOverrideSelect<
+    K extends 'defaultView' | 'autoSchedule' | 'kanbanShowSubtasks' | 'kanbanShowDescriptionPreview'
+  >(
+    grid: HTMLElement,
+    label: string,
+    key: K,
+    options: { value: NonNullable<ProjectConfig[K]>; label: string }[]
+  ): void {
+    const row = grid.createDiv('pm-config-override-row')
+    row.createEl('label', { text: label, cls: 'pm-label' })
+    const select = row.createEl('select', { cls: 'pm-input pm-select' })
+    const current = this.project.config?.[key]
+    const inherit = select.createEl('option', { value: '', text: 'Use global' })
+    inherit.selected = current === undefined
+    options.forEach((opt, i) => {
+      const optionEl = select.createEl('option', { value: String(i), text: opt.label })
+      if (current === opt.value) optionEl.selected = true
+    })
+    select.addEventListener('change', () => {
+      this.patchConfig(key, select.value === '' ? undefined : options[Number(select.value)].value)
+    })
+  }
+
+  private renderCustomFieldEditor(
+    container: HTMLElement,
+    cf: CustomFieldDef,
+    index: number,
+    rerender: () => void
+  ): void {
+    const row = container.createDiv('pm-cf-row')
+
+    const nameInput = row.createEl('input', {
+      type: 'text',
+      value: cf.name,
+      cls: 'pm-input pm-cf-name'
+    })
+    nameInput.placeholder = 'Field name'
+    nameInput.addEventListener('change', () => {
+      this.project.customFields[index].name = nameInput.value
+    })
+
+    const typeSelect = row.createEl('select', { cls: 'pm-input pm-select pm-cf-type' })
+    const types: [CustomFieldDef['type'], string][] = [
+      ['text', 'Text'],
+      ['number', 'Number'],
+      ['date', 'Date'],
+      ['select', 'Select'],
+      ['multiselect', 'Multi-select'],
+      ['person', 'Person'],
+      ['checkbox', 'Checkbox'],
+      ['url', 'URL']
+    ]
+    for (const [val, label] of types) {
+      const opt = typeSelect.createEl('option', { value: val, text: label })
+      if (val === cf.type) opt.selected = true
+    }
+    typeSelect.addEventListener('change', () => {
+      this.project.customFields[index].type = typeSelect.value as CustomFieldDef['type']
+      rerender()
+    })
+
+    new IconButton(row)
+      .setIcon('x')
+      .setTooltip('Remove field')
+      .onClick(() => {
+        this.project.customFields.splice(index, 1)
+        rerender()
+      })
+
+    if (cf.type === 'select' || cf.type === 'multiselect') {
+      const optionsWrap = row.createDiv('pm-cf-options')
+      const opts = cf.options ?? []
+      const renderOpts = () => {
+        optionsWrap.empty()
+        for (let j = 0; j < opts.length; j++) {
+          const optRow = optionsWrap.createDiv('pm-cf-opt-row')
+          const optInput = optRow.createEl('input', {
+            type: 'text',
+            value: opts[j],
+            cls: 'pm-input pm-cf-opt-input'
+          })
+          optInput.placeholder = `Option ${j + 1}`
+          optInput.addEventListener('change', () => {
+            opts[j] = optInput.value
+            cf.options = opts
+          })
+          new IconButton(optRow)
+            .setIcon('x')
+            .setTooltip('Remove option')
+            .onClick(() => {
+              opts.splice(j, 1)
+              cf.options = opts
+              renderOpts()
+            })
+        }
+        renderAddButton(optionsWrap, 'Add option', () => {
+          opts.push('')
+          cf.options = opts
+          renderOpts()
+        })
+      }
+      renderOpts()
+    }
+  }
+}

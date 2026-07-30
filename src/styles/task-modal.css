@@ -1,0 +1,232 @@
+/* ---------------------------------------------------------------------------
+   TASK MODAL
+   --------------------------------------------------------------------------- */
+.pm-modal {
+  /* Modals render outside .pm-root, so the two plugin tokens are re-declared here */
+  --pm-ghost-border: rgba(0, 0, 0, 0.06);
+  --pm-shadow-ambient: rgba(0, 0, 0, 0.06);
+
+  max-width: 680px;
+  width: 90vw;
+  max-height: 88vh;
+}
+
+.pm-task-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  max-height: calc(88vh - 40px);
+  padding: 0;
+}
+
+.pm-input-error {
+  box-shadow: 0 0 0 2px var(--text-error);
+  border-radius: 4px;
+}
+
+.pm-modal-title-error {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error);
+}
+.pm-modal-title-error[hidden] {
+  display: none;
+}
+
+/* Property rows */
+.pm-prop-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  min-height: 34px;
+}
+.pm-prop-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pm-prop-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pm-prop-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.pm-progress-slider {
+  flex: 1;
+  appearance: none;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--background-modifier-hover);
+  cursor: pointer;
+}
+.pm-progress-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  cursor: pointer;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--interactive-accent) 40%, transparent);
+}
+.pm-progress-slider-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 32px;
+  text-align: right;
+}
+
+.pm-prop-date {
+  padding: 4px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 13px;
+  cursor: pointer;
+}
+.pm-prop-date:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.pm-prop-text,
+.pm-prop-select {
+  padding: 5px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 13px;
+  width: 100%;
+}
+.pm-prop-text:focus,
+.pm-prop-select:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.pm-prop-deps {
+  flex-wrap: wrap;
+}
+
+/* Modal sections */
+.pm-modal-section {
+  padding: 14px 24px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.pm-modal-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.pm-modal-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+.pm-modal-section-header .pm-modal-section-title {
+  margin-bottom: 0;
+}
+
+.pm-modal-description {
+  width: 100%;
+  min-height: 80px;
+  /* Add the CSS variable for Obsidian bot compliance: */
+  height: var(--desc-height, auto);
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: none;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+/* The description edits in place. Hover and focus paint a subtle background and border so
+   the field reads as editable; focus deepens the border. The box-shadow ring core app.css
+   adds on textarea:hover/:focus is suppressed. */
+textarea.pm-modal-description:hover,
+textarea.pm-modal-description:focus {
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border);
+  box-shadow: none;
+  outline: none;
+}
+textarea.pm-modal-description:focus {
+  border-color: var(--background-modifier-border-focus);
+}
+
+/* Subtasks */
+.pm-modal-subtask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pm-modal-subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-s);
+  transition: background 0.1s;
+}
+.pm-modal-subtask-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.pm-subtask-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pm-subtask-title {
+  flex: 1;
+  font-size: 13px;
+  outline: none;
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+.pm-subtask-title:focus {
+  background: var(--background-modifier-hover);
+}
+
+/* Modal footer */
+.pm-modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  position: sticky;
+  bottom: 0;
+}
+.pm-footer-spacer {
+  flex: 1;
+}
+
+/* Confirm dialog */
+.pm-confirm-modal .modal-content {
+  padding: 1rem 1.25rem;
+}
+.pm-confirm-modal {
+  max-width: 380px;
+}
