@@ -103,3 +103,22 @@ describe('resolveProjectConfig', () => {
     })
   })
 })
+
+describe('issueTypes / severities / verdicts resolution', () => {
+  it('inherits global issue types, severities and verdicts by default', () => {
+    const resolved = resolveProjectConfig(makeOverrideProject(), DEFAULT_SETTINGS)
+    expect(resolved.issueTypes.map((t) => t.id)).toEqual(['epic', 'story', 'task', 'bug', 'incident'])
+    expect(resolved.severities.map((s) => s.id)).toEqual(['sev1', 'sev2', 'sev3', 'sev4'])
+    expect(resolved.verdicts.length).toBe(5)
+  })
+
+  it('uses project-defined issue types and appends in-use unknown ones with a fallback', () => {
+    const project = makeOverrideProject({
+      issueTypes: [{ id: 'ticket', label: 'Ticket', color: '#123456', icon: 'tag' }]
+    })
+    project.tasks.push(makeTask({ id: 't1', issueType: 'request' }))
+    const resolved = resolveProjectConfig(project, DEFAULT_SETTINGS)
+    expect(resolved.issueTypes.map((t) => t.id)).toEqual(['ticket', 'request'])
+    expect(resolved.issueTypes[1].label).toBe('request') // fallback entry, nothing disappears
+  })
+})

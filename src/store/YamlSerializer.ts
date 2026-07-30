@@ -10,6 +10,7 @@ function serializeProjectConfig(config: ProjectConfig | undefined): Record<strin
   const out: Record<string, unknown> = {}
   if (config.statuses?.length) out.statuses = config.statuses
   if (config.priorities?.length) out.priorities = config.priorities
+  if (config.issueTypes?.length) out.issueTypes = config.issueTypes
   if (config.defaultView) out.defaultView = config.defaultView
   if (config.autoSchedule !== undefined) out.autoSchedule = config.autoSchedule
   if (config.kanbanShowSubtasks !== undefined) out.kanbanShowSubtasks = config.kanbanShowSubtasks
@@ -42,6 +43,11 @@ export function serializeProject(project: Project, statuses: StatusConfig[] = []
     savedViews: project.savedViews.length ? project.savedViews : [],
     createdAt: project.createdAt,
     updatedAt: project.updatedAt
+  }
+  // Written only when keys are enabled — untouched projects stay diff-clean.
+  if (project.keyPrefix) {
+    fm.keyPrefix = project.keyPrefix
+    fm.nextKeySeq = project.nextKeySeq
   }
   const config = serializeProjectConfig(project.config)
   if (config) fm.config = config
@@ -96,6 +102,19 @@ export function buildTaskFrontmatter(task: Task, project: Project, parentTask: T
   if (task.timeEstimate !== undefined) fm.timeEstimate = task.timeEstimate
   if (task.timeLogs?.length) fm.timeLogs = task.timeLogs
   if (Object.keys(task.customFields).length) fm.customFields = task.customFields
+  // New fields are written only when set/non-default so untouched files stay diff-clean.
+  if (task.key) fm.key = task.key
+  if (task.issueType && task.issueType !== 'task') fm.issueType = task.issueType
+  if (task.bucket !== 'none') fm.bucket = task.bucket
+  if (task.severity) fm.severity = task.severity
+  if (task.verdict) fm.verdict = task.verdict
+  if (task.detectedAt) fm.detectedAt = task.detectedAt
+  if (task.respondedAt) fm.respondedAt = task.respondedAt
+  if (task.containedAt) fm.containedAt = task.containedAt
+  if (task.resolvedAt) fm.resolvedAt = task.resolvedAt
+  if (task.iocs.length) fm.iocs = task.iocs
+  if (task.attack.length) fm.attack = task.attack
+  if (task.activity.length) fm.activity = task.activity
   return fm
 }
 

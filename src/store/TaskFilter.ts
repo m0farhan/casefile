@@ -8,6 +8,8 @@ export function isFilterActive(filter: FilterState): boolean {
     filter.text ||
     filter.statuses.length ||
     filter.priorities.length ||
+    filter.severities.length ||
+    filter.verdicts.length ||
     filter.assignees.length ||
     filter.tags.length ||
     filter.dueDateFilter !== 'any'
@@ -19,6 +21,8 @@ export function countActiveFilters(filter: FilterState): number {
   if (filter.text) count++
   if (filter.statuses.length) count++
   if (filter.priorities.length) count++
+  if (filter.severities.length) count++
+  if (filter.verdicts.length) count++
   if (filter.assignees.length) count++
   if (filter.tags.length) count++
   if (filter.dueDateFilter !== 'any') count++
@@ -33,6 +37,7 @@ export function matchesFilter(task: Task, filter: FilterState, statuses: StatusC
     if (
       !(
         task.id.toLowerCase() === q ||
+        (task.key !== '' && task.key.toLowerCase().includes(q)) ||
         task.title.toLowerCase().includes(q) ||
         task.status.includes(q) ||
         task.priority.includes(q) ||
@@ -45,6 +50,8 @@ export function matchesFilter(task: Task, filter: FilterState, statuses: StatusC
   }
   if (filter.statuses.length && !filter.statuses.includes(task.status)) return false
   if (filter.priorities.length && !filter.priorities.includes(task.priority)) return false
+  if (filter.severities.length && !filter.severities.includes(task.severity)) return false
+  if (filter.verdicts.length && !filter.verdicts.includes(task.verdict)) return false
   if (filter.assignees.length && !task.assignees.some((a) => filter.assignees.includes(a))) return false
   if (filter.tags.length && !task.tags.some((t) => filter.tags.includes(t))) return false
   if (filter.dueDateFilter !== 'any' && !matchDueDateFilter(task, filter.dueDateFilter, statuses)) return false

@@ -646,6 +646,26 @@ describe('ProjectStore editor subtask save', () => {
         .sort()
     ).toEqual(['Alpha renamed', 'Parent'])
   })
+
+  it('persists a subtask bucket/severity edit made through the parent save (reconcile compare)', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Editor', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await addNamed(store, project, 'Child', parent.id)
+
+    // Only the new fields change — title/status/progress stay identical, so this
+    // fails if reconcileSubtasks' dirty compare doesn't cover the new fields.
+    const live = expectDefined(flattenTasks(project.tasks).find((f) => f.task.id === parent.id)).task
+    const edited = JSON.parse(JSON.stringify(live)) as Task
+    edited.subtasks[0].bucket = 'this-week'
+    edited.subtasks[0].severity = 'sev2'
+    await store.updateTask(project, parent.id, edited)
+
+    const reloaded = await reload(app, vault, project.filePath)
+    const child = expectDefined(flattenTasks(reloaded.tasks).find((f) => f.task.title === 'Child')).task
+    expect(child.bucket).toBe('this-week')
+    expect(child.severity).toBe('sev2')
+  })
 })
 
 describe('ProjectStore duplicate long titles', () => {

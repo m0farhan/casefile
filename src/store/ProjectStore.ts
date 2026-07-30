@@ -933,7 +933,17 @@ export class ProjectStore implements TaskSource {
         this.markDirty(project, [task.id], 'full')
       } else if (prev.title !== task.title) {
         this.markDirty(project, [task.id], 'full')
-      } else if (prev.status !== task.status || prev.completed !== task.completed || prev.progress !== task.progress) {
+      } else if (
+        // Every mutable frontmatter field editable through the parent's subtask
+        // panel must be compared here, or the edit is silently dropped.
+        prev.status !== task.status ||
+        prev.completed !== task.completed ||
+        prev.progress !== task.progress ||
+        prev.issueType !== task.issueType ||
+        prev.bucket !== task.bucket ||
+        prev.severity !== task.severity ||
+        prev.verdict !== task.verdict
+      ) {
         this.markDirty(project, [task.id], 'fm')
       }
     }

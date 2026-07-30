@@ -28,6 +28,16 @@ export function resolveProjectConfig(project: Project, settings: PMSettings): Re
       (task) => task.priority,
       (id) => ({ id, label: id, color: FALLBACK_COLOR, icon: '' })
     ),
+    issueTypes: withInUseExtras(
+      config?.issueTypes?.length ? config.issueTypes : settings.issueTypes,
+      settings.issueTypes,
+      project,
+      (task) => task.issueType,
+      (id) => ({ id, label: id, color: FALLBACK_COLOR, icon: '' })
+    ),
+    // Global-only in v1; '' (no severity/verdict) is not a config entry, so no in-use scan.
+    severities: settings.severities,
+    verdicts: settings.verdicts,
     defaultView: config?.defaultView ?? settings.defaultView,
     autoSchedule: config?.autoSchedule ?? settings.autoSchedule,
     kanbanShowSubtasks: config?.kanbanShowSubtasks ?? settings.kanbanShowSubtasks,

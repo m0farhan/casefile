@@ -216,3 +216,32 @@ describe('applyTaskFilterFlat', () => {
     ])
   })
 })
+
+describe('severity/verdict filters and key search', () => {
+  const incident = makeTask({ id: 'i1', key: 'SOC-3', severity: 'sev1', verdict: 'pending', title: 'Beacon triage' })
+  const plain = makeTask({ id: 'p1', title: 'Refactor build' })
+
+  it('filters by severity', () => {
+    const f: FilterState = { ...makeDefaultFilter(), severities: ['sev1'] }
+    expect(matchesFilter(incident, f)).toBe(true)
+    expect(matchesFilter(plain, f)).toBe(false)
+  })
+
+  it('filters by verdict', () => {
+    const f: FilterState = { ...makeDefaultFilter(), verdicts: ['pending'] }
+    expect(matchesFilter(incident, f)).toBe(true)
+    expect(matchesFilter(plain, f)).toBe(false)
+  })
+
+  it('free text matches the issue key, case-insensitive', () => {
+    const f: FilterState = { ...makeDefaultFilter(), text: 'soc-3' }
+    expect(matchesFilter(incident, f)).toBe(true)
+    expect(matchesFilter(plain, f)).toBe(false)
+  })
+
+  it('counts severity/verdict as active filters', () => {
+    const f: FilterState = { ...makeDefaultFilter(), severities: ['sev1'], verdicts: ['pending'] }
+    expect(isFilterActive(f)).toBe(true)
+    expect(countActiveFilters(f)).toBe(2)
+  })
+})

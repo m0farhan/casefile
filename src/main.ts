@@ -178,8 +178,21 @@ export default class PMPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {})
     if (!saved?.statuses?.length) this.settings.statuses = DEFAULT_SETTINGS.statuses
     if (!saved?.priorities?.length) this.settings.priorities = DEFAULT_SETTINGS.priorities
+    if (!saved?.issueTypes?.length) this.settings.issueTypes = DEFAULT_SETTINGS.issueTypes
+    if (!saved?.severities?.length) this.settings.severities = DEFAULT_SETTINGS.severities
+    if (!saved?.verdicts?.length) this.settings.verdicts = DEFAULT_SETTINGS.verdicts
+    if (!saved?.slaPolicies || !Object.keys(saved.slaPolicies).length) {
+      this.settings.slaPolicies = DEFAULT_SETTINGS.slaPolicies
+    }
+    if (!saved?.incidentTemplates?.length) this.settings.incidentTemplates = DEFAULT_SETTINGS.incidentTemplates
     if (!this.settings.projectFilters) this.settings.projectFilters = {}
     if (!this.settings.collapsedTasks) this.settings.collapsedTasks = {}
+    if (!this.settings.collapsedKanbanColumns) this.settings.collapsedKanbanColumns = {}
+    // Old-plugin data.json (or older fork versions) lack the new filter arrays.
+    for (const entry of Object.values(this.settings.projectFilters)) {
+      entry.filter.severities ??= []
+      entry.filter.verdicts ??= []
+    }
 
     let migrated = false
     for (const s of this.settings.statuses) {

@@ -159,6 +159,8 @@ describe('project round-trip', () => {
         text: 'api',
         statuses: ['in-progress'],
         priorities: ['high', 'critical'],
+        severities: ['sev2'],
+        verdicts: [],
         assignees: ['Alice'],
         tags: ['design'],
         dueDateFilter: 'overdue',
@@ -264,5 +266,110 @@ describe('hydration does not alias the source frontmatter', () => {
 
     expect((fm.customFields as unknown[]).length).toBe(1)
     expect(fm.teamMembers).toEqual(['Alice'])
+  })
+})
+
+describe('GreySurface PM field round-trips', () => {
+  it('preserves every Jira/SOC field through serialize -> hydrate', () => {
+    const original = makeTask({
+      id: 'gs-1',
+      key: 'SOC-12',
+      issueType: 'incident',
+      severity: 'sev2',
+      verdict: 'true-positive',
+      bucket: 'this-week',
+      detectedAt: '2026-07-30T08:15:00.000Z',
+      respondedAt: '2026-07-30T08:40:00.000Z',
+      containedAt: '2026-07-30T10:00:00.000Z',
+      resolvedAt: '2026-07-30T12:30:00.000Z',
+      iocs: [
+        { type: 'ip', value: '45.33.12.8', note: 'C2 beacon' },
+        { type: 'hash', value: 'd41d8cd98f00b204e9800998ecf8427e' } // no note: the omitted-key case
+      ],
+      attack: ['T1566.001', 'T1078'],
+      activity: [{ at: '2026-07-30T08:40:00.000Z', field: 'status', from: 'todo', to: 'in-progress' }]
+    })
+    const { task } = roundTripTask(original)
+
+    expect(task.key).toBe('SOC-12')
+    expect(task.issueType).toBe('incident')
+    expect(task.severity).toBe('sev2')
+    expect(task.verdict).toBe('true-positive')
+    expect(task.bucket).toBe('this-week')
+    expect(task.detectedAt).toBe(original.detectedAt)
+    expect(task.respondedAt).toBe(original.respondedAt)
+    expect(task.containedAt).toBe(original.containedAt)
+    expect(task.resolvedAt).toBe(original.resolvedAt)
+    expect(task.iocs).toEqual(original.iocs)
+    expect(task.iocs[1]).not.toHaveProperty('note') // never `note: undefined` in YAML
+    expect(task.attack).toEqual(original.attack)
+    expect(task.activity).toEqual(original.activity)
+  })
+
+  it('omits default-valued new fields from frontmatter (diff-clean untouched files)', () => {
+    const plain = makeTask({ id: 'plain-1' })
+    const project = makeProject('Test', 'Projects/Test.md')
+    const md = serializeTask(plain, project, null)
+    for (const absent of [
+      'key:',
+      'issueType:',
+      'bucket:',
+      'severity:',
+      'verdict:',
+      'detectedAt:',
+      'respondedAt:',
+      'containedAt:',
+      'resolvedAt:',
+      'iocs:',
+      'attack:',
+      'activity:'
+    ]) {
+      expect(md).not.toContain(absent)
+    }
+  })
+
+  it('hydrates legacy frontmatter (no new keys) to defaults', () => {
+    const legacy = makeTask({ id: 'legacy-1', title: 'Old task' })
+    const project = makeProject('Test', 'Projects/Test.md')
+    const md = serializeTask(legacy, project, null)
+    const { frontmatter, body } = parseFrontmatter(md)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    const { task } = hydrateTaskFromFile(frontmatter, body, 'Projects/Test_tasks/t.md')
+
+    expect(task.key).toBe('')
+    expect(task.issueType).toBe('task')
+    expect(task.bucket).toBe('none')
+    expect(task.severity).toBe('')
+    expect(task.verdict).toBe('')
+    expect(task.iocs).toEqual([])
+    expect(task.attack).toEqual([])
+    expect(task.activity).toEqual([])
+  })
+
+  it('drops malformed iocs/activity entries instead of crashing', () => {
+    const fm: Record<string, unknown> = {
+      id: 't1',
+      title: 'T',
+      iocs: [{ type: 'nope', value: 'x' }, { type: 'ip' }, { type: 'ip', value: '1.2.3.4' }, 'garbage'],
+      activity: [{ at: '2026-01-01T00:00:00Z', field: 'status', from: 'a', to: 'b' }, { field: 'x' }, 42]
+    }
+    const { task } = hydrateTaskFromFile(fm, '', 'Projects/Test_tasks/t.md')
+    expect(task.iocs).toEqual([{ type: 'ip', value: '1.2.3.4' }])
+    expect(task.activity).toEqual([{ at: '2026-01-01T00:00:00Z', field: 'status', from: 'a', to: 'b' }])
+    expect(task.bucket).toBe('none')
+  })
+
+  it('round-trips project keyPrefix/nextKeySeq, omitting them while keys are disabled', () => {
+    const off = makeProject('NoKeys', 'Projects/NoKeys.md')
+    const { frontmatter: fmOff } = roundTripProject(off)
+    expect(fmOff).not.toHaveProperty('keyPrefix')
+    expect(fmOff).not.toHaveProperty('nextKeySeq')
+
+    const on = makeProject('Keyed', 'Projects/Keyed.md')
+    on.keyPrefix = 'ARGUS'
+    on.nextKeySeq = 7
+    const { project } = roundTripProject(on)
+    expect(project.keyPrefix).toBe('ARGUS')
+    expect(project.nextKeySeq).toBe(7)
   })
 })

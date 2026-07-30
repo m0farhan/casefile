@@ -93,6 +93,8 @@ function cloneNode(source: Task, includeSubtasks: boolean, idMap: Map<string, st
   return {
     ...source,
     id: newId,
+    // Keys are immutable and never reused — a duplicate gets a fresh one on save.
+    key: '',
     filePath: undefined,
     createdAt: now,
     updatedAt: now,
@@ -103,7 +105,18 @@ function cloneNode(source: Task, includeSubtasks: boolean, idMap: Map<string, st
     tags: [...source.tags],
     customFields: { ...source.customFields },
     timeLogs: source.timeLogs ? source.timeLogs.map((l) => ({ ...l })) : undefined,
-    recurrence: source.recurrence ? { ...source.recurrence } : undefined
+    recurrence: source.recurrence ? { ...source.recurrence } : undefined,
+    // A duplicated incident is a fresh investigation: keep severity/tags/attack,
+    // reset the audit trail, verdict and lifecycle stamps.
+    iocs: source.iocs.map((i) => ({ ...i })),
+    attack: [...source.attack],
+    activity: [],
+    comments: undefined,
+    verdict: '',
+    detectedAt: '',
+    respondedAt: '',
+    containedAt: '',
+    resolvedAt: ''
   }
 }
 

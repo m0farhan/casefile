@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { makeTask, type Task } from '../types'
 import {
   addTaskToTree,
+  cloneTaskSubtree,
   collectAllAssignees,
   collectAllTags,
   deleteTaskFromTree,
@@ -211,5 +212,43 @@ describe('totalLoggedHours', () => {
       ]
     })
     expect(totalLoggedHours(t)).toBe(5.5)
+  })
+})
+
+describe('cloneTaskSubtree — GreySurface field semantics', () => {
+  it('resets key, audit trail, verdict and lifecycle stamps; copies iocs/attack by value', () => {
+    const source = makeTask({
+      id: 'src-1',
+      key: 'SOC-9',
+      issueType: 'incident',
+      severity: 'sev1',
+      verdict: 'true-positive',
+      detectedAt: '2026-07-01T00:00:00Z',
+      respondedAt: '2026-07-01T01:00:00Z',
+      containedAt: '2026-07-01T02:00:00Z',
+      resolvedAt: '2026-07-01T03:00:00Z',
+      iocs: [{ type: 'ip', value: '1.2.3.4' }],
+      attack: ['T1566'],
+      activity: [{ at: '2026-07-01T01:00:00Z', field: 'status', from: 'todo', to: 'done' }]
+    })
+    const clone = cloneTaskSubtree(source, true)
+
+    expect(clone.key).toBe('')
+    expect(clone.activity).toEqual([])
+    expect(clone.comments).toBeUndefined()
+    expect(clone.verdict).toBe('')
+    expect(clone.detectedAt).toBe('')
+    expect(clone.respondedAt).toBe('')
+    expect(clone.containedAt).toBe('')
+    expect(clone.resolvedAt).toBe('')
+    // kept: the shape of the investigation
+    expect(clone.issueType).toBe('incident')
+    expect(clone.severity).toBe('sev1')
+    expect(clone.iocs).toEqual(source.iocs)
+    expect(clone.attack).toEqual(source.attack)
+    // by value, not aliased
+    expect(clone.iocs).not.toBe(source.iocs)
+    expect(clone.iocs[0]).not.toBe(source.iocs[0])
+    expect(clone.attack).not.toBe(source.attack)
   })
 })
