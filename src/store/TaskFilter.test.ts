@@ -327,4 +327,40 @@ describe('query bar (JQL-lite) end to end', () => {
   it('garbage in the search box never throws', () => {
     expect(() => match(': ::: status: !>= "', incident)).not.toThrow()
   })
+
+  it('sla: term reaches the matcher with policies and clock from queryCtx', () => {
+    const inc = makeTask({
+      id: 's1',
+      issueType: 'incident',
+      severity: 'sev1',
+      detectedAt: '2026-07-30T10:00:00Z'
+    })
+    const qc = {
+      ...queryCtx,
+      slaPolicies: { sev1: { responseMins: 60, resolutionMins: 240 } },
+      now: Date.parse('2026-07-30T12:00:00Z')
+    }
+    expect(matchesFilter(inc, q('sla:breached'), DEFAULT_STATUSES, qc)).toBe(true)
+    expect(matchesFilter(inc, q('sla:ok'), DEFAULT_STATUSES, qc)).toBe(false)
+    // No policies in ctx and none registered → the clock never applies.
+    expect(matchesFilter(inc, q('sla:none'), DEFAULT_STATUSES, queryCtx)).toBe(true)
+  })
+})
+
+describe('ioc values in free-text search', () => {
+  const t = makeTask({
+    id: 'i2',
+    title: 'Beacon triage',
+    iocs: [
+      { type: 'domain', value: 'evil.com' },
+      { type: 'url', value: 'hxxp://bad[.]site/x' }
+    ]
+  })
+
+  it('matches a real or defanged indicator pasted as free text', () => {
+    expect(matchesFilter(t, filter({ text: 'evil.com' }))).toBe(true)
+    expect(matchesFilter(t, filter({ text: 'evil[.]com' }))).toBe(true)
+    expect(matchesFilter(t, filter({ text: 'bad.site' }))).toBe(true)
+    expect(matchesFilter(t, filter({ text: 'good.com' }))).toBe(false)
+  })
 })

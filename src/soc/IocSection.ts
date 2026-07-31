@@ -1,5 +1,5 @@
 import type { Ioc, IocType, Task } from '../types'
-import { IOC_TYPE_LABELS, defangIoc } from './ioc'
+import { IOC_TYPE_LABELS, defangIoc, detectIocType, formatIocLine, parseIocPaste, refangIoc } from './ioc'
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
 
@@ -14,13 +14,29 @@ function renderTypeSelect(parent: HTMLElement, value: IocType): HTMLSelectElemen
 
 /**
  * Indicators section: one row per IOC (type select, defanged value, optional
- * note, copy-real-value + remove) and an add-row form. Display always defangs
- * via defangIoc; only the copy button touches the real value. Mutates
- * task.iocs in place and reports every commit through opts.onChange.
+ * note, find-across-cases + copy-real-value + remove) and an add-row form.
+ * Display always defangs via defangIoc; only the copy button touches the real
+ * value. Mutates task.iocs in place and reports every commit through
+ * opts.onChange. `onPivot` (when the host provides it) receives a ready
+ * `ioc:` query-bar string for the row's refanged value.
  */
-export function renderIocSection(container: HTMLElement, task: Task, opts: { onChange: () => void }): void {
+export function renderIocSection(
+  container: HTMLElement,
+  task: Task,
+  opts: { onChange: () => void; onPivot?: (query: string) => void }
+): void {
   const section = container.createDiv('pm-modal-section pm-ioc-section')
-  const title = section.createEl('h4', { cls: 'pm-modal-section-title' })
+  const header = section.createDiv('pm-modal-section-header')
+  const title = header.createEl('h4', { cls: 'pm-modal-section-title' })
+  const copyAllBtn = new IconButton(header).setIcon('clipboard-copy').setTooltip('Copy defanged block')
+  copyAllBtn.onClick(
+    safeAsync(async () => {
+      if (!task.iocs.length) return
+      await navigator.clipboard.writeText(task.iocs.map(formatIocLine).join('\n'))
+      copyAllBtn.setIcon('check')
+      window.setTimeout(() => copyAllBtn.setIcon('clipboard-copy'), 700)
+    })
+  )
   const rowsEl = section.createDiv('pm-ioc-rows')
 
   const renderRows = () => {
@@ -51,6 +67,16 @@ export function renderIocSection(container: HTMLElement, task: Task, opts: { onC
         else delete ioc.note
         opts.onChange()
       })
+      const onPivot = opts.onPivot
+      if (onPivot) {
+        new IconButton(row)
+          .setIcon('search')
+          .setTooltip('Find this indicator across cases')
+          .onClick(() => {
+            const q = refangIoc(ioc.value)
+            onPivot(/\s/.test(q) ? `ioc:"${q}"` : `ioc:${q}`)
+          })
+      }
       const copyBtn = new IconButton(row).setIcon('copy').setTooltip('Copy real value')
       copyBtn.onClick(
         safeAsync(async () => {
@@ -84,7 +110,7 @@ export function renderIocSection(container: HTMLElement, task: Task, opts: { onC
   })
   const addBtn = addRow.createEl('button', { cls: 'pm-soc-btn', text: 'Add' })
   const commitAdd = () => {
-    const value = valueInput.value.trim()
+    const value = refangIoc(valueInput.value)
     if (!value) return
     const ioc: Ioc = { type: addSel.value as IocType, value }
     const note = noteInput.value.trim()
@@ -99,6 +125,27 @@ export function renderIocSection(container: HTMLElement, task: Task, opts: { onC
   addBtn.addEventListener('click', commitAdd)
   valueInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') commitAdd()
+  })
+  // Auto-select the detected type as the value arrives (typing or single paste);
+  // the analyst can still override the select before committing.
+  valueInput.addEventListener('input', () => {
+    const v = refangIoc(valueInput.value)
+    if (v) addSel.value = detectIocType(v)
+  })
+  // Multi-indicator paste: split/refang/classify/dedup and append every new
+  // row in one commit. Single tokens fall through to the default paste path.
+  valueInput.addEventListener('paste', (e) => {
+    const text = e.clipboardData?.getData('text') ?? ''
+    if (text.split(/[\s,]+/).filter(Boolean).length < 2) return
+    e.preventDefault()
+    const added = parseIocPaste(
+      text,
+      task.iocs.map((i) => i.value)
+    )
+    if (!added.length) return
+    task.iocs.push(...added)
+    renderRows()
+    opts.onChange()
   })
 
   renderRows()

@@ -14,6 +14,7 @@ import {
   openTaskModal,
   openProjectPicker,
   openTaskPicker,
+  openCasePicker,
   openImportModal,
   confirmDialog,
   promptText
@@ -83,6 +84,14 @@ export default class PMPlugin extends Plugin {
       name: 'Open projects pane',
       callback: () => {
         void this.router.openDashboard()
+      }
+    })
+
+    this.addCommand({
+      id: 'open-case',
+      name: 'Open case',
+      callback: () => {
+        void this.openCaseSwitcher()
       }
     })
 
@@ -348,6 +357,17 @@ export default class PMPlugin extends Plugin {
     }
   }
 
+  /** Global case switcher over every keyed task; an empty query lists recent cases. */
+  private async openCaseSwitcher(): Promise<void> {
+    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
+    const hasKeyed = projects.some((p) => flattenTasks(p.tasks).some((f) => f.task.key))
+    if (!hasKeyed) {
+      this.showNotice('No keyed cases yet. Run "Adopt issue keys for a project" first.')
+      return
+    }
+    openCasePicker(this, projects)
+  }
+
   /** Show project picker, then open TaskModal to create a task (optionally pick parent for subtask) */
   private async newIncidentFromTemplate(): Promise<void> {
     const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
@@ -445,6 +465,9 @@ export default class PMPlugin extends Plugin {
           map[newPath] = map[oldPath]
           Reflect.deleteProperty(map, oldPath)
         }
+      }
+      for (const r of this.settings.recentCases ?? []) {
+        if (r.path === oldPath) r.path = newPath
       }
     }
     await this.saveSettings()

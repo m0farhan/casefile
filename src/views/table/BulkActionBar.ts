@@ -1,4 +1,4 @@
-import { ButtonComponent, ExtraButtonComponent, Menu } from 'obsidian'
+import { ButtonComponent, ExtraButtonComponent, Menu, Notice } from 'obsidian'
 import type { Task, TaskStatus, TaskPriority } from '../../types'
 import { flattenTasks, collectAllAssignees, collectAllTags } from '../../store'
 import { findTaskById } from '../../store/TaskIndex'
@@ -80,6 +80,47 @@ function updateBarContent(bar: HTMLElement, ctx: TableContext, onAction: (a: Bul
           .onClick(() => onAction({ type: 'set-priority', priority: p.id }))
       )
     }
+    menu.showAtMouseEvent(e)
+  })
+
+  // Severity / Verdict buttons — applied here through store.updateTasks (the
+  // same batch path TableView's BulkAction handler uses; it activity-stamps
+  // both fields) instead of via onAction, so the BulkAction union stays as-is.
+  const runBulkPatch = async (patch: Partial<Task>): Promise<void> => {
+    const ids = [...ctx.state.selectedTaskIds]
+    if (!ids.length) return
+    try {
+      await ctx.plugin.store.updateTasks(ctx.project, ids, patch)
+      ctx.state.selectedTaskIds.clear()
+      await ctx.onRefresh()
+    } catch (err) {
+      console.error('Bulk action failed', err)
+      new Notice('Bulk action failed. Please try again.')
+      await ctx.onRefresh()
+    }
+  }
+
+  new ButtonComponent(left).setButtonText('Set severity').onClick((e) => {
+    const menu = new Menu()
+    for (const s of ctx.plugin.store.configFor(ctx.project).severities) {
+      menu.addItem((item) =>
+        item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => runBulkPatch({ severity: s.id }))
+      )
+    }
+    menu.addSeparator()
+    menu.addItem((item) => item.setTitle('Clear severity').onClick(() => runBulkPatch({ severity: '' })))
+    menu.showAtMouseEvent(e)
+  })
+
+  new ButtonComponent(left).setButtonText('Set verdict').onClick((e) => {
+    const menu = new Menu()
+    for (const v of ctx.plugin.store.configFor(ctx.project).verdicts) {
+      menu.addItem((item) =>
+        item.setTitle(formatBadgeText(v.icon, v.label)).onClick(() => runBulkPatch({ verdict: v.id }))
+      )
+    }
+    menu.addSeparator()
+    menu.addItem((item) => item.setTitle('Clear verdict').onClick(() => runBulkPatch({ verdict: '' })))
     menu.showAtMouseEvent(e)
   })
 

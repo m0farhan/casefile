@@ -1,7 +1,16 @@
 import { Menu } from 'obsidian'
-import type { Project, FilterState, StatusConfig, PriorityConfig, DueDateFilter } from '../../../types'
-import { collectAllAssignees, collectAllTags } from '../../../store'
-import { countActiveFilters } from '../../../store/TaskFilter'
+import type {
+  Project,
+  FilterState,
+  StatusConfig,
+  PriorityConfig,
+  SeverityConfig,
+  VerdictConfig,
+  DueDateFilter
+} from '../../../types'
+import { collectAllAssignees, collectAllTags, flattenTasks } from '../../../store'
+import { countActiveFilters, matchesFilter } from '../../../store/TaskFilter'
+import type { QueryCtx } from '../../../store/QueryParser'
 import { renderFilterDropdown } from '../../FilterDropdown'
 import { ChipButton } from '../../primitives/ChipButton'
 import { formatBadgeText } from '../../../utils'
@@ -10,6 +19,12 @@ export interface FilterRowProps {
   project: Project
   statuses: StatusConfig[]
   priorities: PriorityConfig[]
+  /** Configured severity catalog; absent/empty → no severity dropdown. */
+  severities?: SeverityConfig[]
+  /** Configured verdict catalog; absent/empty → no verdict dropdown. */
+  verdicts?: VerdictConfig[]
+  /** Context for evaluating query-bar terms in the match count. */
+  queryCtx?: Partial<QueryCtx>
   filter: FilterState
   onFilterChange: () => void
   onClear: () => void
@@ -26,6 +41,7 @@ const DUE_LABELS: Record<DueDateFilter, string> = {
 export class FilterRow {
   el: HTMLElement
   private clearBtn: ChipButton | null = null
+  private countEl: HTMLElement | null = null
 
   constructor(
     parentEl: HTMLElement,
@@ -37,7 +53,7 @@ export class FilterRow {
 
   private render(): void {
     this.el.empty()
-    const { filter, statuses, priorities, project } = this.props
+    const { filter, statuses, priorities, severities, verdicts, project } = this.props
 
     const notify = () => {
       this.props.onFilterChange()
@@ -65,6 +81,32 @@ export class FilterRow {
         notify()
       }
     )
+
+    if (severities?.length) {
+      renderFilterDropdown(
+        this.el,
+        'Severity',
+        filter.severities,
+        severities.map((s) => ({ id: s.id, label: formatBadgeText(s.icon, s.label) })),
+        (selected) => {
+          filter.severities = selected
+          notify()
+        }
+      )
+    }
+
+    if (verdicts?.length) {
+      renderFilterDropdown(
+        this.el,
+        'Verdict',
+        filter.verdicts,
+        verdicts.map((v) => ({ id: v.id, label: formatBadgeText(v.icon, v.label) })),
+        (selected) => {
+          filter.verdicts = selected
+          notify()
+        }
+      )
+    }
 
     const allAssignees = collectAllAssignees(project.tasks)
     if (allAssignees.length) {
@@ -96,7 +138,20 @@ export class FilterRow {
 
     this.renderDueDateButton(notify)
     this.renderArchivedButton(notify)
+    this.renderMatchCount()
     this.renderClearButton()
+  }
+
+  /** Subtle "N of M" beside the clear affordance, only while something filters. */
+  private renderMatchCount(): void {
+    if (countActiveFilters(this.props.filter) === 0) {
+      this.countEl = null
+      return
+    }
+    const { project, filter, statuses, queryCtx } = this.props
+    const all = flattenTasks(project.tasks)
+    const n = all.filter(({ task }) => matchesFilter(task, filter, statuses, queryCtx)).length
+    this.countEl = this.el.createSpan({ cls: 'pm-filter-match-count', text: `${n} of ${all.length}` })
   }
 
   private renderDueDateButton(notify: () => void): void {
@@ -152,10 +207,15 @@ export class FilterRow {
   }
 
   private updateClearButton(): void {
+    if (this.countEl) {
+      this.countEl.remove()
+      this.countEl = null
+    }
     if (this.clearBtn) {
       this.clearBtn.el.remove()
       this.clearBtn = null
     }
+    this.renderMatchCount()
     this.renderClearButton()
   }
 }

@@ -265,6 +265,11 @@
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+/* Drop tint must beat the strip's own :hover background while dragging over it */
+.pm-kanban-col--collapsed.pm-kanban-drop-target,
+.pm-kanban-col--collapsed.pm-kanban-drop-target:hover {
+  background: var(--gs-accent-tint);
+}
 
 /* ─ GreySurface SOC ambient ─ */
 /* Severity + sla + ioc-count chips on incident cards (chip bases shared with the table) */

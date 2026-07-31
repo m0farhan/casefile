@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Temporal } from '../dates'
 import { DEFAULT_PRIORITIES, DEFAULT_SEVERITIES, DEFAULT_STATUSES, makeTask, type Task } from '../types'
-import { evaluateQuery, parseQuery, type QueryCtx } from './QueryParser'
+import { evaluateQuery, FIELD_HELP, FIELD_MATCHERS, parseQuery, type QueryCtx } from './QueryParser'
 
 // Thursday; end of ISO week = 2026-08-02.
 const TODAY = Temporal.PlainDate.from('2026-07-30')
@@ -253,5 +253,102 @@ describe('field matchers', () => {
     expect(matches('type:incident status:!done sev:>=sev2', { ...t, status: 'done' })).toBe(false)
     expect(matches('type:incident status:!done sev:>=sev2', { ...t, severity: 'sev3' })).toBe(false)
     expect(matches('type:incident status:!done sev:>=sev2', { ...t, issueType: 'task' })).toBe(false)
+  })
+})
+
+describe('sla: matcher', () => {
+  // sev1: respond within 60m, resolve within 240m of the anchor (detectedAt).
+  const POLICIES = { sev1: { responseMins: 60, resolutionMins: 240 } }
+  const T0 = Date.parse('2026-07-30T10:00:00Z')
+  const MIN = 60_000
+  const base: Partial<Task> = { issueType: 'incident', severity: 'sev1', detectedAt: '2026-07-30T10:00:00Z' }
+  const at = (mins: number): QueryCtx => ctx({ slaPolicies: POLICIES, now: T0 + mins * MIN })
+
+  it('ok: clock running with most of the window left', () => {
+    expect(matches('sla:ok', base, at(10))).toBe(true)
+    expect(matches('sla:warn', base, at(10))).toBe(false)
+    expect(matches('sla:breached', base, at(10))).toBe(false)
+    expect(matches('sla:none', base, at(10))).toBe(false)
+  })
+
+  it('warn: under a quarter of the response window remains', () => {
+    expect(matches('sla:warn', base, at(50))).toBe(true)
+    expect(matches('sla:ok', base, at(50))).toBe(false)
+  })
+
+  it('breached: past the response deadline; negation inverts', () => {
+    expect(matches('sla:breached', base, at(90))).toBe(true)
+    expect(matches('sla:!breached', base, at(90))).toBe(false)
+    expect(matches('sla:!breached', base, at(10))).toBe(true)
+  })
+
+  it('resolution phase: respondedAt moves the clock to the resolution deadline', () => {
+    const responded = { ...base, respondedAt: '2026-07-30T10:30:00Z' }
+    expect(matches('sla:ok', responded, at(90))).toBe(true)
+    expect(matches('sla:breached', responded, at(250))).toBe(true)
+  })
+
+  it('resolved on time is ok; resolved late stays breached', () => {
+    const early = { ...base, respondedAt: '2026-07-30T10:10:00Z', resolvedAt: '2026-07-30T12:00:00Z' }
+    const late = { ...base, respondedAt: '2026-07-30T10:10:00Z', resolvedAt: '2026-07-30T15:00:00Z' }
+    expect(matches('sla:ok', early, at(500))).toBe(true)
+    expect(matches('sla:breached', late, at(500))).toBe(true)
+    expect(matches('sla:warn', late, at(500))).toBe(false)
+  })
+
+  it('none: not an incident, severity without a policy, or no policies at all', () => {
+    expect(matches('sla:none', { ...base, issueType: 'task' }, at(10))).toBe(true)
+    expect(matches('sla:none', { ...base, severity: 'sev4' }, at(10))).toBe(true)
+    // ctx without slaPolicies and nothing registered → every task is none.
+    expect(matches('sla:none', base, ctx({ now: T0 + 10 * MIN }))).toBe(true)
+    expect(matches('sla:!none', base, at(10))).toBe(true)
+  })
+
+  it('ordering ops and unknown values never match', () => {
+    expect(matches('sla:>breached', base, at(90))).toBe(false)
+    expect(matches('sla:later', base, at(90))).toBe(false)
+  })
+})
+
+describe('ioc: matcher', () => {
+  const iocs = [
+    { type: 'domain' as const, value: 'evil.com' },
+    { type: 'url' as const, value: 'hxxp://bad[.]site/payload' },
+    { type: 'hash' as const, value: 'D41D8CD98F00B204E9800998ECF8427E' }
+  ]
+
+  it('a defanged query matches a real stored value', () => {
+    expect(matches('ioc:evil[.]com', { iocs })).toBe(true)
+    expect(matches('ioc:hxxp://evil[.]com', { iocs })).toBe(false)
+  })
+
+  it('a real query matches a defanged stored value', () => {
+    expect(matches('ioc:http://bad.site', { iocs })).toBe(true)
+  })
+
+  it('substring match, case-insensitive on both sides', () => {
+    expect(matches('ioc:d41d8cd9', { iocs })).toBe(true)
+    expect(matches('ioc:bad.site', { iocs })).toBe(true)
+    expect(matches('ioc:good.site', { iocs })).toBe(false)
+  })
+
+  it('negation and empty ioc list', () => {
+    expect(matches('ioc:!evil.com', { iocs })).toBe(false)
+    expect(matches('ioc:!evil.com', { iocs: [] })).toBe(true)
+    expect(matches('ioc:evil.com', { iocs: [] })).toBe(false)
+  })
+})
+
+describe('FIELD_HELP', () => {
+  it('stays in sync with FIELD_MATCHERS (every help row is a real field, every matcher has a row)', () => {
+    for (const f of FIELD_HELP) {
+      expect(FIELD_MATCHERS[f.field], `help row '${f.field}' has no matcher`).toBeTypeOf('function')
+      expect(f.example.startsWith(`${f.field}:`), `example for '${f.field}' must use its own field`).toBe(true)
+    }
+    // Aliases (priority/prio, severity/sev) share a matcher fn, so one help row covers both.
+    const helped = new Set(FIELD_HELP.map((f) => FIELD_MATCHERS[f.field]))
+    for (const [field, fn] of Object.entries(FIELD_MATCHERS)) {
+      expect(helped.has(fn), `matcher '${field}' has no help row`).toBe(true)
+    }
   })
 })

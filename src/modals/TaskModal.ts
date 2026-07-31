@@ -9,7 +9,9 @@ import { renderKeyChip } from '../ui/composites/issueMeta'
 import { renderTaskFormFields } from './TaskFormFields'
 import { renderLifecyclePanel } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
+import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
+import { pivotToProjectQuery, renderActivitySection } from '../views/TaskDetailView'
 import { renderTimeTrackingPanel } from './TimeTrackingPanel'
 import { renderSubtasksPanel } from './SubtasksPanel'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from './DescriptionEditor'
@@ -197,7 +199,8 @@ export class TaskModal extends Modal {
 
     // ── Header: breadcrumb · overflow · close ───────────────────────────────
     const header = contentEl.createDiv('pm-te-header')
-    const prio = getPriorityConfig(this.plugin.store.configFor(this.project).priorities, this.task.priority)
+    const config = this.plugin.store.configFor(this.project)
+    const prio = getPriorityConfig(config.priorities, this.task.priority)
     if (prio?.color) header.setCssProps({ '--pm-accent-strip': prio.color })
     const crumb = header.createDiv('pm-te-crumb')
     if (this.project.icon) {
@@ -221,6 +224,16 @@ export class TaskModal extends Modal {
           new Notice('Copied task ID')
         })
       )
+    }
+    if (this.task.issueType === 'incident') {
+      renderSeverityBadge(
+        crumb,
+        config.severities.find((s) => s.id === this.task.severity)
+      )
+      // Registered chips unregister themselves: the shared 30s tick drops any
+      // chip whose element left the DOM, and both onClose and every render()
+      // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).
+      renderSlaChip(crumb, this.task, this.plugin.settings.slaPolicies)
     }
 
     header.createDiv('pm-te-header-spacer')
@@ -311,7 +324,16 @@ export class TaskModal extends Modal {
     // onChange is a no-op here: the modal persists the whole clone on Save.
     if (this.task.issueType === 'incident') {
       renderLifecyclePanel(body, this.task, { onChange: () => {} })
-      renderIocSection(body, this.task, { onChange: () => {} })
+      renderIocSection(body, this.task, {
+        onChange: () => {},
+        onPivot: (query) => {
+          // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
+          this.saved = false
+          this.cancelled = false
+          this.close()
+          void pivotToProjectQuery(this.plugin, this.project.filePath, query)
+        }
+      })
     }
 
     // Comments render for every task with a hydrated body (new tasks have none yet).
@@ -320,6 +342,7 @@ export class TaskModal extends Modal {
       this.commentsSection = renderCommentsSection(body, this.plugin, this.project, this.task, {
         onChange: () => this.render()
       })
+      renderActivitySection(body, this.task)
     }
 
     // ── Subtasks ────────────────────────────────────────────────────────────

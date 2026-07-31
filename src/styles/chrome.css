@@ -60,6 +60,53 @@
   margin-left: auto;
 }
 
+/* Query-syntax help ('?' beside the search box) */
+.pm-icon-btn.pm-query-help-btn {
+  flex-shrink: 0;
+  color: var(--gs-ink-muted);
+}
+.pm-query-help {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 3px 12px;
+  padding: 4px 6px;
+  font-size: var(--font-ui-smaller);
+}
+.pm-query-help-title {
+  grid-column: 1 / -1;
+  color: var(--gs-ink-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.pm-query-help-code {
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  color: var(--text-normal);
+  white-space: nowrap;
+  user-select: all; /* one click selects the whole example for copying */
+  cursor: copy;
+}
+.pm-query-help-hint {
+  color: var(--gs-ink-muted);
+}
+.pm-query-help-sep {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--gs-hairline);
+  margin: 4px 0 2px;
+}
+
+/* "N of M" match count beside the clear-filter chip */
+.pm-filter-match-count {
+  color: var(--gs-ink-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .pm-project-header-filter {
   display: flex;
   align-items: center;

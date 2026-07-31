@@ -919,7 +919,15 @@ export class ProjectStore implements TaskSource {
   }
 
   /** Fields whose changes land in the append-only audit log. A const list, not config. */
-  private static readonly ACTIVITY_FIELDS = ['status', 'severity', 'priority', 'verdict', 'assignees', 'due'] as const
+  private static readonly ACTIVITY_FIELDS = [
+    'status',
+    'severity',
+    'priority',
+    'verdict',
+    'assignees',
+    'due',
+    'bucket'
+  ] as const
 
   /**
    * Append audit-log entries for tracked field changes onto the patch, and
@@ -940,6 +948,16 @@ export class ProjectStore implements TaskSource {
       const nextStr = Array.isArray(next) ? next.join(', ') : String(next)
       if (prevStr === nextStr) continue
       entries.push({ at, field, from: prevStr, to: nextStr })
+    }
+
+    // IOC list changes: one entry per added/removed value, diffed against the
+    // live task like the fields above. Type/note edits on an existing value
+    // don't log — the value is the indicator's identity.
+    if (patch.iocs !== undefined) {
+      const prevVals = new Set(task.iocs.map((i) => i.value))
+      const nextVals = new Set(patch.iocs.map((i) => i.value))
+      for (const v of nextVals) if (!prevVals.has(v)) entries.push({ at, field: 'iocs', from: '', to: v })
+      for (const v of prevVals) if (!nextVals.has(v)) entries.push({ at, field: 'iocs', from: v, to: '' })
     }
 
     // Incident lifecycle auto-stamps (manual edits in the patch always win).

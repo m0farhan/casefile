@@ -1,5 +1,6 @@
-import type { Project, FilterState, StatusConfig, PriorityConfig } from '../../../types'
+import type { Project, FilterState, StatusConfig, PriorityConfig, SeverityConfig, VerdictConfig } from '../../../types'
 import { isFilterActive } from '../../../store/TaskFilter'
+import type { QueryCtx } from '../../../store/QueryParser'
 import { PrimaryRow } from './PrimaryRow'
 import { FilterRow } from './FilterRow'
 
@@ -7,6 +8,12 @@ export interface ProjectHeaderProps {
   project: Project
   statuses: StatusConfig[]
   priorities: PriorityConfig[]
+  /** Configured severity catalog for the severity dropdown; absent → no dropdown. */
+  severities?: SeverityConfig[]
+  /** Configured verdict catalog for the verdict dropdown; absent → no dropdown. */
+  verdicts?: VerdictConfig[]
+  /** Context for query-bar terms in the header match count (same shape the views pass). */
+  queryCtx?: Partial<QueryCtx>
   filter: FilterState
   activeSavedViewId: string | null
   onFilterChange: () => void
@@ -87,6 +94,9 @@ export class ProjectHeader {
       project: this.props.project,
       statuses: this.props.statuses,
       priorities: this.props.priorities,
+      severities: this.props.severities,
+      verdicts: this.props.verdicts,
+      queryCtx: this.props.queryCtx,
       filter: this.props.filter,
       onFilterChange: this.props.onFilterChange,
       onClear: this.props.onClearFilter

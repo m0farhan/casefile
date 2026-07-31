@@ -1,7 +1,10 @@
 import { ButtonComponent, Menu } from 'obsidian'
 import type { Project, FilterState, SavedView } from '../../../types'
 import { ChipButton } from '../../primitives/ChipButton'
+import { IconButton } from '../../primitives/IconButton'
+import { Popover } from '../../primitives/Popover'
 import { isFilterActive } from '../../../store/TaskFilter'
+import { FIELD_HELP, OPERATOR_HELP } from '../../../store/QueryParser'
 import { safeAsync } from '../../../utils'
 
 export interface PrimaryRowProps {
@@ -27,6 +30,7 @@ export class PrimaryRow {
   ) {
     this.el = parentEl.createDiv('pm-project-header-primary')
     this.renderSearchInput()
+    this.renderQueryHelp()
     this.volatileEl = this.el.createDiv('pm-project-header-actions')
     this.renderVolatile()
   }
@@ -58,6 +62,32 @@ export class PrimaryRow {
     input.addEventListener('input', () => {
       this.props.filter.text = input.value
       this.props.onSearchChange()
+    })
+  }
+
+  /** '?' beside the search box: the query grammar, one row per field, examples selectable in one click. */
+  private renderQueryHelp(): void {
+    let pop: Popover | null = null
+    const btn = new IconButton(this.el).setIcon('help-circle').setTooltip('Query syntax')
+    btn.el.addClass('pm-query-help-btn')
+    btn.onClick(() => {
+      if (pop?.isOpen) {
+        pop.close()
+        return
+      }
+      pop = new Popover({ anchor: btn.el, width: 300, onClose: () => (pop = null) })
+      const body = pop.contentEl.createDiv('pm-query-help')
+      body.createDiv({ cls: 'pm-query-help-title', text: 'Query syntax' })
+      for (const f of FIELD_HELP) {
+        body.createEl('code', { cls: 'pm-query-help-code', text: f.example })
+        body.createSpan({ cls: 'pm-query-help-hint', text: f.hint })
+      }
+      body.createDiv('pm-query-help-sep')
+      for (const op of OPERATOR_HELP) {
+        body.createEl('code', { cls: 'pm-query-help-code', text: op.example })
+        body.createSpan({ cls: 'pm-query-help-hint', text: op.hint })
+      }
+      pop.open()
     })
   }
 

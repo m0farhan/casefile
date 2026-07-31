@@ -5,7 +5,15 @@ import { flattenTasks } from '../../store/TaskTreeOps'
 import { svgEl } from '../../utils'
 import { formatSlaRemaining } from '../../soc/sla'
 import type { SubView } from '../SubView'
-import { openedClosedPerWeek, slaCompliance, timeInStatus, verdictBreakdown } from './reportData'
+import {
+  lifecycleDurations,
+  openedClosedPerWeek,
+  slaCompliance,
+  timeInStatus,
+  verdictBreakdown,
+  type DurationStat,
+  type LifecyclePhases
+} from './reportData'
 
 const WEEKS = 12
 
@@ -32,9 +40,12 @@ export class ReportsView implements SubView {
       severities: cfg.severities,
       currentUser: this.plugin.settings.currentUser
     }
+    // Reports are historical: archiving a closed case must not erase it from
+    // the charts, so the corpus always includes archived tasks.
+    const reportFilter: FilterState = { ...this.filter, showArchived: true }
     const tasks = flattenTasks(this.project.tasks)
       .map((f) => f.task)
-      .filter((t) => matchesFilter(t, this.filter, cfg.statuses, queryCtx))
+      .filter((t) => matchesFilter(t, reportFilter, cfg.statuses, queryCtx))
     const incidents = tasks.filter((t) => t.issueType === 'incident')
     const now = Date.now()
 
@@ -42,6 +53,7 @@ export class ReportsView implements SubView {
     this.renderTimeInStatus(root, tasks, now)
     this.renderVerdicts(root, incidents)
     this.renderSlaCompliance(root, incidents, now)
+    this.renderLifecycleDurations(root, incidents)
   }
 
   private section(root: HTMLElement, title: string): HTMLElement {
@@ -177,6 +189,37 @@ export class ReportsView implements SubView {
         cls: 'pm-report-tile-detail',
         text: `${row.met} met · ${row.breached} breached · ${row.open} open · ${row.noData} no data`
       })
+    }
+  }
+
+  private renderLifecycleDurations(root: HTMLElement, incidents: Task[]): void {
+    const s = this.section(root, 'Time to respond / contain / resolve')
+    const { overall, bySeverity } = lifecycleDurations(incidents)
+    if (!overall.respond && !overall.contain && !overall.resolve) {
+      s.createDiv({ cls: 'pm-report-empty', text: 'No lifecycle data yet.' })
+      return
+    }
+    const cfg = this.plugin.store.configFor(this.project)
+    const grid = s.createDiv('pm-report-tiles')
+    const tile = (title: string, phases: LifecyclePhases) => {
+      const el = grid.createDiv('pm-report-tile')
+      el.createDiv({ cls: 'pm-report-tile-title', text: title })
+      const detail = (label: string, stat: DurationStat | null) => {
+        el.createDiv({
+          cls: 'pm-report-tile-detail',
+          text: stat
+            ? `${label} · mean ${formatSlaRemaining(stat.meanMs)} · median ${formatSlaRemaining(stat.medianMs)} · n=${stat.n}`
+            : `${label} · no data`
+        })
+      }
+      detail('Respond', phases.respond)
+      detail('Contain', phases.contain)
+      detail('Resolve', phases.resolve)
+    }
+    tile('All severities', overall)
+    for (const row of bySeverity) {
+      const sev = cfg.severities.find((x) => x.id === row.severityId)
+      tile(sev?.label ?? (row.severityId === 'none' ? 'No severity' : row.severityId), row)
     }
   }
 }

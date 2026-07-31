@@ -728,3 +728,40 @@ input.pm-pop-field:focus {
   font-family: var(--gs-font-mono);
   font-size: 12px;
 }
+
+/* ─ GreySurface activity timeline ─ */
+/* The shared section header is space-between; here the toggle sits beside the
+   title, so pack them left. The whole header is the collapse hit target. */
+.pm-activity-header {
+  justify-content: flex-start;
+  gap: 4px;
+  cursor: pointer;
+}
+/* No display property on .pm-activity-list: the hidden attribute (collapsed
+   state) relies on the UA's [hidden] { display: none }. */
+.pm-activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+.pm-activity-at {
+  flex: none;
+  font-family: var(--gs-font-mono);
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.pm-activity-change {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--gs-ink-muted);
+}
+.pm-activity-field {
+  color: var(--gs-ink);
+}
+.pm-activity-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+}

@@ -4,14 +4,84 @@ import type { Project, Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from '../modals/DescriptionEditor'
 import { renderCommentsSection, type CommentsSectionHandle } from '../soc/CommentsSection'
 import { renderTaskFormFields } from '../modals/TaskFormFields'
-import { renderLifecyclePanel } from '../soc/LifecyclePanel'
+import { renderLifecyclePanel, isoToLocalInput } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
+import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderSubtasksPanel } from '../modals/SubtasksPanel'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
+import { CollapseToggle } from '../ui/primitives/CollapseToggle'
+import { ProjectView, PM_PROJECT_VIEW_TYPE } from './ProjectView'
 
 export const GSPM_TASK_DETAIL_VIEW_TYPE = 'gspm-task-detail'
+
+/**
+ * Read-only audit timeline rendered from task.activity (store-stamped field
+ * changes plus the Notifier's persisted SLA-breach entries). Collapsed by
+ * default; shared by the detail panel and the task modal.
+ */
+export function renderActivitySection(container: HTMLElement, task: Task): void {
+  const section = container.createDiv('pm-modal-section pm-activity-section')
+  const header = section.createDiv('pm-modal-section-header pm-activity-header')
+  let collapsed = true
+  // The toggle's own click bubbles to the header handler below — its onToggle
+  // stays a no-op so a triangle click doesn't toggle twice.
+  const toggle = new CollapseToggle(header, { collapsed, onToggle: () => {} })
+  toggle.el.setAttr('aria-label', 'Expand activity')
+  header.createEl('h4', { text: `Activity (${task.activity.length})`, cls: 'pm-modal-section-title' })
+  const list = section.createDiv('pm-activity-list')
+  list.hidden = collapsed
+  header.addEventListener('click', () => {
+    collapsed = !collapsed
+    toggle.el.toggleClass('is-collapsed', collapsed)
+    toggle.el.setAttr('aria-label', collapsed ? 'Expand activity' : 'Collapse activity')
+    list.hidden = collapsed
+  })
+
+  if (!task.activity.length) {
+    list.createDiv({ cls: 'pm-activity-empty', text: 'No activity recorded' })
+    return
+  }
+  for (const e of task.activity) {
+    const row = list.createDiv('pm-activity-row')
+    // Viewer-local minute stamp (the Comments format); raw value when unparseable.
+    row.createSpan({ cls: 'pm-activity-at', text: isoToLocalInput(e.at).replace('T', ' ') || e.at })
+    const change = row.createSpan({ cls: 'pm-activity-change' })
+    change.createSpan({ cls: 'pm-activity-field', text: `${e.field}:` })
+    change.appendText(` ${e.from || '—'} → ${e.to || '—'}`)
+  }
+}
+
+/**
+ * IOC pivot shared by the detail panel and the task modal: push `query` into
+ * the project view's query bar (through its normal filter path, so it
+ * persists and repaints) and surface that leaf. When no view for the project
+ * is open, open one via the router — openProject awaits setState, so the view
+ * has loaded before the query is set.
+ */
+export async function pivotToProjectQuery(plugin: PMPlugin, projectPath: string, query: string): Promise<void> {
+  const find = (): ProjectView | null => {
+    for (const leaf of plugin.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
+      if (leaf.view instanceof ProjectView && leaf.view.filePath === projectPath) return leaf.view
+    }
+    return null
+  }
+  let view = find()
+  if (!view) {
+    await plugin.router.openProjectByPath(projectPath)
+    view = find()
+  }
+  if (view) {
+    view.setSearchQuery(query)
+    await plugin.app.workspace.revealLeaf(view.leaf)
+    return
+  }
+  // ponytail: honest fallback — the project file is gone or unopenable, so hand
+  // the analyst the query instead of failing silently.
+  await navigator.clipboard.writeText(query)
+  new Notice('No project view available — search query copied to clipboard')
+}
 
 interface TaskDetailState {
   projectPath: string
@@ -144,6 +214,16 @@ export class TaskDetailView extends ItemView {
     this.dirty = false
     try {
       await this.plugin.store.updateTask(this.project, this.task.id, { ...this.task, title: this.persistedTitle })
+      // Store-side stamps (activity entries, lifecycle timestamps, completion)
+      // land on the LIVE task, not this editor clone. Sync them back, or the
+      // next debounced whole-task patch would overwrite them with stale values.
+      const live = this.project.taskIndex.get(this.task.id)?.task
+      if (live) {
+        this.task.activity = JSON.parse(JSON.stringify(live.activity)) as Task['activity']
+        this.task.respondedAt = live.respondedAt
+        this.task.resolvedAt = live.resolvedAt
+        this.task.completed = live.completed
+      }
       // The store marks this write as a self-write, so open boards deliberately
       // skip their file-watcher reload — but that skip assumes the SAVING view
       // refreshes itself. The panel is a different view: poke the boards.
@@ -196,6 +276,16 @@ export class TaskDetailView extends ItemView {
       config.issueTypes.find((t) => t.id === task.issueType)
     )
     if (task.key) renderKeyChip(header, task.key, { copy: true })
+    if (task.issueType === 'incident') {
+      renderSeverityBadge(
+        header,
+        config.severities.find((s) => s.id === task.severity)
+      )
+      // Registered chips unregister themselves: the shared 30s tick drops any
+      // chip whose element left the DOM, and both onClose and every render()
+      // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).
+      renderSlaChip(header, task, this.plugin.settings.slaPolicies)
+    }
     header.createDiv('pm-td-header-spacer')
     if (task.filePath) {
       const filePath = task.filePath
@@ -260,7 +350,10 @@ export class TaskDetailView extends ItemView {
     })
     if (task.issueType === 'incident') {
       renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave() })
-      renderIocSection(body, task, { onChange: () => this.scheduleSave() })
+      renderIocSection(body, task, {
+        onChange: () => this.scheduleSave(),
+        onPivot: (query) => void pivotToProjectQuery(this.plugin, project.filePath, query)
+      })
     }
     this.commentsSection?.destroy()
     this.commentsSection = renderCommentsSection(body, this.plugin, project, task, {
@@ -269,6 +362,7 @@ export class TaskDetailView extends ItemView {
         this.render()
       }
     })
+    renderActivitySection(body, task)
     renderSubtasksPanel(body, task, this.plugin, config.statuses)
     renderTimeTrackingPanel(body, task)
 

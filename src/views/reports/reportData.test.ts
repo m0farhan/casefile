@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, makeProject, makeTask, type SlaPolicy } from '../../types'
 import { buildHandover } from '../../soc/handover'
-import { openedClosedPerWeek, slaCompliance, timeInStatus, verdictBreakdown } from './reportData'
+import { lifecycleDurations, openedClosedPerWeek, slaCompliance, timeInStatus, verdictBreakdown } from './reportData'
 
 const NOW = Date.parse('2026-07-30T12:00:00.000Z') // a Thursday, ISO week 2026-W31
 const DAY = 86_400_000
@@ -75,6 +75,52 @@ describe('verdictBreakdown + slaCompliance', () => {
       { severityId: 'sev1', met: 1, breached: 1, noData: 0, open: 1 },
       { severityId: 'sev9', met: 0, breached: 0, noData: 1, open: 0 }
     ])
+  })
+})
+
+describe('lifecycleDurations', () => {
+  const HOUR = 3_600_000
+  const inc = (over: Parameters<typeof makeTask>[0]) =>
+    makeTask({ issueType: 'incident', severity: 'sev1', detectedAt: '2026-07-30T00:00:00.000Z', ...over })
+
+  it('computes mean and median per phase over stamped incidents only', () => {
+    const { overall } = lifecycleDurations([
+      inc({ respondedAt: '2026-07-30T01:00:00.000Z', resolvedAt: '2026-07-30T04:00:00.000Z' }),
+      inc({ respondedAt: '2026-07-30T03:00:00.000Z' }),
+      inc({ respondedAt: '2026-07-30T08:00:00.000Z' }),
+      inc({}) // no endpoints stamped — contributes nothing
+    ])
+    expect(overall.respond).toEqual({ n: 3, meanMs: 4 * HOUR, medianMs: 3 * HOUR })
+    expect(overall.contain).toBeNull()
+    expect(overall.resolve).toEqual({ n: 1, meanMs: 4 * HOUR, medianMs: 4 * HOUR })
+  })
+
+  it('even sample count → median is the midpoint of the two middle values', () => {
+    const { overall } = lifecycleDurations([
+      inc({ containedAt: '2026-07-30T01:00:00.000Z' }),
+      inc({ containedAt: '2026-07-30T02:00:00.000Z' })
+    ])
+    expect(overall.contain).toEqual({ n: 2, meanMs: 1.5 * HOUR, medianMs: 1.5 * HOUR })
+  })
+
+  it('groups by severity, sorted, with a separate overall aggregate', () => {
+    const { overall, bySeverity } = lifecycleDurations([
+      inc({ severity: 'sev2', containedAt: '2026-07-30T06:00:00.000Z' }),
+      inc({ containedAt: '2026-07-30T02:00:00.000Z' })
+    ])
+    expect(bySeverity.map((r) => r.severityId)).toEqual(['sev1', 'sev2'])
+    expect(bySeverity[0].contain).toMatchObject({ n: 1, meanMs: 2 * HOUR })
+    expect(bySeverity[1].contain).toMatchObject({ n: 1, meanMs: 6 * HOUR })
+    expect(overall.contain).toMatchObject({ n: 2, meanMs: 4 * HOUR })
+  })
+
+  it('ignores endpoints before detectedAt and incidents without detectedAt', () => {
+    const { overall, bySeverity } = lifecycleDurations([
+      inc({ respondedAt: '2026-07-29T23:00:00.000Z' }), // before detection
+      makeTask({ issueType: 'incident', respondedAt: '2026-07-30T01:00:00.000Z' }) // no detectedAt
+    ])
+    expect(overall).toEqual({ respond: null, contain: null, resolve: null })
+    expect(bySeverity).toEqual([])
   })
 })
 

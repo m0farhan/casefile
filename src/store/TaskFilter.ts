@@ -1,4 +1,5 @@
 import { parsePlainDate, Temporal, today } from '../dates'
+import { refangIoc } from '../soc/ioc'
 import type { DueDateFilter, FilterState, StatusConfig, Task } from '../types'
 import { isTerminalStatus } from '../utils'
 import { evaluateQuery, parseQuery, type QueryCtx } from './QueryParser'
@@ -55,6 +56,8 @@ export function matchesFilter(
   // Free-text words (non-field terms) keep the original substring semantics below.
   const q = compiled.freeText.toLowerCase()
   if (q) {
+    // Refanged on both sides so a pasted defanged indicator still hits the stored value.
+    const iocQ = refangIoc(q)
     if (
       !(
         task.id.toLowerCase() === q ||
@@ -63,7 +66,8 @@ export function matchesFilter(
         task.status.includes(q) ||
         task.priority.includes(q) ||
         task.assignees.some((a) => a.toLowerCase().includes(q)) ||
-        task.tags.some((t) => t.toLowerCase().includes(q))
+        task.tags.some((t) => t.toLowerCase().includes(q)) ||
+        task.iocs.some((i) => refangIoc(i.value).toLowerCase().includes(iocQ))
       )
     ) {
       return false

@@ -157,6 +157,28 @@ export function renderStatusListEditor(container: HTMLElement, opts: StatusListE
         status.complete = checkbox.checked
         opts.onChanged()
       })
+
+      const wipLabel = row.createEl('label', { cls: 'pm-settings-complete-toggle' })
+      wipLabel.createSpan({ text: `WIP`, cls: 'pm-settings-complete-text' })
+      const wip = wipLabel.createEl('input', {
+        type: 'number',
+        value: status.wipLimit !== undefined ? String(status.wipLimit) : ''
+      })
+      wip.min = '1'
+      wip.step = '1'
+      wip.setCssStyles({ width: '56px' })
+      wip.addEventListener('change', () => {
+        const n = Math.floor(Number(wip.value))
+        if (n > 0) {
+          status.wipLimit = n
+          wip.value = String(n)
+        } else {
+          // Empty/0/invalid clears the limit: the key is omitted, never written as undefined
+          delete status.wipLimit
+          wip.value = ''
+        }
+        opts.onChanged()
+      })
     }
   })
 }

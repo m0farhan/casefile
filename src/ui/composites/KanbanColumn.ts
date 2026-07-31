@@ -153,6 +153,25 @@ export class KanbanColumn {
         props.onToggleCollapse()
       }
     })
+
+    // Dropping on the collapsed strip appends to the column (no visible cards to order against)
+    col.addEventListener('dragover', (e) => {
+      e.preventDefault()
+      col.addClass('pm-kanban-drop-target')
+    })
+    col.addEventListener('dragleave', () => {
+      col.removeClass('pm-kanban-drop-target')
+    })
+    col.addEventListener(
+      'drop',
+      safeAsync(async (e: DragEvent) => {
+        e.preventDefault()
+        col.removeClass('pm-kanban-drop-target')
+        const taskId = e.dataTransfer?.getData('text/plain') ?? ''
+        if (!taskId) return
+        await props.onDrop(taskId, props.status.id, null)
+      })
+    )
   }
 }
 

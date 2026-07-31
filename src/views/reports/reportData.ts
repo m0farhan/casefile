@@ -116,6 +116,88 @@ export interface SlaComplianceRow {
   open: number
 }
 
+export interface DurationStat {
+  /** Incidents with both endpoints stamped — the "n=" shown in the UI. */
+  n: number
+  meanMs: number
+  medianMs: number
+}
+
+export interface LifecyclePhases {
+  /** detectedAt → respondedAt. Null = no incident had both stamps. */
+  respond: DurationStat | null
+  /** detectedAt → containedAt. */
+  contain: DurationStat | null
+  /** detectedAt → resolvedAt. */
+  resolve: DurationStat | null
+}
+
+export interface LifecycleRow extends LifecyclePhases {
+  severityId: string
+}
+
+interface PhaseSamples {
+  respond: number[]
+  contain: number[]
+  resolve: number[]
+}
+
+const LIFECYCLE_PHASES = [
+  ['respond', 'respondedAt'],
+  ['contain', 'containedAt'],
+  ['resolve', 'resolvedAt']
+] as const
+
+function durationStat(samples: number[]): DurationStat | null {
+  if (!samples.length) return null
+  const sorted = [...samples].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return {
+    n: sorted.length,
+    meanMs: sorted.reduce((a, b) => a + b, 0) / sorted.length,
+    medianMs: sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+  }
+}
+
+/**
+ * Mean/median time-to-respond/contain/resolve measured from detectedAt,
+ * overall and per severity. Only incidents with both endpoints stamped
+ * contribute; an endpoint before detectedAt is ignored (same guard as the
+ * lifecycle panel's summary). No stamps → null, never a made-up number.
+ */
+export function lifecycleDurations(incidents: Task[]): { overall: LifecyclePhases; bySeverity: LifecycleRow[] } {
+  const emptySamples = (): PhaseSamples => ({ respond: [], contain: [], resolve: [] })
+  const overall = emptySamples()
+  const bySev = new Map<string, PhaseSamples>()
+  for (const t of incidents) {
+    const start = Date.parse(t.detectedAt)
+    if (Number.isNaN(start)) continue
+    for (const [phase, key] of LIFECYCLE_PHASES) {
+      const end = Date.parse(t[key])
+      if (Number.isNaN(end) || end < start) continue
+      const sevId = t.severity || 'none'
+      let sev = bySev.get(sevId)
+      if (!sev) {
+        sev = emptySamples()
+        bySev.set(sevId, sev)
+      }
+      overall[phase].push(end - start)
+      sev[phase].push(end - start)
+    }
+  }
+  const toPhases = (s: PhaseSamples): LifecyclePhases => ({
+    respond: durationStat(s.respond),
+    contain: durationStat(s.contain),
+    resolve: durationStat(s.resolve)
+  })
+  return {
+    overall: toPhases(overall),
+    bySeverity: [...bySev.entries()]
+      .map(([severityId, s]) => ({ severityId, ...toPhases(s) }))
+      .sort((a, b) => a.severityId.localeCompare(b.severityId))
+  }
+}
+
 export function slaCompliance(incidents: Task[], policies: Record<string, SlaPolicy>, now: number): SlaComplianceRow[] {
   const rows = new Map<string, SlaComplianceRow>()
   for (const t of incidents) {

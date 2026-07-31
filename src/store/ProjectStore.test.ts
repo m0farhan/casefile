@@ -1192,6 +1192,42 @@ describe('activity log + incident lifecycle stamps', () => {
     expect(plain.resolvedAt).toBe('')
   })
 
+  it('logs bucket changes and ioc added/removed values', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('IocLog', 'Projects')
+    const t = await addNamed(store, project, 'Indicators')
+
+    await store.updateTask(project, t.id, {
+      bucket: 'this-week',
+      iocs: [{ type: 'ip', value: '10.0.0.1' }]
+    })
+    // Whole-list replacement (editor-style): one add + one remove.
+    await store.updateTask(project, t.id, {
+      iocs: [{ type: 'domain', value: 'evil.example' }]
+    })
+
+    expect(t.activity.map((a) => [a.field, a.from, a.to])).toEqual([
+      ['bucket', 'none', 'this-week'],
+      ['iocs', '', '10.0.0.1'],
+      ['iocs', '', 'evil.example'],
+      ['iocs', '10.0.0.1', '']
+    ])
+  })
+
+  it('ioc type/note edits and unchanged lists log nothing', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('IocQuiet', 'Projects')
+    const t = await addNamed(store, project, 'Stable')
+    await store.updateTask(project, t.id, { iocs: [{ type: 'ip', value: '10.0.0.1' }] })
+    expect(t.activity.length).toBe(1)
+
+    // Same value, different type + new note: the indicator's identity is unchanged.
+    await store.updateTask(project, t.id, { iocs: [{ type: 'domain', value: '10.0.0.1', note: 'seen' }] })
+    // Identical list again (editor deep clone re-saving).
+    await store.updateTask(project, t.id, { iocs: [{ type: 'domain', value: '10.0.0.1', note: 'seen' }] })
+    expect(t.activity.length).toBe(1)
+  })
+
   it('appendActivity writes a direct entry and persists it', async () => {
     const { store, vault, app } = newStore()
     const project = await store.createProject('Direct', 'Projects')

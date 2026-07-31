@@ -46,6 +46,7 @@ export function renderLifecyclePanel(container: HTMLElement, task: Task, opts: {
       summary.createSpan({ cls: 'pm-lc-summary-item', text: `${label}: ${formatSlaRemaining(end - detected)}` })
     }
     line('Response time', task.respondedAt)
+    line('Containment time', task.containedAt)
     line('Resolution time', task.resolvedAt)
   }
 

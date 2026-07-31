@@ -13,6 +13,7 @@ import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
 import { tickAllSlaChips } from '../soc/slaTicker'
+import { setQuerySlaPolicies } from '../store/QueryParser'
 import { taskFolderForProjectPath } from '../store/layout'
 
 export const PM_PROJECT_VIEW_TYPE = 'gspm-project'
@@ -215,10 +216,20 @@ export class ProjectView extends ItemView {
     if (!this.project) return
     this.headerEl.empty()
     const config = this.plugin.store.configFor(this.project)
+    // The `sla:` query field reads these in every subview's matchesFilter call.
+    setQuerySlaPolicies(this.plugin.settings.slaPolicies)
     this.header = new ProjectHeader(this.headerEl, {
       project: this.project,
       statuses: config.statuses,
       priorities: config.priorities,
+      severities: config.severities,
+      verdicts: config.verdicts,
+      queryCtx: {
+        priorities: config.priorities,
+        severities: config.severities,
+        currentUser: this.plugin.settings.currentUser,
+        slaPolicies: this.plugin.settings.slaPolicies
+      },
       filter: this.filter,
       activeSavedViewId: this.activeSavedViewId,
       onFilterChange: () => this.handleFilterMutation(),
@@ -228,6 +239,18 @@ export class ProjectView extends ItemView {
       onSavedViewUpdate: (id) => this.handleSavedViewUpdate(id),
       onSavedViewDelete: (id) => this.handleSavedViewDelete(id)
     })
+  }
+
+  /**
+   * Programmatic query-bar entry point (e.g. the IOC pivot from the detail
+   * panel/modal). Routes through the normal filter-mutation path so the query
+   * persists and the subview repaints, then re-renders the header so the
+   * search input shows the new text.
+   */
+  setSearchQuery(query: string): void {
+    this.filter.text = query
+    this.handleFilterMutation()
+    this.header?.refresh()
   }
 
   private handleFilterMutation(): void {

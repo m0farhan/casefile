@@ -1,5 +1,7 @@
 import { parsePlainDate, Temporal } from '../dates'
-import type { PriorityConfig, SeverityConfig, StatusConfig, Task } from '../types'
+import { refangIoc } from '../soc/ioc'
+import { slaAtRisk, slaState } from '../soc/sla'
+import type { PriorityConfig, SeverityConfig, SlaPolicy, StatusConfig, Task } from '../types'
 import { isTerminalStatus } from '../utils'
 
 /**
@@ -38,6 +40,19 @@ export interface QueryCtx {
   /** Resolves `assignee:me`. Empty → 'me' stays a literal name. */
   currentUser: string
   today: Temporal.PlainDate
+  /** SLA policy per severity id (drives `sla:`). Absent → the registered app-wide policies. */
+  slaPolicies?: Record<string, SlaPolicy>
+  /** Epoch ms for the `sla:` clock. Absent → Date.now() at evaluation (tests inject a fixed value). */
+  now?: number
+}
+
+// ponytail: module-scoped default so the frozen view ctx-construction sites need no edits —
+// ProjectView registers the live settings.slaPolicies once (setKanbanSocConfig precedent);
+// an explicit ctx.slaPolicies always wins. Nothing registered → every task is sla:none.
+let registeredSlaPolicies: Record<string, SlaPolicy> = {}
+
+export function setQuerySlaPolicies(policies: Record<string, SlaPolicy>): void {
+  registeredSlaPolicies = policies
 }
 
 export type FieldMatcher = (task: Task, op: Op, value: string, ctx: QueryCtx) => boolean
@@ -173,10 +188,55 @@ export const FIELD_MATCHERS: Record<string, FieldMatcher> = {
   archived: (task, op, value) => {
     if (value !== 'true' && value !== 'false') return false
     return withNeg(op, !!task.archived === (value === 'true'))
+  },
+  // Buckets the pure SLA clock: breached | warn (at risk) | ok | none (no clock applies).
+  sla: (task, op, value, ctx) => {
+    const policies = ctx.slaPolicies ?? registeredSlaPolicies
+    const policy = policies[task.severity]
+    const state = policy ? slaState(task, policies, ctx.now ?? Date.now()) : null
+    let bucket = 'none'
+    if (state && policy) {
+      if (state.breached) bucket = 'breached'
+      else if (slaAtRisk(state, policy)) bucket = 'warn'
+      else bucket = 'ok'
+    }
+    return withNeg(op, bucket === value)
+  },
+  // Both sides refanged + lowercased, so a defanged query hits a real stored value and vice versa.
+  ioc: (task, op, value) => {
+    const q = refangIoc(value).toLowerCase()
+    return withNeg(op, q !== '' && task.iocs.some((i) => refangIoc(i.value).toLowerCase().includes(q)))
   }
 }
 FIELD_MATCHERS.prio = FIELD_MATCHERS.priority
 FIELD_MATCHERS.sev = FIELD_MATCHERS.severity
+
+/**
+ * One row per query field for the header help popover. Co-located with
+ * FIELD_MATCHERS; the parser test asserts the two stay in sync.
+ */
+export const FIELD_HELP: { field: string; example: string; hint: string }[] = [
+  { field: 'key', example: 'key:soc-12', hint: 'exact key or prefix' },
+  { field: 'status', example: 'status:in-progress', hint: 'status id' },
+  { field: 'type', example: 'type:incident', hint: 'issue type' },
+  { field: 'prio', example: 'prio:>=high', hint: 'priority rank' },
+  { field: 'sev', example: 'sev:>=sev2', hint: 'severity rank' },
+  { field: 'verdict', example: 'verdict:false-positive', hint: 'verdict id' },
+  { field: 'assignee', example: 'assignee:me', hint: 'me · name · none' },
+  { field: 'tag', example: 'tag:phishing', hint: 'exact tag' },
+  { field: 'bucket', example: 'bucket:this-week', hint: 'backlog bucket' },
+  { field: 'progress', example: 'progress:>=50', hint: 'percent 0–100' },
+  { field: 'due', example: 'due:overdue', hint: 'keyword, date, or 7d/2w/1m' },
+  { field: 'archived', example: 'archived:true', hint: 'true / false' },
+  { field: 'sla', example: 'sla:breached', hint: 'breached / warn / ok / none' },
+  { field: 'ioc', example: 'ioc:evil[.]com', hint: 'substring, defanged ok' }
+]
+
+/** Operator rows for the query-help popover — data, like FIELD_HELP, so UI literals stay lint-clean. */
+export const OPERATOR_HELP: { example: string; hint: string }[] = [
+  { example: '!x \u00b7 >x \u00b7 >=x \u00b7 <x \u00b7 <=x', hint: 'negate \u00b7 compare' },
+  { example: 'assignee:"john smith"', hint: 'quotes keep spaces' }
+]
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 

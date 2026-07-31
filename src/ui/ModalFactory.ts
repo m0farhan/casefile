@@ -1,4 +1,4 @@
-import { type App, ButtonComponent, Modal } from 'obsidian'
+import { type App, ButtonComponent, Modal, SuggestModal } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { GSPM_TASK_DETAIL_VIEW_TYPE } from '../views/TaskDetailView'
@@ -6,6 +6,9 @@ import { TaskModal } from '../modals/TaskModal'
 import { ProjectModal } from '../modals/ProjectModal'
 import { ProjectPickerModal, TaskPickerModal } from '../modals/PickerModals'
 import { ImportModal } from '../modals/ImportModal'
+import { flattenTasks } from '../store/TaskTreeOps'
+import { findTaskById } from '../store/TaskIndex'
+import { pushRecent } from './recents'
 
 /**
  * Opens an Obsidian-native confirmation dialog.
@@ -237,7 +240,21 @@ export function openTaskDetailPanel(plugin: PMPlugin, project: Project, taskId: 
   })()
 }
 
+/**
+ * Every task-open path (board card, table row, context menu, case switcher)
+ * routes through openTaskModal, so the recents list is stamped here. Only
+ * keyed tasks are recorded — the case switcher lists nothing else.
+ */
+function recordRecentCase(plugin: PMPlugin, project: Project, task: Task): void {
+  if (!task.key) return
+  const list = plugin.settings.recentCases ?? []
+  if (list[0]?.path === project.filePath && list[0]?.id === task.id) return
+  plugin.settings.recentCases = pushRecent(list, { path: project.filePath, id: task.id })
+  void plugin.saveSettings()
+}
+
 export function openTaskModal(plugin: PMPlugin, project: Project, opts: OpenTaskModalOpts): void {
+  if (opts.task) recordRecentCase(plugin, project, opts.task)
   // Every view routes task-opening through this factory, so the modal-vs-panel
   // setting lives here. New-task creation always uses the modal — a panel for a
   // not-yet-persisted task has no autosave target.
@@ -296,6 +313,76 @@ export function openProjectPicker(plugin: PMPlugin, projects: Project[], onChoos
 
 export function openTaskPicker(plugin: PMPlugin, tasks: Task[], onChoose: (task: Task) => void): void {
   new TaskPickerModal(plugin.app, tasks, onChoose).open()
+}
+
+interface CaseEntry {
+  project: Project
+  task: Task
+}
+
+/**
+ * Global case switcher: picks over every keyed task across all projects.
+ * An empty query lists recently opened cases, most recent first; stale
+ * recents (deleted task/project, key removed) are skipped silently.
+ */
+export function openCasePicker(plugin: PMPlugin, projects: Project[]): void {
+  new CasePickerModal(plugin, projects).open()
+}
+
+class CasePickerModal extends SuggestModal<CaseEntry> {
+  private entries: CaseEntry[]
+  private recents: CaseEntry[]
+
+  constructor(
+    private plugin: PMPlugin,
+    projects: Project[]
+  ) {
+    super(plugin.app)
+    this.setPlaceholder('Open case…')
+    this.entries = projects.flatMap((project) =>
+      flattenTasks(project.tasks)
+        .filter(({ task }) => task.key)
+        .map(({ task }) => ({ project, task }))
+    )
+    const byPath = new Map(projects.map((p) => [p.filePath, p]))
+    this.recents = (plugin.settings.recentCases ?? []).flatMap((r) => {
+      const project = byPath.get(r.path)
+      const task = project ? findTaskById(project, r.id) : null
+      return project && task?.key ? [{ project, task }] : []
+    })
+  }
+
+  getSuggestions(query: string): CaseEntry[] {
+    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean)
+    if (!tokens.length) return this.recents
+    return this.entries.filter((e) => {
+      const hay = `${e.task.key} ${e.task.title}`.toLowerCase()
+      return tokens.every((t) => hay.includes(t))
+    })
+  }
+
+  renderSuggestion(entry: CaseEntry, el: HTMLElement): void {
+    const { task, project } = entry
+    el.addClass('mod-complex')
+    const content = el.createDiv({ cls: 'suggestion-content' })
+    content.createDiv({ cls: 'suggestion-title', text: `${task.key} · ${task.title}` })
+    const config = this.plugin.store.configFor(project)
+    const status = config.statuses.find((s) => s.id === task.status)?.label ?? task.status
+    const severity = task.severity
+      ? (config.severities.find((s) => s.id === task.severity)?.label ?? task.severity)
+      : ''
+    content.createDiv({ cls: 'suggestion-note', text: severity ? `${status} · ${severity}` : status })
+  }
+
+  onChooseSuggestion(entry: CaseEntry): void {
+    // Honors the openTaskIn setting; TaskModal persists edits via store.updateTask.
+    openTaskModal(this.plugin, entry.project, {
+      task: entry.task,
+      onSave: () => {
+        this.plugin.refreshProjectViews()
+      }
+    })
+  }
 }
 
 export function openImportModal(
