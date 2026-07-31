@@ -144,6 +144,10 @@ export class TaskDetailView extends ItemView {
     this.dirty = false
     try {
       await this.plugin.store.updateTask(this.project, this.task.id, { ...this.task, title: this.persistedTitle })
+      // The store marks this write as a self-write, so open boards deliberately
+      // skip their file-watcher reload — but that skip assumes the SAVING view
+      // refreshes itself. The panel is a different view: poke the boards.
+      this.plugin.refreshProjectViews()
     } catch (err) {
       console.error('[PM] Panel autosave failed', err)
       new Notice('Autosave failed. Check console for details.')
