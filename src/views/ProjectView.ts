@@ -13,6 +13,7 @@ import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
 import { tickAllSlaChips } from '../soc/slaTicker'
+import { taskFolderForProjectPath } from '../store/layout'
 
 export const PM_PROJECT_VIEW_TYPE = 'gspm-project'
 
@@ -128,7 +129,7 @@ export class ProjectView extends ItemView {
 
     const reloadIfRelevant = (filePath: string) => {
       if (!this.project || !this.filePath) return false
-      const taskFolder = this.filePath.replace(/\.md$/, '_tasks')
+      const taskFolder = taskFolderForProjectPath(this.filePath)
       return filePath.startsWith(taskFolder) || filePath === this.filePath
     }
     this.fileModifyRef = this.app.vault.on('modify', (file) => {

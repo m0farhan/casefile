@@ -8,7 +8,6 @@ import { PRIORITY_CHEVRONS } from '../ui/StatusBadge'
 import { isTerminalStatus, stringToColor } from '../utils'
 import { completionOutcome, relativeDue } from '../dates'
 import { renderCustomFieldInput } from './CustomFieldInputs'
-import attackTechniques from '../data/attack-techniques.json'
 import {
   renderSelectControl,
   renderDateControl,
@@ -425,36 +424,6 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     'tag'
   )
   tagsRow.addClass('pm-prop-row--wide')
-
-  // Techniques (MITRE ATT&CK) — all issue types, wide row like Tags. Chips show the bare
-  // technique id; the picker shows "id name" and searches both. The multiselect composite
-  // has no per-chip link-out, so chips are plain (no attack.mitre.org link).
-  const attackRow = renderPropRow(
-    grid,
-    'Techniques',
-    () => {
-      const cell = createDiv('pm-prop-value')
-      renderMultiSelect({
-        container: cell,
-        search: true,
-        addLabel: 'Add technique',
-        addLabelMore: 'Add another',
-        placeholder: 'Search techniques…',
-        labelFor: (id) => id,
-        selected: () => task.attack,
-        options: () => attackTechniques.map((t) => ({ id: t.id, label: `${t.id} ${t.name}` })),
-        add: (id) => {
-          if (!task.attack.includes(id)) task.attack.push(id)
-        },
-        remove: (id) => {
-          task.attack = task.attack.filter((a) => a !== id)
-        }
-      })
-      return cell
-    },
-    'crosshair'
-  )
-  attackRow.addClass('pm-prop-row--wide')
 
   // Depends on (extra)
   if (task.dependencies.length > 0 || shownExtras.has('depends')) {

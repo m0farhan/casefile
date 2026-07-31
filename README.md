@@ -14,14 +14,7 @@ format. See [INSTALL.md](INSTALL.md) for installing on another machine.
 If the upstream plugin is installed in the same vault, keep it disabled while
 this one is enabled — never run both.
 
-### MITRE ATT&CK data
-
-The bundled technique list (`src/data/attack-techniques.json`) is derived from
-[MITRE ATT&CK](https://attack.mitre.org)® — © The MITRE Corporation, licensed
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Regenerate it with
-`node scripts/gen-attack-techniques.mjs`.
-
-### Works with SOC Toolkit
+#### Works with SOC Toolkit
 
 Task descriptions are plain notes, so SOC Toolkit's defang and IP-reputation
 commands work inside them. The IOC table stores real values and renders them

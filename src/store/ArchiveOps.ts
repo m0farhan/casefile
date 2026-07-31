@@ -3,10 +3,11 @@ import { TFile, normalizePath } from 'obsidian'
 import type { Project } from '../types'
 import { findTaskById } from './TaskIndex'
 import { ensureFolder, moveTaskAttachmentFolder } from './vaultFs'
+import { taskFolderForProjectPath } from './layout'
 
 /** Get the task subfolder path for a project */
 function projectTaskFolder(project: Project): string {
-  return project.filePath.replace(/\.md$/, '_tasks')
+  return taskFolderForProjectPath(project.filePath)
 }
 
 export async function archiveTask(app: App, project: Project, taskId: string): Promise<void> {

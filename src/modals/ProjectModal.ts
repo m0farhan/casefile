@@ -7,6 +7,7 @@ import { renderAddButton } from '../ui/composites/addButton'
 import { Avatar } from '../ui/primitives/Avatar'
 import { IconButton } from '../ui/primitives/IconButton'
 import { renderPriorityListEditor, renderStatusListEditor } from '../ui/PaletteListEditor'
+import { caseFilePath } from '../store/layout'
 
 const PROJECT_COLORS = [
   '#8b72be',
@@ -320,8 +321,8 @@ export class ProjectModal extends Modal {
           this.project.title = title
 
           if (this.isNew) {
-            this.project.filePath = `${this.plugin.settings.projectsFolder}/${title.replace(/[\\/:*?"<>|]/g, '-')}.md`
-            await this.plugin.store.ensureFolder(this.plugin.settings.projectsFolder)
+            this.project.filePath = caseFilePath(this.plugin.settings.projectsFolder, title)
+            await this.plugin.store.ensureFolder(`${this.plugin.settings.projectsFolder}/Cases`)
           }
 
           await this.plugin.store.saveProject(this.project)

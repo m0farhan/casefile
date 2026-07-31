@@ -84,7 +84,7 @@
   --gs-issue-epic: var(--gs-purple);
   --gs-issue-story: var(--gs-green);
   --gs-issue-task: var(--gs-blue);
-  --gs-issue-bug: var(--gs-red);
+  --gs-issue-tuning: var(--gs-teal);
   --gs-issue-incident: var(--gs-amber);
 
   /* --- Type --- */

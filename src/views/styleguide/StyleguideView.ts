@@ -146,7 +146,7 @@ export class StyleguideView extends ItemView {
       '--gs-issue-epic',
       '--gs-issue-story',
       '--gs-issue-task',
-      '--gs-issue-bug',
+      '--gs-issue-tuning',
       '--gs-issue-incident',
       '--gs-ioc-ip',
       '--gs-ioc-domain',

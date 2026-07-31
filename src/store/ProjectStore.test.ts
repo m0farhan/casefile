@@ -341,8 +341,8 @@ describe('ProjectStore task attachments', () => {
 
     const file = await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
 
-    expect(file.path).toBe('Projects/Imgs_tasks/shot/attachments/pic.png')
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/shot/attachments/pic.png')).not.toBeNull()
+    expect(file.path).toBe('Projects/Tasks/Imgs/shot/attachments/pic.png')
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/shot/attachments/pic.png')).not.toBeNull()
   })
 
   it('disambiguates a colliding attachment name', async () => {
@@ -353,8 +353,8 @@ describe('ProjectStore task attachments', () => {
     const first = await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
     const second = await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
 
-    expect(first.path).toBe('Projects/Imgs_tasks/shot/attachments/pic.png')
-    expect(second.path).toBe('Projects/Imgs_tasks/shot/attachments/pic 1.png')
+    expect(first.path).toBe('Projects/Tasks/Imgs/shot/attachments/pic.png')
+    expect(second.path).toBe('Projects/Tasks/Imgs/shot/attachments/pic 1.png')
   })
 
   it('trashes the attachments folder when the task is deleted', async () => {
@@ -365,8 +365,8 @@ describe('ProjectStore task attachments', () => {
 
     await store.deleteTask(project, task.id)
 
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/shot')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/shot')).toBeNull()
   })
 
   it('moves the attachments folder when the task is renamed', async () => {
@@ -377,8 +377,8 @@ describe('ProjectStore task attachments', () => {
 
     await store.updateTask(project, task.id, { title: 'Photo' })
 
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/photo/attachments/pic.png')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/photo/attachments/pic.png')).not.toBeNull()
   })
 
   it('moves the attachments folder when the task is archived and back when unarchived', async () => {
@@ -388,12 +388,12 @@ describe('ProjectStore task attachments', () => {
     await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
 
     await store.archiveTask(project, task.id)
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/Archive/shot/attachments/pic.png')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/Archive/shot/attachments/pic.png')).not.toBeNull()
 
     await store.unarchiveTask(project, task.id)
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/Archive/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs_tasks/shot/attachments/pic.png')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/Archive/shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/shot/attachments/pic.png')).not.toBeNull()
   })
 })
 
@@ -707,8 +707,8 @@ describe('ProjectStore concurrent-save race', () => {
     const second = store.updateTask(project, b.id, { title: 'B new' })
     await Promise.all([first, second])
 
-    expect(vault.getAbstractFileByPath('Projects/Race_tasks/a-new.md')).not.toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Race_tasks/b-new.md')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Race/a-new.md')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Race/b-new.md')).not.toBeNull()
     expect(vault.getAbstractFileByPath(aOldPath)).toBeNull()
     expect(vault.getAbstractFileByPath(bOldPath)).toBeNull()
   })
@@ -820,7 +820,7 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(result).toBe('imported')
     expect(vault.getAbstractFileByPath('Notes/Idea.md')).toBeInstanceOf(TFile)
 
-    const created = vault.getAbstractFileByPath('Projects/Import_tasks/idea.md')
+    const created = vault.getAbstractFileByPath('Projects/Tasks/Import/idea.md')
     if (!(created instanceof TFile)) throw new Error('imported task file missing')
     const content = await vault.read(created)
     expect(content).toContain('pm-task: true')
@@ -834,7 +834,7 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(result).toBe('imported')
     expect(vault.getAbstractFileByPath('Notes/Idea.md')).toBeNull()
 
-    const moved = vault.getAbstractFileByPath('Projects/Import_tasks/idea.md')
+    const moved = vault.getAbstractFileByPath('Projects/Tasks/Import/idea.md')
     if (!(moved instanceof TFile)) throw new Error('imported task file missing')
     const content = await vault.read(moved)
     expect(content).toContain('pm-task: true')
@@ -852,7 +852,7 @@ describe('ProjectStore.importNoteAsTask', () => {
 
   it('skips notes that are already tasks', async () => {
     const { store, vault, project } = await importInto('copy')
-    const existing = vault.getAbstractFileByPath('Projects/Import_tasks/idea.md')
+    const existing = vault.getAbstractFileByPath('Projects/Tasks/Import/idea.md')
     if (!(existing instanceof TFile)) throw new Error('imported task file missing')
     const before = await vault.read(existing)
 
@@ -902,7 +902,7 @@ describe('ProjectStore.importTaskForest', () => {
     const task = makeTask({ title: 'Old', archived: true })
 
     await store.importTaskForest(project, [task], new Map([[task.id, source]]), 'copy')
-    expect(vault.getAbstractFileByPath('Projects/Arch_tasks/Archive/old.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Arch/Archive/old.md')).toBeInstanceOf(TFile)
     expect(vault.getAbstractFileByPath('Notes/Old.md')).toBeInstanceOf(TFile)
   })
 })

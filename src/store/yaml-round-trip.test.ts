@@ -12,7 +12,7 @@ function roundTripTask(
   const md = serializeTask(t, project, parent)
   const { frontmatter, body } = parseFrontmatter(md)
   if (!frontmatter) throw new Error('frontmatter missing')
-  return hydrateTaskFromFile(frontmatter, body, 'Projects/Test_tasks/task.md')
+  return hydrateTaskFromFile(frontmatter, body, 'Projects/Tasks/Test/task.md')
 }
 
 function roundTripProject(p: Project) {
@@ -106,7 +106,7 @@ describe('task round-trip', () => {
 
   it('subtask wikilinks derive from sub.filePath, falling back to a bare slug', () => {
     const project = makeProject('P', 'Projects/P.md')
-    const legacySub = makeTask({ id: 'sub-legacy', title: 'Legacy', filePath: 'Projects/P_tasks/legacy-12345678.md' })
+    const legacySub = makeTask({ id: 'sub-legacy', title: 'Legacy', filePath: 'Projects/Tasks/P/legacy-12345678.md' })
     const newSub = makeTask({ id: 'sub-new', title: 'Fresh One' }) // no filePath yet
     const parent = makeTask({ id: 'parent', subtasks: [legacySub, newSub] })
     const md = serializeTask(parent, project, null)
@@ -184,7 +184,7 @@ describe('project round-trip', () => {
 
   it('dedups taskIds and body links when project.tasks has the same task twice', () => {
     const p = makeProject('P', 'Projects/P.md')
-    const task = makeTask({ id: 't-dup', title: 'Dup', filePath: 'Projects/P_tasks/dup-tdup.md' })
+    const task = makeTask({ id: 't-dup', title: 'Dup', filePath: 'Projects/Tasks/P/dup-tdup.md' })
     p.tasks = [task, task]
     const md = serializeProject(p)
     const { frontmatter } = parseFrontmatter(md)
@@ -195,8 +195,8 @@ describe('project round-trip', () => {
   })
 
   it('taskFilePath returns a bare-slug path without an id suffix', () => {
-    expect(taskFilePath('Bug Fix', 'Projects/P_tasks')).toBe('Projects/P_tasks/bug-fix.md')
-    expect(taskFilePath('A/B:C', 'Projects/P_tasks')).toBe('Projects/P_tasks/a-b-c.md')
+    expect(taskFilePath('Bug Fix', 'Projects/Tasks/P')).toBe('Projects/Tasks/P/bug-fix.md')
+    expect(taskFilePath('A/B:C', 'Projects/Tasks/P')).toBe('Projects/Tasks/P/a-b-c.md')
   })
 
   it('falls back to the file basename when title is missing', () => {
@@ -222,7 +222,7 @@ describe('hydration does not alias the source frontmatter', () => {
       timeLogs: [{ date: '2026-04-01', hours: 2, note: 'init' }]
     }
 
-    const { task } = hydrateTaskFromFile(fm, '', 'Projects/P_tasks/task.md')
+    const { task } = hydrateTaskFromFile(fm, '', 'Projects/Tasks/P/task.md')
     const logs = task.timeLogs
     if (!logs) throw new Error('timeLogs missing')
     const srcLogs = fm.timeLogs as { hours: number }[]
@@ -334,7 +334,7 @@ describe('GreySurface PM field round-trips', () => {
     const md = serializeTask(legacy, project, null)
     const { frontmatter, body } = parseFrontmatter(md)
     if (!frontmatter) throw new Error('frontmatter missing')
-    const { task } = hydrateTaskFromFile(frontmatter, body, 'Projects/Test_tasks/t.md')
+    const { task } = hydrateTaskFromFile(frontmatter, body, 'Projects/Tasks/Test/t.md')
 
     expect(task.key).toBe('')
     expect(task.issueType).toBe('task')
@@ -353,7 +353,7 @@ describe('GreySurface PM field round-trips', () => {
       iocs: [{ type: 'nope', value: 'x' }, { type: 'ip' }, { type: 'ip', value: '1.2.3.4' }, 'garbage'],
       activity: [{ at: '2026-01-01T00:00:00Z', field: 'status', from: 'a', to: 'b' }, { field: 'x' }, 42]
     }
-    const { task } = hydrateTaskFromFile(fm, '', 'Projects/Test_tasks/t.md')
+    const { task } = hydrateTaskFromFile(fm, '', 'Projects/Tasks/Test/t.md')
     expect(task.iocs).toEqual([{ type: 'ip', value: '1.2.3.4' }])
     expect(task.activity).toEqual([{ at: '2026-01-01T00:00:00Z', field: 'status', from: 'a', to: 'b' }])
     expect(task.bucket).toBe('none')
@@ -396,7 +396,7 @@ describe('comments section round-trip', () => {
 
     const { frontmatter, body } = parseFrontmatter(md)
     if (!frontmatter) throw new Error('frontmatter missing')
-    const { task } = hydrateTaskFromFile(frontmatter, body, 'Projects/Test_tasks/t.md')
+    const { task } = hydrateTaskFromFile(frontmatter, body, 'Projects/Tasks/Test/t.md')
     expect(task.description).toBe('Investigating the beacon.')
     expect(task.comments).toEqual(original.comments)
   })

@@ -107,7 +107,7 @@ describe('resolveProjectConfig', () => {
 describe('issueTypes / severities / verdicts resolution', () => {
   it('inherits global issue types, severities and verdicts by default', () => {
     const resolved = resolveProjectConfig(makeOverrideProject(), DEFAULT_SETTINGS)
-    expect(resolved.issueTypes.map((t) => t.id)).toEqual(['epic', 'story', 'task', 'bug', 'incident'])
+    expect(resolved.issueTypes.map((t) => t.id)).toEqual(['epic', 'story', 'task', 'tuning', 'incident'])
     expect(resolved.severities.map((s) => s.id)).toEqual(['sev1', 'sev2', 'sev3', 'sev4'])
     expect(resolved.verdicts.length).toBe(5)
   })

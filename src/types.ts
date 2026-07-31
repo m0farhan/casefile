@@ -246,7 +246,6 @@ export interface IncidentTemplate {
     severity?: string
     priority?: string
     tags?: string[]
-    attack?: string[]
   }
   bodyMarkdown: string
 }
@@ -311,7 +310,7 @@ export const DEFAULT_ISSUE_TYPES: IssueTypeConfig[] = [
   { id: 'epic', label: 'Epic', color: '#b59aff', icon: 'zap' },
   { id: 'story', label: 'Story', color: '#4cb782', icon: 'bookmark' },
   { id: 'task', label: 'Task', color: '#4ea7fc', icon: 'square-check-big' },
-  { id: 'bug', label: 'Bug', color: '#eb5757', icon: 'bug' },
+  { id: 'tuning', label: 'Tuning', color: '#2fbfa4', icon: 'sliders-horizontal' },
   { id: 'incident', label: 'Incident', color: '#f2994a', icon: 'siren' }
 ]
 
@@ -341,7 +340,7 @@ export const DEFAULT_INCIDENT_TEMPLATES: IncidentTemplate[] = [
   {
     id: 'phishing',
     name: 'Phishing',
-    taskDefaults: { issueType: 'incident', severity: 'sev3', priority: 'high', tags: ['phishing'], attack: ['T1566'] },
+    taskDefaults: { issueType: 'incident', severity: 'sev3', priority: 'high', tags: ['phishing'] },
     bodyMarkdown: [
       '## Summary',
       '',
@@ -379,8 +378,7 @@ export const DEFAULT_INCIDENT_TEMPLATES: IncidentTemplate[] = [
       issueType: 'incident',
       severity: 'sev2',
       priority: 'critical',
-      tags: ['credentials'],
-      attack: ['T1078']
+      tags: ['credentials']
     },
     bodyMarkdown: [
       '## Summary',

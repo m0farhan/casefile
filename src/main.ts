@@ -22,6 +22,7 @@ import { Notifier } from './components/Notifier'
 import { buildHandover } from './soc/handover'
 import { ensureFolder } from './store/vaultFs'
 import { migrateProjects } from './migration'
+import { isCasesLayout, taskFolderForProjectPath } from './store/layout'
 import { safeAsync } from './utils'
 
 export default class PMPlugin extends Plugin {
@@ -134,6 +135,14 @@ export default class PMPlugin extends Plugin {
       name: 'Import notes as tasks',
       callback: () => {
         void this.importNotes()
+      }
+    })
+
+    this.addCommand({
+      id: 'migrate-to-cases-layout',
+      name: 'Move cases and tasks into tidy folders',
+      callback: () => {
+        void this.migrateToCasesLayout()
       }
     })
 
@@ -362,7 +371,6 @@ export default class PMPlugin extends Plugin {
               this.openTaskModalForProject(project, null, {
                 ...tpl.taskDefaults,
                 tags: [...(tpl.taskDefaults.tags ?? [])],
-                attack: [...(tpl.taskDefaults.attack ?? [])],
                 description: tpl.bodyMarkdown,
                 detectedAt: new Date().toISOString()
               })
@@ -386,6 +394,70 @@ export default class PMPlugin extends Plugin {
       await this.app.vault.create(path, md)
     }
     await this.app.workspace.openLinkText(path, '', true)
+  }
+
+  /**
+   * One-time move from the legacy layout (case file + sibling `X_tasks`
+   * folder sprawling in the projects folder) into `Cases/` + `Tasks/<case>/`.
+   * Uses fileManager.renameFile so every wikilink — including hand-written
+   * ones — updates automatically. Path-keyed settings are re-keyed so
+   * filters and collapse state survive.
+   */
+  private async migrateToCasesLayout(): Promise<void> {
+    const root = this.settings.projectsFolder
+    const projects = await this.store.loadAllProjects(root)
+    const legacy = projects.filter((p) => !isCasesLayout(p.filePath))
+    if (!legacy.length) {
+      this.showNotice('All cases already use the Cases/Tasks layout.')
+      return
+    }
+    const ok = await confirmDialog(
+      this.app,
+      `Move ${legacy.length} case file(s) into ${root}/Cases and their task folders into ${root}/Tasks. Links to the moved notes update automatically.`,
+      'Move'
+    )
+    if (!ok) return
+    await this.store.ensureFolder(`${root}/Cases`)
+    await this.store.ensureFolder(`${root}/Tasks`)
+
+    const moved = new Map<string, string>()
+    for (const p of legacy) {
+      const oldPath = p.filePath
+      const oldTaskFolder = taskFolderForProjectPath(oldPath)
+      const base = oldPath.slice(oldPath.lastIndexOf('/') + 1)
+      const newPath = `${root}/Cases/${base}`
+
+      const file = this.app.vault.getAbstractFileByPath(oldPath)
+      if (!file) continue
+      await this.app.fileManager.renameFile(file, newPath)
+      const taskFolder = this.app.vault.getAbstractFileByPath(oldTaskFolder)
+      if (taskFolder) {
+        await this.app.fileManager.renameFile(taskFolder, `${root}/Tasks/${base.replace(/\.md$/, '')}`)
+      }
+      moved.set(oldPath, newPath)
+
+      for (const map of [
+        this.settings.projectFilters as Record<string, unknown>,
+        this.settings.collapsedTasks as Record<string, unknown>,
+        this.settings.collapsedKanbanColumns as Record<string, unknown>
+      ]) {
+        if (map[oldPath] !== undefined) {
+          map[newPath] = map[oldPath]
+          Reflect.deleteProperty(map, oldPath)
+        }
+      }
+    }
+    await this.saveSettings()
+
+    // Open project views still point at the old paths — re-target them.
+    for (const leaf of this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
+      const view = leaf.view
+      if (view instanceof ProjectView) {
+        const newPath = moved.get(view.filePath)
+        if (newPath) await leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: newPath } })
+      }
+    }
+    this.showNotice(`Moved ${moved.size} case(s) into the Cases/Tasks layout.`)
   }
 
   private async adoptIssueKeysFlow(): Promise<void> {

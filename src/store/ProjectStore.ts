@@ -39,6 +39,7 @@ import {
   TASK_SLUG_MAX_LENGTH
 } from './YamlSerializer'
 import { ensureFolder, moveTaskAttachmentFolder } from './vaultFs'
+import { caseFilePath, taskFolderForProjectPath } from './layout'
 import type { ImportNoteOptions, TaskSource } from './TaskSource'
 
 /**
@@ -249,7 +250,7 @@ export class ProjectStore implements TaskSource {
     if (this.projectCache.size === 0) return
     if (this.peekSelfWrite(path)) return
     for (const key of this.projectCache.keys()) {
-      if (path === key || path.startsWith(key.replace(/\.md$/, '_tasks') + '/')) {
+      if (path === key || path.startsWith(taskFolderForProjectPath(key) + '/')) {
         this.projectCache.delete(key)
       }
     }
@@ -263,17 +264,19 @@ export class ProjectStore implements TaskSource {
 
   /** Get the task subfolder path for a project */
   private projectTaskFolder(project: Project): string {
-    return project.filePath.replace(/\.md$/, '_tasks')
+    return taskFolderForProjectPath(project.filePath)
   }
 
   // ─── Load ──────────────────────────────────────────────────────────────────
 
   async loadAllProjects(folder: string): Promise<Project[]> {
     await this.ensureFolder(folder)
-    // Walk the projects folder directly. Don't scan the whole vault.
-    const folderObj = this.app.vault.getAbstractFileByPath(folder)
+    // Walk the projects folder and its Cases/ subfolder. Don't scan the whole
+    // vault: top-level files are the legacy layout, Cases/ is the current one.
     const files: TFile[] = []
-    if (folderObj instanceof TFolder) {
+    for (const path of [folder, `${folder}/Cases`]) {
+      const folderObj = this.app.vault.getAbstractFileByPath(path)
+      if (!(folderObj instanceof TFolder)) continue
       for (const child of folderObj.children) {
         if (child instanceof TFile && child.extension === 'md') files.push(child)
       }
@@ -707,9 +710,9 @@ export class ProjectStore implements TaskSource {
   // ─── CRUD shortcuts ────────────────────────────────────────────────────────
 
   async createProject(title: string, folder: string): Promise<Project> {
-    const safeName = title.replace(/[\\/:*?"<>|]/g, '-')
-    const filePath = normalizePath(`${folder}/${safeName}.md`)
+    const filePath = caseFilePath(folder, title)
     const project = makeProject(title, filePath)
+    await this.ensureFolder(`${folder}/Cases`)
     await this.ensureFolder(this.projectTaskFolder(project))
     await this.saveProject(project)
     return project
