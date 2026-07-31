@@ -206,6 +206,14 @@ textarea.pm-modal-description:focus {
 .pm-subtask-title:focus {
   background: var(--background-modifier-hover);
 }
+.pm-subtask-title-link {
+  cursor: pointer;
+}
+.pm-subtask-title-link:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* Modal footer */
 .pm-modal-footer {

@@ -9,6 +9,8 @@ import { renderIocSection } from '../soc/IocSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderSubtasksPanel } from '../modals/SubtasksPanel'
+import { findTaskById } from '../store/TaskIndex'
+import { openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
 import { CollapseToggle } from '../ui/primitives/CollapseToggle'
@@ -363,7 +365,20 @@ export class TaskDetailView extends ItemView {
       }
     })
     renderActivitySection(body, task)
-    renderSubtasksPanel(body, task, this.plugin, config.statuses)
+    renderSubtasksPanel(body, task, this.plugin, config.statuses, {
+      onOpen: (sub) => {
+        const live = findTaskById(project, sub.id)
+        if (!live) {
+          new Notice('This subtask has not been saved yet — one moment.')
+          return
+        }
+        // Honors openTaskIn: in panel mode this panel becomes the subtask's page.
+        openTaskModal(this.plugin, project, {
+          task: live,
+          onSave: () => this.plugin.refreshProjectViews()
+        })
+      }
+    })
     renderTimeTrackingPanel(body, task)
 
     // Any input inside the body (description textarea, subtask titles, time

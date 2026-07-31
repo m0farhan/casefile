@@ -4,7 +4,8 @@ import { type Project, type Task, makeTask } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId, getPriorityConfig } from '../utils'
-import { confirmDialog } from '../ui/ModalFactory'
+import { confirmDialog, openTaskModal } from '../ui/ModalFactory'
+import { findTaskById } from '../store/TaskIndex'
 import { renderKeyChip } from '../ui/composites/issueMeta'
 import { renderTaskFormFields } from './TaskFormFields'
 import { renderLifecyclePanel } from '../soc/LifecyclePanel'
@@ -346,7 +347,23 @@ export class TaskModal extends Modal {
     }
 
     // ── Subtasks ────────────────────────────────────────────────────────────
-    renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses)
+    renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses, {
+      onOpen: (sub) => {
+        const live = findTaskById(this.project, sub.id)
+        if (!live) {
+          new Notice('Save first — this subtask has no page yet.')
+          return
+        }
+        // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
+        this.saved = false
+        this.cancelled = false
+        this.close()
+        openTaskModal(this.plugin, this.project, {
+          task: live,
+          onSave: () => this.plugin.refreshProjectViews()
+        })
+      }
+    })
 
     // ── Time tracking ─────────────────────────────────────────────────────────
     renderTimeTrackingPanel(body, this.task)

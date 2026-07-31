@@ -5,14 +5,16 @@ import { IconButton } from '../ui/primitives/IconButton'
 import { isTerminalStatus, getCompleteStatusId, getDefaultStatusId } from '../utils'
 
 /**
- * Renders the subtasks section: a header with a completed count, the editable list, and an
- * inline add row. The count is derived from how many subtasks sit in a terminal status.
+ * Renders the subtasks section: a header with a completed count, the list (each row opens the
+ * subtask's own page via onOpen), and an inline add row. The count is derived from how many
+ * subtasks sit in a terminal status.
  */
 export function renderSubtasksPanel(
   container: HTMLElement,
   task: Task,
   plugin: PMPlugin,
-  statuses: StatusConfig[]
+  statuses: StatusConfig[],
+  opts: { onOpen: (sub: Task) => void }
 ): void {
   const subSection = container.createDiv('pm-modal-section')
 
@@ -46,11 +48,14 @@ export function renderSubtasksPanel(
         renderCount()
       })
 
-      const titleEl = row.createSpan({ text: sub.title, cls: 'pm-subtask-title' })
-      titleEl.contentEditable = 'true'
-      titleEl.addEventListener('blur', () => {
-        sub.title = titleEl.textContent?.trim() ?? sub.title
+      // Title opens the subtask's own page; renaming happens inside it (full editor,
+      // slug-rename safety), not via inline contentEditable.
+      const titleEl = row.createSpan({
+        text: sub.title,
+        cls: 'pm-subtask-title pm-subtask-title-link',
+        attr: { role: 'link', 'aria-label': 'Open subtask' }
       })
+      titleEl.addEventListener('click', () => opts.onOpen(sub))
 
       new IconButton(row)
         .setIcon('x')
