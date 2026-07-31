@@ -38,6 +38,11 @@ export class KanbanView implements SubView {
   private renderBoard(): void {
     this.config = this.plugin.store.configFor(this.project)
     setKanbanSocConfig({ severities: this.config.severities, slaPolicies: this.plugin.settings.slaPolicies })
+    // The rebuild resets every scroll position, which reads as a jarring
+    // "refresh" on drop. Snapshot card-list and board-row scrolls (positional
+    // keying — the rebuilt DOM enumerates in the same order) and restore after.
+    const cardScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-cards')].map((el) => el.scrollTop)
+    const rowScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-board')].map((el) => el.scrollLeft)
     this.container.empty()
     this.container.addClass('pm-kanban-view')
 
@@ -81,6 +86,15 @@ export class KanbanView implements SubView {
         })
       }
     }
+    // Restore scroll positions captured before the rebuild.
+    const cardLists = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-cards')]
+    cardScrolls.forEach((top, i) => {
+      if (cardLists[i]) cardLists[i].scrollTop = top
+    })
+    const rows = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-board')]
+    rowScrolls.forEach((left, i) => {
+      if (rows[i]) rows[i].scrollLeft = left
+    })
   }
 
   private renderLanesBar(groupBy: KanbanLaneGroup): void {

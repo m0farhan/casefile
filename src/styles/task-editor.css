@@ -380,8 +380,11 @@ input.pm-pop-field:focus {
 }
 
 /* The editor draws its own close button in the header row (matching the design),
-   so suppress Obsidian's native corner close button to avoid two X's. */
-.pm-modal--task .modal-close-button {
+   so suppress Obsidian's native corner close button to avoid two X's.
+   Obsidian 1.13 renamed it .modal-close-button -> .modal-header-button; keep
+   both selectors so older installs stay covered. */
+.pm-modal--task .modal-close-button,
+.pm-modal--task > .modal-header-button {
   display: none;
 }
 

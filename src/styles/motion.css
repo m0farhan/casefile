@@ -43,10 +43,26 @@
 }
 
 /* Drop landing: the dragged card's accent border fades back to rest. A color
- * transition, deliberately outside the motion guards. */
+ * transition, deliberately outside the motion guards. The settle scale is
+ * movement, so it sits behind them. */
 .gs-landed {
   border-color: var(--gs-accent) !important;
   transition: border-color 250ms ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body:not(.gs-reduce-motion) .gs-landed {
+    animation: gs-settle 200ms ease-out;
+  }
+}
+
+@keyframes gs-settle {
+  from {
+    transform: scale(1.03);
+  }
+  to {
+    transform: none;
+  }
 }
 
 @keyframes gs-fade-up {
