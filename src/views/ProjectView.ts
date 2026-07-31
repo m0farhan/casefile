@@ -16,7 +16,7 @@ import { tickAllSlaChips } from '../soc/slaTicker'
 import { setQuerySlaPolicies } from '../store/QueryParser'
 import { taskFolderForProjectPath } from '../store/layout'
 
-export const PM_PROJECT_VIEW_TYPE = 'gspm-project'
+export const PM_PROJECT_VIEW_TYPE = 'casefile-project'
 
 interface ProjectViewState {
   filePath: string

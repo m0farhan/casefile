@@ -332,7 +332,7 @@
   width: 100%;
 }
 
-/* ─ GreySurface SOC settings ─ */
+/* ─ Casefile SOC settings ─ */
 .pm-settings-sla {
   display: flex;
   flex-direction: column;
@@ -368,7 +368,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ─ GreySurface incident templates ─ */
+/* ─ Casefile incident templates ─ */
 .pm-settings-template {
   border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-m);

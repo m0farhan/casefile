@@ -335,7 +335,7 @@ export class ProjectStore implements TaskSource {
       return project
     } catch (e) {
       console.error(`[PM] Failed to load project ${file.path}:`, e)
-      new Notice(`GreySurface PM: Failed to load "${file.basename}". Check console for details.`)
+      new Notice(`Casefile: Failed to load "${file.basename}". Check console for details.`)
       return null
     }
   }
@@ -446,7 +446,7 @@ export class ProjectStore implements TaskSource {
         console.warn(`[PM] Task file no longer exists, skipping: ${file.path}`)
       } else {
         console.error(`[PM] Failed to load task ${file.path}:`, e)
-        new Notice(`GreySurface PM: Failed to load task "${file.basename}". Check console for details.`)
+        new Notice(`Casefile: Failed to load task "${file.basename}". Check console for details.`)
       }
       return { task: null, subtaskIds: [], parentId: null }
     }
@@ -564,7 +564,7 @@ export class ProjectStore implements TaskSource {
       for (const [id, kind] of dirty) this.markDirty(project, [id], kind)
       if (e instanceof TaskFileNameConflictError) throw e
       console.error(`[PM] Failed to save project "${project.title}":`, e)
-      new Notice(`GreySurface PM: Failed to save "${project.title}". Check console for details.`)
+      new Notice(`Casefile: Failed to save "${project.title}". Check console for details.`)
       throw e
     }
   }

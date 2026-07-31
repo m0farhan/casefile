@@ -289,7 +289,7 @@
   margin-left: 20px;
 }
 
-/* ─ GreySurface issue meta ─ */
+/* ─ Casefile issue meta ─ */
 .pm-issuetype-icon {
   display: inline-flex;
   align-items: center;
@@ -341,7 +341,7 @@
   margin-right: 6px;
 }
 
-/* ─ GreySurface comments + reports ─ */
+/* ─ Casefile comments + reports ─ */
 .pm-comments-list {
   display: flex;
   flex-direction: column;

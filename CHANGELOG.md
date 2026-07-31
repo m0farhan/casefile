@@ -36,6 +36,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.1.0] - 2026-07-31 — Casefile
+
+### Changed
+
+- **Renamed to Casefile.** Plugin id `greysurface-pm` → `casefile` (new install
+  folder — see INSTALL.md for the one-time switchover incl. `data.json`),
+  display name, view types, and all user-facing text. Data format unchanged.
+- README rewritten for Casefile; the appended upstream README (whose links,
+  badges and feature claims no longer matched this plugin) was removed.
+
+### Added
+
+- `sla:` and `ioc:` query fields (breached/warn/ok/none; defang-insensitive
+  indicator search), severity and verdict filter dropdowns, a query-syntax
+  popover on the search bar, and a live "N of M" match count
+- IOC smart intake: bulk paste from reports (splits, refangs, auto-types,
+  deduplicates), auto-type detection on single values, copy-all-as-defanged-
+  block, and a per-indicator pivot that searches it across cases
+- Shift handover notes now list each open incident's defanged indicators
+- Global **Open case…** command: fuzzy switcher over every issue key, with
+  recently opened cases on empty query
+- Bulk set-severity and set-verdict in the table's bulk-action bar
+- Reports: mean/median time-to-respond / time-to-contain / time-to-resolve
+  tiles per severity; lifecycle panel shows containment time
+- Per-task activity timeline (collapsed, read-only) in the detail panel and
+  task modal; bucket moves and IOC add/remove are now activity-stamped
+- SLA countdown chip + severity badge on the detail panel and task modal
+- Kanban: collapsed columns accept drops; WIP limits editable in settings
+
+### Fixed
+
+- Reports no longer exclude archived cases — archiving a closed case must not
+  erase it from historical metrics
+- The detail panel's debounced autosave could overwrite store-side stamps
+  (activity entries, respond/resolve timestamps, completion) with stale clone
+  values; it now syncs them back after every save
+
 ## [2.0.0] - 2026-07-31 — GreySurface PM
 
 Fork of Project Manager 1.8.0 as GreySurface PM: Jira-style project and SOC

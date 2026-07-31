@@ -305,7 +305,7 @@ export const DEFAULT_PRIORITIES: PriorityConfig[] = [
   { id: 'low', label: 'Low', color: '#79b58d', icon: '' }
 ]
 
-/* Colors follow the GreySurface semantic palette (variables.css --gs-issue-*). */
+/* Colors follow the Casefile semantic palette (variables.css --gs-issue-*). */
 export const DEFAULT_ISSUE_TYPES: IssueTypeConfig[] = [
   { id: 'epic', label: 'Epic', color: '#b59aff', icon: 'zap' },
   { id: 'story', label: 'Story', color: '#4cb782', icon: 'bookmark' },

@@ -1,7 +1,7 @@
 import { type App, ButtonComponent, Modal, SuggestModal } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
-import { GSPM_TASK_DETAIL_VIEW_TYPE } from '../views/TaskDetailView'
+import { CASEFILE_TASK_DETAIL_VIEW_TYPE } from '../views/TaskDetailView'
 import { TaskModal } from '../modals/TaskModal'
 import { ProjectModal } from '../modals/ProjectModal'
 import { ProjectPickerModal, TaskPickerModal } from '../modals/PickerModals'
@@ -232,7 +232,7 @@ export function openTaskDetailPanel(plugin: PMPlugin, project: Project, taskId: 
     const leaf = plugin.app.workspace.getRightLeaf(false)
     if (!leaf) return
     await leaf.setViewState({
-      type: GSPM_TASK_DETAIL_VIEW_TYPE,
+      type: CASEFILE_TASK_DETAIL_VIEW_TYPE,
       active: true,
       state: { projectPath: project.filePath, taskId }
     })

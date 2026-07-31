@@ -1,7 +1,7 @@
 {
-  "name": "greysurface-pm",
-  "version": "2.0.0",
-  "description": "GreySurface PM - Jira-style SOC project management for Obsidian (fork of obsidian-pm)",
+  "name": "casefile",
+  "version": "2.1.0",
+  "description": "Casefile - Jira-style case and SOC incident tracking for Obsidian (based on obsidian-pm)",
   "main": "main.js",
   "type": "module",
   "scripts": {

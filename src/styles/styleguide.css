@@ -78,7 +78,7 @@
   background: color-mix(in srgb, var(--pm-sg-c) 15%, transparent);
 }
 
-/* ─ GreySurface styleguide additions ─ */
+/* ─ Casefile styleguide additions ─ */
 .pm-sg-contrast {
   display: flex;
   flex-direction: column;

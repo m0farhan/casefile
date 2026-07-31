@@ -269,7 +269,7 @@ describe('hydration does not alias the source frontmatter', () => {
   })
 })
 
-describe('GreySurface PM field round-trips', () => {
+describe('Casefile field round-trips', () => {
   it('preserves every Jira/SOC field through serialize -> hydrate', () => {
     const original = makeTask({
       id: 'gs-1',

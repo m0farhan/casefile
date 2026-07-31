@@ -6,7 +6,7 @@ import type { TaskSource } from './store'
 import { PMSettingTab } from './settings'
 import { ProjectView, PM_PROJECT_VIEW_TYPE } from './views/ProjectView'
 import { DashboardView, PM_DASHBOARD_VIEW_TYPE } from './views/DashboardView'
-import { TaskDetailView, GSPM_TASK_DETAIL_VIEW_TYPE } from './views/TaskDetailView'
+import { TaskDetailView, CASEFILE_TASK_DETAIL_VIEW_TYPE } from './views/TaskDetailView'
 import { registerStyleguide } from './views/styleguide/StyleguideView'
 import { PMViewRouter } from './views/PMViewRouter'
 import {
@@ -65,7 +65,7 @@ export default class PMPlugin extends Plugin {
 
     this.registerView(PM_PROJECT_VIEW_TYPE, (leaf) => new ProjectView(leaf, this))
     this.registerView(PM_DASHBOARD_VIEW_TYPE, (leaf) => new DashboardView(leaf, this))
-    this.registerView(GSPM_TASK_DETAIL_VIEW_TYPE, (leaf) => new TaskDetailView(leaf, this))
+    this.registerView(CASEFILE_TASK_DETAIL_VIEW_TYPE, (leaf) => new TaskDetailView(leaf, this))
     if (__STYLEGUIDE__) registerStyleguide(this)
 
     this.app.workspace.onLayoutReady(

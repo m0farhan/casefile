@@ -1,4 +1,4 @@
-/* GreySurface token layer.
+/* Casefile token layer.
  *
  * Strategy: define the --gs-* design tokens AND remap the Obsidian theme
  * variable names the inherited stylesheets consume, scoped to every mount
@@ -24,7 +24,7 @@
 .import-modal-container,
 .pm-pop,
 .pm-notice {
-  /* --- Core (GreySurface Linear DS, verbatim) --- */
+  /* --- Core (Casefile Linear DS, verbatim) --- */
   --gs-canvas: #010102;
   --gs-surface-1: #0f1011;
   --gs-surface-2: #141516;

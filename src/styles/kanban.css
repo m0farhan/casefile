@@ -178,7 +178,7 @@
   white-space: nowrap;
 }
 
-/* ─ GreySurface board upgrades ─ */
+/* ─ Casefile board upgrades ─ */
 
 /* Lanes selector, right side of the board area */
 .pm-kanban-lanes-bar {
@@ -271,7 +271,7 @@
   background: var(--gs-accent-tint);
 }
 
-/* ─ GreySurface SOC ambient ─ */
+/* ─ Casefile SOC ambient ─ */
 /* Severity + sla + ioc-count chips on incident cards (chip bases shared with the table) */
 .pm-kanban-card-soc {
   display: flex;

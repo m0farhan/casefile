@@ -282,7 +282,7 @@
   color: var(--text-muted);
 }
 
-/* ─ GreySurface backlog view ─ */
+/* ─ Casefile backlog view ─ */
 .pm-backlog {
   padding: 8px 16px;
   overflow-y: auto;

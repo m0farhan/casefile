@@ -416,7 +416,7 @@ button.pm-chip-rm {
   padding: 8px 10px;
 }
 
-/* ─ GreySurface SOC ambient ─ */
+/* ─ Casefile SOC ambient ─ */
 /* Severity badge + sla chip ride in the priority cell (no new column in v1) */
 .pm-table-cell .pm-sev-badge,
 .pm-table-cell .pm-sla {

@@ -1,10 +1,9 @@
 {
-	"id": "greysurface-pm",
-	"name": "GreySurface PM",
-	"version": "2.0.0",
+	"id": "casefile",
+	"name": "Casefile",
+	"version": "2.1.0",
 	"minAppVersion": "1.7.2",
-	"description": "Jira-style project & SOC incident tracking in Obsidian: issue keys, epics, kanban swimlanes, SLA timers, IOC tracking, reports and shift handover. Fork of Project Manager by Stepan Kropachev.",
-	"author": "Farhan (fork of Stepan Kropachev's Project Manager)",
-	"authorUrl": "https://github.com/StepanKropachev/obsidian-pm",
+	"description": "Jira-style case and SOC incident tracking in Obsidian: issue keys, epics, kanban swimlanes, SLA timers, IOC handling, reports and shift handover.",
+	"author": "Mohammed Farhan Aslam",
 	"isDesktopOnly": false
 }

@@ -592,7 +592,7 @@ input.pm-pop-field:focus {
   outline-offset: -1px;
 }
 
-/* ─ GreySurface task detail panel ─ */
+/* ─ Casefile task detail panel ─ */
 .pm-task-detail {
   padding: 12px 16px;
   overflow-y: auto;
@@ -626,7 +626,7 @@ input.pm-pop-field:focus {
   gap: 12px;
 }
 
-/* ─ GreySurface incident editor ─ */
+/* ─ Casefile incident editor ─ */
 .pm-lc-rows {
   display: flex;
   flex-direction: column;
@@ -729,7 +729,7 @@ input.pm-pop-field:focus {
   font-size: 12px;
 }
 
-/* ─ GreySurface activity timeline ─ */
+/* ─ Casefile activity timeline ─ */
 /* The shared section header is space-between; here the toggle sits beside the
    title, so pack them left. The whole header is the collapse hit target. */
 .pm-activity-header {

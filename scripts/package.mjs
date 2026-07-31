@@ -1,6 +1,6 @@
-// Builds a portable install bundle: dist/greysurface-pm-<version>.zip containing
+// Builds a portable install bundle: dist/casefile-<version>.zip containing
 // main.js, styles.css and manifest.json — unzip into any vault's
-// .obsidian/plugins/greysurface-pm/ folder. Fully offline, no dev tooling needed
+// .obsidian/plugins/casefile/ folder. Fully offline, no dev tooling needed
 // on the target machine.
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const { version } = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
-const stage = join(root, 'dist', 'greysurface-pm')
-const zip = join(root, 'dist', `greysurface-pm-${version}.zip`)
+const stage = join(root, 'dist', 'casefile')
+const zip = join(root, 'dist', `casefile-${version}.zip`)
 
 // Production build into the repo root (VAULT_PATH deliberately unset).
 // npm_execpath = the package manager that invoked this script (works under corepack).
@@ -24,5 +24,5 @@ mkdirSync(stage, { recursive: true })
 for (const f of ['main.js', 'styles.css', 'manifest.json']) {
   copyFileSync(join(root, f), join(stage, f))
 }
-execFileSync('zip', ['-qr', zip, 'greysurface-pm'], { cwd: join(root, 'dist'), stdio: 'inherit' })
+execFileSync('zip', ['-qr', zip, 'casefile'], { cwd: join(root, 'dist'), stdio: 'inherit' })
 console.log(`packaged ${zip}`)

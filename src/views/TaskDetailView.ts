@@ -14,7 +14,7 @@ import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
 import { CollapseToggle } from '../ui/primitives/CollapseToggle'
 import { ProjectView, PM_PROJECT_VIEW_TYPE } from './ProjectView'
 
-export const GSPM_TASK_DETAIL_VIEW_TYPE = 'gspm-task-detail'
+export const CASEFILE_TASK_DETAIL_VIEW_TYPE = 'casefile-task-detail'
 
 /**
  * Read-only audit timeline rendered from task.activity (store-stamped field
@@ -120,7 +120,7 @@ export class TaskDetailView extends ItemView {
   }
 
   getViewType(): string {
-    return GSPM_TASK_DETAIL_VIEW_TYPE
+    return CASEFILE_TASK_DETAIL_VIEW_TYPE
   }
   getDisplayText(): string {
     return this.task ? this.task.key || this.task.title : 'Task'

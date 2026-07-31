@@ -1,4 +1,4 @@
-/* GreySurface motion system. Every MOVEMENT rule (transform/opacity entrance)
+/* Casefile motion system. Every MOVEMENT rule (transform/opacity entrance)
  * sits behind BOTH the OS reduced-motion preference and the plugin's
  * "Reduce animations" setting (body.gs-reduce-motion — modals and popovers
  * are body descendants, so the class reaches them). Color/border transitions

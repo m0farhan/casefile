@@ -265,7 +265,7 @@ textarea.pm-modal-description:focus {
   max-width: 380px;
 }
 
-/* ─ GreySurface verdict guard ─ */
+/* ─ Casefile verdict guard ─ */
 .pm-verdict-list {
   display: flex;
   flex-direction: column;

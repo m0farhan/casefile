@@ -35,7 +35,7 @@ import { ViewSwitcher } from '../../ui/primitives/ViewSwitcher'
 import { renderPriorityBadge, renderStatusBadge, renderStatusDot } from '../../ui/StatusBadge'
 import { safeAsync } from '../../utils'
 
-export const PM_STYLEGUIDE_VIEW_TYPE = 'gspm-styleguide'
+export const PM_STYLEGUIDE_VIEW_TYPE = 'casefile-styleguide'
 
 const noop = (): void => undefined
 const noopAsync = (): Promise<void> => Promise.resolve()
@@ -110,7 +110,7 @@ export class StyleguideView extends ItemView {
   }
 
   private renderTokens(): void {
-    const sec = this.section('GreySurface tokens', 'tokens')
+    const sec = this.section('Casefile tokens', 'tokens')
     const swatchRows: [string, string[]][] = [
       ['surface ladder', ['--gs-canvas', '--gs-surface-1', '--gs-surface-2', '--gs-surface-3', '--gs-surface-4']],
       ['ink scale', ['--gs-ink', '--gs-ink-muted', '--gs-ink-subtle', '--gs-ink-tertiary']],
