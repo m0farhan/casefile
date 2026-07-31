@@ -44,14 +44,15 @@
 
 /* Drop landing: the dragged card's accent border fades back to rest. A color
  * transition, deliberately outside the motion guards. The settle scale is
- * movement, so it sits behind them. */
-.gs-landed {
-  border-color: var(--gs-accent) !important;
+ * movement, so it sits behind them. Scoped to the card so it outweighs the
+ * base and :hover border rules (motion.css loads after kanban.css). */
+.pm-kanban-card.gs-landed {
+  border-color: var(--gs-accent);
   transition: border-color 250ms ease-out;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  body:not(.gs-reduce-motion) .gs-landed {
+  body:not(.gs-reduce-motion) .pm-kanban-card.gs-landed {
     animation: gs-settle 200ms ease-out;
   }
 }

@@ -160,7 +160,7 @@ export class ProjectModal extends Modal {
       if (keyInput.value && !/^[A-Z]/.test(keyInput.value)) keyInput.value = ''
       this.project.keyPrefix = keyInput.value
     })
-    keySection.createEl('div', {
+    keySection.createDiv({
       text: 'New tasks are keyed automatically from the prefix plus a sequence number. Changing the prefix later does not re-key existing tasks.',
       cls: 'pm-modal-hint'
     })

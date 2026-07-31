@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.1.2] - 2026-07-31
+
+### Changed
+
+- Directory-review cleanups: the drop-landing border override uses card-scoped
+  specificity instead of `!important`; the property grid uses the `gap`
+  shorthand; a hint div uses `createDiv`. No behavior changes.
+
 ## [2.1.1] - 2026-07-31
 
 ### Changed
