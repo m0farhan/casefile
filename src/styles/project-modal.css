@@ -309,6 +309,9 @@
   font-size: 12px;
   color: var(--text-muted);
 }
+.pm-settings-wip-input {
+  width: 56px;
+}
 
 .pm-status-toggle {
   display: flex;

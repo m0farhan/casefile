@@ -209,6 +209,10 @@ textarea.pm-modal-description:focus {
 .pm-subtask-title-link {
   cursor: pointer;
 }
+.pm-subtask-title-link:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -1px;
+}
 .pm-subtask-title-link:hover {
   color: var(--text-accent);
   text-decoration: underline;

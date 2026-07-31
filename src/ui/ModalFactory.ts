@@ -242,11 +242,9 @@ export function openTaskDetailPanel(plugin: PMPlugin, project: Project, taskId: 
 
 /**
  * Every task-open path (board card, table row, context menu, case switcher)
- * routes through openTaskModal, so the recents list is stamped here. Only
- * keyed tasks are recorded — the case switcher lists nothing else.
+ * routes through openTaskModal, so the recents list is stamped here.
  */
 function recordRecentCase(plugin: PMPlugin, project: Project, task: Task): void {
-  if (!task.key) return
   const list = plugin.settings.recentCases ?? []
   if (list[0]?.path === project.filePath && list[0]?.id === task.id) return
   plugin.settings.recentCases = pushRecent(list, { path: project.filePath, id: task.id })
@@ -339,24 +337,20 @@ class CasePickerModal extends SuggestModal<CaseEntry> {
   ) {
     super(plugin.app)
     this.setPlaceholder('Open case…')
-    this.entries = projects.flatMap((project) =>
-      flattenTasks(project.tasks)
-        .filter(({ task }) => task.key)
-        .map(({ task }) => ({ project, task }))
-    )
+    this.entries = projects.flatMap((project) => flattenTasks(project.tasks).map(({ task }) => ({ project, task })))
     const byPath = new Map(projects.map((p) => [p.filePath, p]))
     this.recents = (plugin.settings.recentCases ?? []).flatMap((r) => {
       const project = byPath.get(r.path)
       const task = project ? findTaskById(project, r.id) : null
-      return project && task?.key ? [{ project, task }] : []
+      return project && task ? [{ project, task }] : []
     })
   }
 
   getSuggestions(query: string): CaseEntry[] {
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean)
-    if (!tokens.length) return this.recents
+    if (!tokens.length) return this.recents.length ? this.recents : this.entries
     return this.entries.filter((e) => {
-      const hay = `${e.task.key} ${e.task.title}`.toLowerCase()
+      const hay = `${e.task.key ?? ''} ${e.task.title}`.toLowerCase()
       return tokens.every((t) => hay.includes(t))
     })
   }
@@ -365,7 +359,7 @@ class CasePickerModal extends SuggestModal<CaseEntry> {
     const { task, project } = entry
     el.addClass('mod-complex')
     const content = el.createDiv({ cls: 'suggestion-content' })
-    content.createDiv({ cls: 'suggestion-title', text: `${task.key} · ${task.title}` })
+    content.createDiv({ cls: 'suggestion-title', text: task.key ? `${task.key} · ${task.title}` : task.title })
     const config = this.plugin.store.configFor(project)
     const status = config.statuses.find((s) => s.id === task.status)?.label ?? task.status
     const severity = task.severity

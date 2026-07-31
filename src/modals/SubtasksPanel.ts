@@ -53,9 +53,15 @@ export function renderSubtasksPanel(
       const titleEl = row.createSpan({
         text: sub.title,
         cls: 'pm-subtask-title pm-subtask-title-link',
-        attr: { role: 'link', 'aria-label': 'Open subtask' }
+        attr: { role: 'link', tabindex: '0', 'aria-label': 'Open subtask' }
       })
       titleEl.addEventListener('click', () => opts.onOpen(sub))
+      titleEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          opts.onOpen(sub)
+        }
+      })
 
       new IconButton(row)
         .setIcon('x')

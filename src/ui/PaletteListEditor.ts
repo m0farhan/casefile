@@ -162,11 +162,11 @@ export function renderStatusListEditor(container: HTMLElement, opts: StatusListE
       wipLabel.createSpan({ text: `WIP`, cls: 'pm-settings-complete-text' })
       const wip = wipLabel.createEl('input', {
         type: 'number',
+        cls: 'pm-settings-wip-input',
         value: status.wipLimit !== undefined ? String(status.wipLimit) : ''
       })
       wip.min = '1'
       wip.step = '1'
-      wip.setCssStyles({ width: '56px' })
       wip.addEventListener('change', () => {
         const n = Math.floor(Number(wip.value))
         if (n > 0) {

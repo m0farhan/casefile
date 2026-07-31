@@ -365,12 +365,12 @@ export default class PMPlugin extends Plugin {
     }
   }
 
-  /** Global case switcher over every keyed task; an empty query lists recent cases. */
+  /** Global case switcher over every task (keys shown when present); empty query lists recent cases. */
   private async openCaseSwitcher(): Promise<void> {
     const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
-    const hasKeyed = projects.some((p) => flattenTasks(p.tasks).some((f) => f.task.key))
-    if (!hasKeyed) {
-      this.showNotice('No keyed cases yet. Run "Adopt issue keys for a project" first.')
+    const hasTasks = projects.some((p) => p.tasks.length > 0)
+    if (!hasTasks) {
+      this.showNotice('No cases yet. Create a project and add tasks first.')
       return
     }
     openCasePicker(this, projects)
