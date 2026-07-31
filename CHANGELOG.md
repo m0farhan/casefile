@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   task modal; bucket moves and IOC add/remove are now activity-stamped
 - SLA countdown chip + severity badge on the detail panel and task modal
 - Kanban: collapsed columns accept drops; WIP limits editable in settings
+- Subtask files now nest inside their parent task's folder
+  (`Tasks/<case>/<parent>/<subtask>.md`) instead of landing flat beside it;
+  renames and re-parenting move the files along. New command **Nest subtasks
+  under their parent tasks** migrates an existing vault (link-aware,
+  idempotent); flat vaults keep loading unchanged without it
 
 ### Fixed
 

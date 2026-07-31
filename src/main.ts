@@ -156,6 +156,14 @@ export default class PMPlugin extends Plugin {
     })
 
     this.addCommand({
+      id: 'nest-subtask-files',
+      name: 'Nest subtasks under their parent tasks',
+      callback: () => {
+        void this.nestSubtaskFiles()
+      }
+    })
+
+    this.addCommand({
       id: 'adopt-issue-keys',
       name: 'Adopt issue keys for a project',
       callback: () => {
@@ -481,6 +489,29 @@ export default class PMPlugin extends Plugin {
       }
     }
     this.showNotice(`Moved ${moved.size} case(s) into the Cases/Tasks layout.`)
+  }
+
+  /**
+   * One-time move of flat subtask files into their parent task's own folder
+   * (`Tasks/<case>/<parent-slug>/<sub-slug>.md`). Link-aware renames, safe to
+   * re-run; flat vaults keep loading fine without it.
+   */
+  private async nestSubtaskFiles(): Promise<void> {
+    if (!(this.store instanceof ProjectStore)) return
+    const store = this.store
+    const projects = await store.loadAllProjects(this.settings.projectsFolder)
+    let files = 0
+    let cases = 0
+    for (const p of projects) {
+      const moved = await store.nestSubtaskFiles(p)
+      if (moved > 0) {
+        files += moved
+        cases++
+      }
+    }
+    this.showNotice(
+      files > 0 ? `Nested ${files} subtask file(s) across ${cases} case(s).` : 'All subtask files already nested.'
+    )
   }
 
   private async adoptIssueKeysFlow(): Promise<void> {

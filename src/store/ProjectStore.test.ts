@@ -145,13 +145,16 @@ describe('ProjectStore dirty-set save efficiency', () => {
     const p1 = await addNamed(store, project, 'Parent one')
     const p2 = await addNamed(store, project, 'Parent two')
     const child = await addNamed(store, project, 'Child', p1.id)
+    const oldChildPath = expectDefined(child.filePath)
     vault.resetCounts()
 
     await store.moveTask(project, child.id, p2.id)
 
     expect(vault.modifyCount.get(expectDefined(p1.filePath))).toBe(1)
     expect(vault.modifyCount.get(expectDefined(p2.filePath))).toBe(1)
-    expect(vault.modifyCount.get(expectDefined(child.filePath))).toBe(1)
+    // The child's file relocates under the new parent's folder: create + trash, not modify.
+    expect(vault.createCount.get(expectDefined(child.filePath))).toBe(1)
+    expect(vault.trashCount.get(oldChildPath)).toBe(1)
   })
 
   it('rewrites the parent (not the deleted task) on deleteTask', async () => {
@@ -394,6 +397,141 @@ describe('ProjectStore task attachments', () => {
     await store.unarchiveTask(project, task.id)
     expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/Archive/shot/attachments/pic.png')).toBeNull()
     expect(vault.getAbstractFileByPath('Projects/Tasks/Imgs/shot/attachments/pic.png')).not.toBeNull()
+  })
+})
+
+describe('ProjectStore nested subtask files', () => {
+  const reload = async (app: App, vault: FakeVault, path: string): Promise<Project> => {
+    const file = vault.getAbstractFileByPath(path)
+    if (!(file instanceof TFile)) throw new Error('missing project file')
+    const loaded = await new ProjectStore(app, () => SETTINGS).loadProject(file)
+    if (!loaded) throw new Error('reload failed')
+    return loaded
+  }
+
+  it('saves a new subtask inside its parent task folder, recursively', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Nest', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const child = await addNamed(store, project, 'Child', parent.id)
+    const grand = await addNamed(store, project, 'Grand', child.id)
+
+    expect(parent.filePath).toBe('Projects/Tasks/Nest/parent.md')
+    expect(child.filePath).toBe('Projects/Tasks/Nest/parent/child.md')
+    expect(grand.filePath).toBe('Projects/Tasks/Nest/parent/child/grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Nest/parent/child/grand.md')).toBeInstanceOf(TFile)
+  })
+
+  it('a parent title rename carries nested subtask files and keeps them loadable', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Carry', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const child = await addNamed(store, project, 'Child', parent.id)
+    const grand = await addNamed(store, project, 'Grand', child.id)
+
+    await store.updateTask(project, parent.id, { title: 'Renamed' })
+
+    expect(parent.filePath).toBe('Projects/Tasks/Carry/renamed.md')
+    expect(child.filePath).toBe('Projects/Tasks/Carry/renamed/child.md')
+    expect(grand.filePath).toBe('Projects/Tasks/Carry/renamed/child/grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Carry/renamed/child/grand.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Carry/parent')).toBeNull()
+
+    const reloaded = await reload(app, vault, project.filePath)
+    const rParent = expectDefined(flattenTasks(reloaded.tasks).find((f) => f.task.id === parent.id)).task
+    expect(rParent.subtasks.map((s) => s.id)).toEqual([child.id])
+    expect(rParent.subtasks[0].subtasks.map((s) => s.id)).toEqual([grand.id])
+  })
+
+  it('reparenting relocates the file with its own subtree, and promotion returns it to the case folder', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Repar', 'Projects')
+    const p1 = await addNamed(store, project, 'Parent one')
+    const p2 = await addNamed(store, project, 'Parent two')
+    const child = await addNamed(store, project, 'Child', p1.id)
+    const grand = await addNamed(store, project, 'Grand', child.id)
+
+    await store.moveTask(project, child.id, p2.id)
+    expect(child.filePath).toBe('Projects/Tasks/Repar/parent-two/child.md')
+    expect(grand.filePath).toBe('Projects/Tasks/Repar/parent-two/child/grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Repar/parent-two/child/grand.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Repar/parent-one/child.md')).toBeNull()
+
+    await store.moveTask(project, child.id, null)
+    expect(child.filePath).toBe('Projects/Tasks/Repar/child.md')
+    expect(grand.filePath).toBe('Projects/Tasks/Repar/child/grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Repar/child/grand.md')).toBeInstanceOf(TFile)
+  })
+
+  it('round-trips a nested layout and ignores stray non-task notes in task folders', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Round', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const child = await addNamed(store, project, 'Child', parent.id)
+    const grand = await addNamed(store, project, 'Grand', child.id)
+    const sibling = await addNamed(store, project, 'Sibling')
+    await vault.create('Projects/Tasks/Round/parent/scratch note.md', 'not a task')
+
+    const reloaded = await reload(app, vault, project.filePath)
+    const flat = flattenTasks(reloaded.tasks)
+    expect(flat.map((f) => f.task.id).sort()).toEqual([parent.id, child.id, grand.id, sibling.id].sort())
+    const rParent = expectDefined(flat.find((f) => f.task.id === parent.id)).task
+    expect(rParent.subtasks.map((s) => s.id)).toEqual([child.id])
+    expect(rParent.subtasks[0].subtasks.map((s) => s.id)).toEqual([grand.id])
+    expect(flat.some((f) => f.task.title === 'scratch note')).toBe(false)
+  })
+
+  it('duplicating a parent nests the cloned subtree under the copy, keeping child titles', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('DupNest', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await addNamed(store, project, 'Child', parent.id)
+
+    const copy = expectDefined(await store.duplicateTask(project, parent.id, true))
+
+    expect(copy.title).toBe('Parent (copy)')
+    expect(copy.subtasks[0].title).toBe('Child')
+    expect(copy.filePath).toBe('Projects/Tasks/DupNest/parent-(copy).md')
+    expect(copy.subtasks[0].filePath).toBe('Projects/Tasks/DupNest/parent-(copy)/child.md')
+    expect(vault.getAbstractFileByPath('Projects/Tasks/DupNest/parent-(copy)/child.md')).toBeInstanceOf(TFile)
+  })
+
+  it('nestSubtaskFiles migrates a flat vault into nested folders, idempotently', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Flat', 'Projects')
+    // Hand-write a flat legacy layout: every task file directly in the case folder.
+    const write = async (name: string, id: string, extra: string[]): Promise<void> => {
+      await vault.create(
+        `Projects/Tasks/Flat/${name}.md`,
+        ['---', 'pm-task: true', `id: ${id}`, `title: ${name}`, 'status: todo', ...extra, '---', ''].join('\n')
+      )
+    }
+    await write('parent', 'p1', ['subtaskIds:', '  - c1'])
+    await write('child', 'c1', ['parentId: p1', 'subtaskIds:', '  - g1'])
+    await write('grand', 'g1', ['parentId: c1'])
+
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const file = vault.getAbstractFileByPath(project.filePath)
+    if (!(file instanceof TFile)) throw new Error('project file missing')
+    const loaded = expectDefined(await store2.loadProject(file))
+    // Flat vaults load unchanged without the migration.
+    expect(flattenTasks(loaded.tasks).length).toBe(3)
+
+    expect(await store2.nestSubtaskFiles(loaded)).toBe(2)
+
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Flat/parent.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Flat/parent/child.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Flat/parent/child/grand.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Flat/child.md')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Tasks/Flat/grand.md')).toBeNull()
+
+    // Second run: nothing left to move.
+    expect(await store2.nestSubtaskFiles(loaded)).toBe(0)
+
+    const reloaded = await reload(app, vault, project.filePath)
+    const rParent = expectDefined(flattenTasks(reloaded.tasks).find((f) => f.task.id === 'p1')).task
+    expect(rParent.subtasks.map((s) => s.id)).toEqual(['c1'])
+    expect(rParent.subtasks[0].subtasks.map((s) => s.id)).toEqual(['g1'])
   })
 })
 

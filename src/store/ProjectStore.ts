@@ -21,6 +21,7 @@ import {
   deleteTaskFromTree,
   flattenTasks,
   moveTaskInTree,
+  repointDescendantFiles,
   updateTaskInTree
 } from './TaskTreeOps'
 import { hydrateProjectFromFrontmatter, hydrateTaskFromFile, hydrateTasks } from './YamlHydrator'
@@ -112,11 +113,15 @@ function fileNameFromPath(path: string): string {
  * Handles all read/write operations against the Obsidian vault.
  *
  * Storage layout:
- *   Projects/<ProjectName>.md         — project metadata (no task data)
- *   Projects/<ProjectName>/<slug>.md  — one .md per task
+ *   Projects/<ProjectName>.md                — project metadata (no task data)
+ *   Projects/<ProjectName>/<slug>.md         — one .md per top-level task
+ *   Projects/<ProjectName>/<slug>/<sub>.md   — subtask files nest inside their
+ *                                              parent's own folder, recursively
  *
- * The in-memory Project.tasks tree is assembled on load from individual
- * task files and remains unchanged for views.
+ * The loader is layout-agnostic (it scans all subfolders and rebuilds the tree
+ * from frontmatter), so flat legacy vaults keep loading unchanged. The
+ * in-memory Project.tasks tree is assembled on load from individual task files
+ * and remains unchanged for views.
  */
 export class ProjectStore implements TaskSource {
   /** Per-project promise chains to serialize concurrent saves */
@@ -265,6 +270,21 @@ export class ProjectStore implements TaskSource {
   /** Get the task subfolder path for a project */
   private projectTaskFolder(project: Project): string {
     return taskFolderForProjectPath(project.filePath)
+  }
+
+  /**
+   * The folder a task's file belongs in: its parent's own folder (parent file
+   * path minus `.md`) for subtasks, the project's task folder for roots, and
+   * the flat `Archive` for archived tasks. Falls back to the project folder
+   * when the parent has no file yet (its write failed) — the loader is
+   * layout-agnostic and the next successful save relocates.
+   */
+  private folderForTask(project: Project, task: Task): string {
+    const base = this.projectTaskFolder(project)
+    if (task.archived) return normalizePath(base + '/Archive')
+    const parentId = findParentId(project, task.id)
+    const parent = parentId ? findTaskById(project, parentId) : null
+    return parent?.filePath ? this.taskFolder(parent.filePath) : base
   }
 
   // ─── Load ──────────────────────────────────────────────────────────────────
@@ -571,8 +591,10 @@ export class ProjectStore implements TaskSource {
 
   /**
    * Write exactly the dirty tasks, located through the O(1) task index instead
-   * of walking the whole tree. Writes target distinct files, so they run
-   * concurrently — batched.
+   * of walking the whole tree. A subtask's folder is its parent's file path
+   * minus `.md`, so parents must settle (write, maybe rename) before their
+   * children's folders resolve — depth levels run in order, and within a level
+   * writes target distinct files, so they run concurrently — batched.
    */
   private async saveDirtyTasks(project: Project, folder: string, dirty: Map<string, DirtyKind>): Promise<void> {
     // Safety net: a task that has never been written to disk must get a file
@@ -582,32 +604,43 @@ export class ProjectStore implements TaskSource {
     }
     if (dirty.size === 0) return
 
-    const jobs: { task: Task; parentTask: Task | null; folder: string; kind: DirtyKind }[] = []
-    const targetPaths = new Set<string>()
-    let hasArchived = false
+    const byDepth = new Map<number, { task: Task; parentTask: Task | null; kind: DirtyKind }[]>()
     for (const [id, kind] of dirty) {
       const entry = project.taskIndex.get(id)
       if (!entry) continue // deleted after being marked dirty
-      const { task, parentId } = entry
-      const targetFolder = task.archived ? normalizePath(folder + '/Archive') : folder
-      if (task.archived) hasArchived = true
-      // Two dirty tasks resolving to the same file would race below and surface
-      // as a generic create error; detect it up front and keep the typed error.
-      const path = normalizePath(resolveTaskPath(task, targetFolder, task.filePath))
-      if (targetPaths.has(path)) throw new TaskFileNameConflictError(path)
-      targetPaths.add(path)
-      jobs.push({ task, parentTask: parentId ? findTaskById(project, parentId) : null, folder: targetFolder, kind })
+      let depth = 0
+      for (let p = entry.parentId; p; p = project.taskIndex.get(p)?.parentId ?? null) depth++
+      const level = byDepth.get(depth) ?? []
+      level.push({ task: entry.task, parentTask: entry.parentId ? findTaskById(project, entry.parentId) : null, kind })
+      byDepth.set(depth, level)
     }
-    if (hasArchived) await this.ensureFolder(normalizePath(folder + '/Archive'))
 
+    const targetPaths = new Set<string>()
     const errors: Error[] = []
     const batchSize = 16
-    for (let i = 0; i < jobs.length; i += batchSize) {
-      const results = await Promise.allSettled(
-        jobs.slice(i, i + batchSize).map((j) => this.saveTaskFile(j.task, project, j.parentTask, j.folder, j.kind))
-      )
-      for (const r of results) {
-        if (r.status === 'rejected') errors.push(r.reason instanceof Error ? r.reason : new Error(String(r.reason)))
+    for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
+      const jobs: { task: Task; parentTask: Task | null; folder: string; kind: DirtyKind }[] = []
+      const folders = new Set<string>()
+      for (const j of byDepth.get(depth) ?? []) {
+        const jobFolder = this.folderForTask(project, j.task)
+        // Two dirty tasks resolving to the same file would race below and surface
+        // as a generic create error; detect it up front and keep the typed error.
+        const path = normalizePath(resolveTaskPath(j.task, jobFolder, j.task.filePath))
+        if (targetPaths.has(path)) throw new TaskFileNameConflictError(path)
+        targetPaths.add(path)
+        folders.add(jobFolder)
+        jobs.push({ ...j, folder: jobFolder })
+      }
+      for (const f of folders) {
+        if (f !== folder) await this.ensureFolder(f)
+      }
+      for (let i = 0; i < jobs.length; i += batchSize) {
+        const results = await Promise.allSettled(
+          jobs.slice(i, i + batchSize).map((j) => this.saveTaskFile(j.task, project, j.parentTask, j.folder, j.kind))
+        )
+        for (const r of results) {
+          if (r.status === 'rejected') errors.push(r.reason instanceof Error ? r.reason : new Error(String(r.reason)))
+        }
       }
     }
     if (errors.length) {
@@ -680,10 +713,19 @@ export class ProjectStore implements TaskSource {
           this.markSelfWrite(previousPath)
           await this.app.fileManager.trashFile(oldFile)
         }
-        // Keep the task's attachment folder with the renamed note.
+        // Keep the task's own folder (attachments and nested subtask files)
+        // with the renamed note.
         this.markSelfWrite(this.taskFolder(previousPath))
         this.markSelfWrite(this.taskFolder(filePath))
-        await moveTaskAttachmentFolder(this.app, previousPath, filePath)
+        const carried = await moveTaskAttachmentFolder(this.app, previousPath, filePath)
+        if (carried) {
+          // The folder move physically carried every descendant file — re-point
+          // their in-memory paths, or the next save writes duplicates.
+          for (const pair of repointDescendantFiles(task, carried.from, carried.to)) {
+            this.markSelfWrite(pair.from)
+            this.markSelfWrite(pair.to)
+          }
+        }
       }
     } catch (e) {
       if (!(e instanceof TaskFileNameConflictError)) {
@@ -699,8 +741,7 @@ export class ProjectStore implements TaskSource {
    * surface inline, or null if the save would proceed cleanly.
    */
   findTaskFileConflict(project: Project, task: Task): TaskFileNameConflictError | null {
-    const baseFolder = this.projectTaskFolder(project)
-    const folder = task.archived ? normalizePath(baseFolder + '/Archive') : baseFolder
+    const folder = this.folderForTask(project, task)
     const desired = normalizePath(resolveTaskPath(task, folder, task.filePath))
     if (desired === task.filePath) return null
     const existing = this.app.vault.getAbstractFileByPath(desired)
@@ -782,8 +823,14 @@ export class ProjectStore implements TaskSource {
     let imported = 0
 
     const writeNode = async (task: Task, parent: Task | null): Promise<void> => {
-      const folder = task.archived ? normalizePath(baseFolder + '/Archive') : baseFolder
-      if (task.archived) await this.ensureFolder(folder)
+      // Roots land in the project folder, subtasks inside their parent's just
+      // written file's own folder; archived nodes go to the flat Archive.
+      const folder = task.archived
+        ? normalizePath(baseFolder + '/Archive')
+        : parent?.filePath
+          ? this.taskFolder(parent.filePath)
+          : baseFolder
+      if (folder !== baseFolder) await this.ensureFolder(folder)
       const source = sources.get(task.id)
       if (source) {
         const { body } = parseFrontmatter(await this.app.vault.read(source))
@@ -801,6 +848,7 @@ export class ProjectStore implements TaskSource {
       } else {
         await this.app.vault.create(dest, content)
       }
+      task.filePath = dest
       imported++
       for (const child of task.subtasks) {
         await writeNode(child, task)
@@ -817,26 +865,24 @@ export class ProjectStore implements TaskSource {
     const source = findTaskById(project, sourceId)
     if (!source) return null
     const copy = cloneTaskSubtree(source, includeSubtasks)
-    // Every task in a project shares one flat folder and its filename comes from
-    // the title slug, so a clone that keeps the source title would write over the
-    // original. Reserve a free "(copy)" title for the whole subtree, not just the
-    // root, and across the clones we're about to add so siblings don't collide.
-    const baseFolder = this.projectTaskFolder(project)
-    const claimed = new Set<string>()
+    // The copy lands beside the source in the same folder, where a clone that
+    // keeps the source title would write over the original — so only the root
+    // copy needs a free "(copy)" title reserved. Cloned descendants keep their
+    // titles: they nest inside the copy's own (new) folder, out of the
+    // originals' way.
+    const parentId = findParentId(project, sourceId)
+    const parent = parentId ? findTaskById(project, parentId) : null
+    const baseFolder =
+      parent?.filePath && !copy.archived ? this.taskFolder(parent.filePath) : this.projectTaskFolder(project)
+    const folder = copy.archived ? normalizePath(baseFolder + '/Archive') : baseFolder
     const usedTitles = new Set(flattenTasks(project.tasks).map((f) => f.task.title))
-    const claimName = (task: Task): void => {
-      const folder = task.archived ? normalizePath(baseFolder + '/Archive') : baseFolder
-      this.assignCopyName(task, folder, usedTitles, claimed)
-    }
+    this.assignCopyName(copy, folder, usedTitles, new Set())
     // Clones don't have a filePath yet; their description in memory is whatever
     // came from the source. We need to write that body verbatim.
-    claimName(copy)
     this.hydratedBodies.add(copy)
     for (const ft of flattenTasks(copy.subtasks)) {
-      claimName(ft.task)
       this.hydratedBodies.add(ft.task)
     }
-    const parentId = findParentId(project, sourceId)
     addTaskToTree(project.tasks, copy, parentId)
     moveTaskInTree(project.tasks, copy.id, sourceId, 'after')
     indexAddSubtree(project, copy, parentId)
@@ -1005,13 +1051,13 @@ export class ProjectStore implements TaskSource {
     this.markDirty(project, [taskId], kind)
     // Patch-set description is the caller's intent; trust it as the new body.
     if (task && patch.description !== undefined) this.hydratedBodies.add(task)
-    if (task && patch.subtasks !== undefined) {
-      // Re-index the saved subtree and create/rename/trash the affected subtask
-      // files; this also covers the children's Parent-link rewrite on a rename.
-      await this.reconcileSubtasks(project, task, oldSubtree)
-    } else if (task && titleChanged) {
+    if (task && titleChanged) {
       // Title change renames the file, which breaks direct children's Parent link.
       for (const sub of task.subtasks) this.markDirty(project, [sub.id], 'full')
+    }
+    if (task && patch.subtasks !== undefined) {
+      // Re-index the saved subtree and create/rename/trash the affected subtask files.
+      await this.reconcileSubtasks(project, task, oldSubtree)
     }
     await this.saveProject(project)
   }
@@ -1052,12 +1098,13 @@ export class ProjectStore implements TaskSource {
       }
     }
 
-    const folder = this.projectTaskFolder(project)
     for (const removed of oldSubtree) {
       if (liveIds.has(removed.id)) continue
       project.taskIndex.delete(removed.id)
       // The flat snapshot already lists every descendant, so trash this file only.
-      if (removed.filePath) await this.deleteTaskFiles({ ...removed, subtasks: [] }, folder)
+      // (Trashing a file also trashes its own folder, so a removed subtask's
+      // nested descendants go with it; their later iterations no-op.)
+      if (removed.filePath) await this.deleteTaskFiles({ ...removed, subtasks: [] })
     }
   }
 
@@ -1162,6 +1209,50 @@ export class ProjectStore implements TaskSource {
   }
 
   /**
+   * One-time migration for flat vaults: move every subtask file that still
+   * sits outside its parent's own folder into `<parent file minus .md>/`,
+   * keeping its basename. Uses the link-aware rename so wikilinks update, and
+   * self-write marking so the vault watcher doesn't thrash. Archived files
+   * (and children of archived parents) stay in the flat Archive. Returns the
+   * number of files moved; idempotent. Not on the TaskSource interface — a
+   * one-time pm-file concern, like adoptIssueKeys.
+   */
+  async nestSubtaskFiles(project: Project): Promise<number> {
+    let moved = 0
+    // Pre-order: a parent's own move settles its folder before its children's.
+    for (const { task, parentId } of flattenTasks(project.tasks)) {
+      if (!parentId || !task.filePath || task.archived) continue
+      const parent = findTaskById(project, parentId)
+      if (!parent?.filePath || parent.archived) continue
+      const folder = this.taskFolder(parent.filePath)
+      if (task.filePath.slice(0, task.filePath.lastIndexOf('/')) === folder) continue
+      const file = this.app.vault.getAbstractFileByPath(task.filePath)
+      if (!(file instanceof TFile)) continue
+      const dest = normalizePath(`${folder}/${task.filePath.slice(task.filePath.lastIndexOf('/') + 1)}`)
+      if (this.app.vault.getAbstractFileByPath(dest)) continue // occupied — leave it for a manual look
+      await this.ensureFolder(folder)
+      const oldPath = task.filePath
+      this.markSelfWrite(oldPath)
+      this.markSelfWrite(dest)
+      await this.app.fileManager.renameFile(file, dest)
+      task.filePath = dest
+      this.markSelfWrite(this.taskFolder(oldPath))
+      this.markSelfWrite(this.taskFolder(dest))
+      const carried = await moveTaskAttachmentFolder(this.app, oldPath, dest)
+      if (carried) {
+        // A partially nested vault: this task's own folder carried its nested
+        // descendants — re-point them before their own iterations run.
+        for (const pair of repointDescendantFiles(task, carried.from, carried.to)) {
+          this.markSelfWrite(pair.from)
+          this.markSelfWrite(pair.to)
+        }
+      }
+      moved++
+    }
+    return moved
+  }
+
+  /**
    * Move a task before/after a sibling. Sibling order persists in the parent's
    * subtaskIds (or the project file's taskIds for top-level tasks), so only the
    * parent needs a rewrite.
@@ -1174,14 +1265,13 @@ export class ProjectStore implements TaskSource {
   }
 
   async deleteTasks(project: Project, taskIds: string[]): Promise<void> {
-    const folder = this.projectTaskFolder(project)
     const dirtyParents = new Set<string>()
     for (const id of taskIds) {
       const parentId = findParentId(project, id)
       if (parentId) dirtyParents.add(parentId)
       const task = findTaskById(project, id)
       if (task) {
-        await this.deleteTaskFiles(task, folder)
+        await this.deleteTaskFiles(task)
         indexRemoveSubtree(project, task)
       }
       deleteTaskFromTree(project.tasks, id)
@@ -1203,7 +1293,7 @@ export class ProjectStore implements TaskSource {
     const parentId = findParentId(project, taskId)
     const task = findTaskById(project, taskId)
     if (task) {
-      await this.deleteTaskFiles(task, this.projectTaskFolder(project))
+      await this.deleteTaskFiles(task)
       indexRemoveSubtree(project, task)
     }
     deleteTaskFromTree(project.tasks, taskId)
@@ -1212,9 +1302,9 @@ export class ProjectStore implements TaskSource {
     await this.saveProject(project)
   }
 
-  private async deleteTaskFiles(task: Task, folder: string): Promise<void> {
+  private async deleteTaskFiles(task: Task): Promise<void> {
     for (const sub of task.subtasks) {
-      await this.deleteTaskFiles(sub, folder)
+      await this.deleteTaskFiles(sub)
     }
     if (task.filePath) {
       const file = this.app.vault.getAbstractFileByPath(task.filePath)

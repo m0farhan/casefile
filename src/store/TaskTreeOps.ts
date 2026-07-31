@@ -125,6 +125,24 @@ function remapDeps(task: Task, idMap: Map<string, string>): void {
   for (const sub of task.subtasks) remapDeps(sub, idMap)
 }
 
+/**
+ * Re-point descendants' in-memory filePath after their ancestor's own folder
+ * moved from `from` to `to` (the folder move physically carries every nested
+ * subtask file). Returns the old/new path pairs so callers can mark them as
+ * self-writes.
+ */
+export function repointDescendantFiles(task: Task, from: string, to: string): { from: string; to: string }[] {
+  const moved: { from: string; to: string }[] = []
+  for (const { task: sub } of flattenTasks(task.subtasks)) {
+    if (sub.filePath?.startsWith(from + '/')) {
+      const next = to + sub.filePath.slice(from.length)
+      moved.push({ from: sub.filePath, to: next })
+      sub.filePath = next
+    }
+  }
+  return moved
+}
+
 /** Move a task before or after another task in the tree (same level) */
 export function moveTaskInTree(tasks: Task[], taskId: string, targetId: string, position: 'before' | 'after'): boolean {
   // Try at this level first
