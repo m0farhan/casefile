@@ -2,6 +2,8 @@ import { Component, MarkdownRenderer, Notice, type App } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { NoteLinkSuggest } from './NoteLinkSuggest'
+import { IconButton } from '../ui/primitives/IconButton'
+import { toggleInlineMarker } from './inlineFormat'
 
 export interface DescriptionEditorContext {
   app: App
@@ -32,10 +34,38 @@ export function renderDescriptionEditor(
   const descSection = container.createDiv('pm-modal-section pm-modal-desc-section')
   descSection.createEl('h4', { text: 'Description', cls: 'pm-modal-section-title' })
 
+  const descToolbar = descSection.createDiv('pm-desc-toolbar')
   const descPreview = descSection.createDiv('pm-modal-desc-preview')
   const descArea = descSection.createEl('textarea', { cls: 'pm-modal-description' })
   descArea.placeholder = 'Add a description…'
   descArea.value = task.description
+
+  // Inline formatting: toolbar buttons + editor hotkeys wrap/unwrap the selection.
+  const applyMarker = (marker: string) => {
+    const r = toggleInlineMarker(descArea.value, descArea.selectionStart, descArea.selectionEnd, marker)
+    descArea.value = r.value
+    task.description = r.value
+    descArea.setSelectionRange(r.selStart, r.selEnd)
+    descArea.focus()
+  }
+  const formatButtons: [string, string, string][] = [
+    ['bold', 'Bold (Cmd+B)', '**'],
+    ['italic', 'Italic (Cmd+I)', '*'],
+    ['code', 'Inline code (Cmd+E)', '`']
+  ]
+  for (const [icon, tip, marker] of formatButtons) {
+    const btn = new IconButton(descToolbar).setIcon(icon).setTooltip(tip)
+    // mousedown would steal focus (and the selection) from the textarea.
+    btn.el.addEventListener('mousedown', (e) => e.preventDefault())
+    btn.onClick(() => applyMarker(marker))
+  }
+  descArea.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+    const marker = e.key === 'b' ? '**' : e.key === 'i' ? '*' : e.key === 'e' ? '`' : null
+    if (!marker) return
+    e.preventDefault()
+    applyMarker(marker)
+  })
 
   const autoResize = () => {
     const saved: [HTMLElement, number][] = []
@@ -116,6 +146,7 @@ export function renderDescriptionEditor(
 
   const showEdit = (caret?: number) => {
     descPreview.classList.add('pm-hidden')
+    descToolbar.classList.remove('pm-hidden')
     descArea.classList.remove('pm-hidden')
     descArea.value = task.description
     window.setTimeout(() => {
@@ -129,6 +160,7 @@ export function renderDescriptionEditor(
     if (!hasContent()) return
     void renderPreview()
     descArea.classList.add('pm-hidden')
+    descToolbar.classList.add('pm-hidden')
     descPreview.classList.remove('pm-hidden')
   }
 
@@ -245,6 +277,7 @@ export function renderDescriptionEditor(
 
   if (hasContent()) {
     descArea.classList.add('pm-hidden')
+    descToolbar.classList.add('pm-hidden')
     void renderPreview()
   } else {
     descPreview.classList.add('pm-hidden')

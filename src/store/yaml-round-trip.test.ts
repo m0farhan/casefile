@@ -104,14 +104,15 @@ describe('task round-trip', () => {
     expect(task.customFields).toEqual({ impact: 'high', score: 42 })
   })
 
-  it('subtask wikilinks derive from sub.filePath, falling back to a bare slug', () => {
+  it('subtask wikilinks derive from sub.filePath, falling back to the exact-title filename', () => {
     const project = makeProject('P', 'Projects/P.md')
+    // Pre-existing legacy-slug file kept in place: the link must follow the file, not the title.
     const legacySub = makeTask({ id: 'sub-legacy', title: 'Legacy', filePath: 'Projects/Tasks/P/legacy-12345678.md' })
     const newSub = makeTask({ id: 'sub-new', title: 'Fresh One' }) // no filePath yet
     const parent = makeTask({ id: 'parent', subtasks: [legacySub, newSub] })
     const md = serializeTask(parent, project, null)
     expect(md).toContain('[[legacy-12345678|Legacy]]')
-    expect(md).toContain('[[fresh-one|Fresh One]]')
+    expect(md).toContain('[[Fresh One|Fresh One]]')
   })
 
   it('drops auto-generated Parent wiki-link and Subtasks section from the description', () => {
@@ -194,9 +195,18 @@ describe('project round-trip', () => {
     expect(bulletCount).toBe(1)
   })
 
-  it('taskFilePath returns a bare-slug path without an id suffix', () => {
-    expect(taskFilePath('Bug Fix', 'Projects/Tasks/P')).toBe('Projects/Tasks/P/bug-fix.md')
-    expect(taskFilePath('A/B:C', 'Projects/Tasks/P')).toBe('Projects/Tasks/P/a-b-c.md')
+  it('taskFilePath keeps the exact title: invalid chars -> "-", trailing dots/spaces trimmed, 60-char cap', () => {
+    expect(taskFilePath('Bug Fix', 'Projects/Tasks/P')).toBe('Projects/Tasks/P/Bug Fix.md')
+    // Filesystem-invalid characters are replaced with '-'.
+    expect(taskFilePath('A/B:C', 'Projects/Tasks/P')).toBe('Projects/Tasks/P/A-B-C.md')
+    // Wikilink-hostile characters (#^[]|) are replaced too, so links always resolve.
+    expect(taskFilePath('Alert [P1] #7 | triage', 'Projects/Tasks/P')).toBe(
+      'Projects/Tasks/P/Alert -P1- -7 - triage.md'
+    )
+    // Trailing dots/spaces are trimmed (invalid filename endings on Windows).
+    expect(taskFilePath('Ends with dots...', 'Projects/Tasks/P')).toBe('Projects/Tasks/P/Ends with dots.md')
+    // Long titles are capped at 60 characters.
+    expect(taskFilePath('x'.repeat(70), 'Projects/Tasks/P')).toBe(`Projects/Tasks/P/${'x'.repeat(60)}.md`)
   })
 
   it('falls back to the file basename when title is missing', () => {

@@ -37,6 +37,7 @@ import {
   serializeProject,
   serializeTask,
   taskFilePath,
+  taskSlugLegacy,
   TASK_SLUG_MAX_LENGTH
 } from './YamlSerializer'
 import { ensureFolder, moveTaskAttachmentFolder } from './vaultFs'
@@ -75,8 +76,11 @@ function recoverBodyInto(task: Task, rawBody: string): void {
 const LEGACY_SLUG_CAP = 40
 
 /**
- * Pick a save path. New tasks get the bare slug; an existing file is left where
- * it is when its name still matches the title, so an unchanged title isn't renamed.
+ * Pick a save path. New tasks get the exact-title filename; an existing file is
+ * left where it is when its name still matches the title in ANY historical
+ * naming scheme (exact title, pre-2.3 lowercase-dash slug, id-suffixed or
+ * 40-capped slug variants) — so adopting exact names never mass-renames a
+ * vault; files pick up the new form only when their title actually changes.
  */
 function resolveTaskPath(task: Task, folder: string, previousPath: string | undefined): string {
   const desired = taskFilePath(task.title, folder)
@@ -85,9 +89,11 @@ function resolveTaskPath(task: Task, folder: string, previousPath: string | unde
   const previousFolder = previousPath.slice(0, previousPath.lastIndexOf('/'))
   const previousBasename = previousPath.slice(previousPath.lastIndexOf('/') + 1).replace(/\.md$/, '')
   if (previousFolder !== folder) return desired
-  const legacyBasename = `${desiredBasename}-${task.id.slice(0, 8)}`
-  if (previousBasename === legacyBasename) return previousPath
-  if (previousBasename.length === LEGACY_SLUG_CAP && previousBasename === desiredBasename.slice(0, LEGACY_SLUG_CAP)) {
+  if (previousBasename === desiredBasename) return previousPath
+  const oldSlug = taskSlugLegacy(task.title)
+  if (previousBasename === oldSlug) return previousPath
+  if (previousBasename === `${oldSlug}-${task.id.slice(0, 8)}`) return previousPath
+  if (previousBasename.length === LEGACY_SLUG_CAP && previousBasename === oldSlug.slice(0, LEGACY_SLUG_CAP)) {
     return previousPath
   }
   return desired

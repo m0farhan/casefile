@@ -73,7 +73,8 @@
   --gs-sla-breach: var(--gs-red);
   --gs-verdict-true-positive: var(--gs-red);
   --gs-verdict-false-positive: var(--gs-green);
-  --gs-verdict-benign-true-positive: var(--gs-teal);
+  --gs-verdict-security-testing: var(--gs-purple);
+  --gs-verdict-anomalous-safe: var(--gs-teal);
   --gs-verdict-duplicate: var(--gs-ink-subtle);
   --gs-verdict-pending: var(--gs-amber);
   --gs-ioc-ip: var(--gs-blue);

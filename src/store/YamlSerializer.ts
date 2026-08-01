@@ -162,7 +162,9 @@ export function serializeTask(
     yamlLines.push('')
     yamlLines.push('## Subtasks')
     for (const sub of task.subtasks) {
-      const subBasename = sub.filePath ? sub.filePath.replace(/^.*\//, '').replace(/\.md$/, '') : taskSlug(sub.title)
+      const subBasename = sub.filePath
+        ? sub.filePath.replace(/^.*\//, '').replace(/\.md$/, '')
+        : taskFileName(sub.title)
       const check = isTerminalStatus(sub.status, statuses) ? 'x' : ' '
       yamlLines.push(`- [${check}] [[${subBasename}|${sub.title}]]`)
     }
@@ -171,14 +173,29 @@ export function serializeTask(
   return yamlLines.join('\n')
 }
 
-/** Slug length cap, for path-length safety (Windows MAX_PATH, mobile, sync). */
+/** Filename length cap, for path-length safety (Windows MAX_PATH, mobile, sync). */
 export const TASK_SLUG_MAX_LENGTH = 60
 
-function taskSlug(title: string): string {
+/**
+ * Task filenames keep the exact title ("SOC166 - Javascript Code Detected in
+ * Requested URL.md") — only filesystem-invalid characters are replaced and
+ * trailing dots/spaces trimmed. Wikilink-hostile characters (#^[]|) are also
+ * replaced so links to the note always resolve.
+ */
+function taskFileName(title: string): string {
+  return sanitizeFileName(title)
+    .replace(/[#^[\]|]/g, '-')
+    .trim()
+    .slice(0, TASK_SLUG_MAX_LENGTH)
+    .replace(/[. ]+$/, '')
+}
+
+/** The pre-2.3 lowercase-dashed form; resolveTaskPath uses it to leave old files in place. */
+export function taskSlugLegacy(title: string): string {
   return sanitizeFileName(title).toLowerCase().replace(/\s+/g, '-').slice(0, TASK_SLUG_MAX_LENGTH)
 }
 
 /** Build the file path for a task .md file */
 export function taskFilePath(taskTitle: string, folder: string): string {
-  return `${folder}/${taskSlug(taskTitle)}.md`
+  return `${folder}/${taskFileName(taskTitle)}.md`
 }

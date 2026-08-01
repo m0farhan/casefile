@@ -240,8 +240,8 @@ describe('ProjectStore round-trip', () => {
     await store.saveProject(project)
 
     // Files exist on disk now.
-    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/first.md')).not.toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/second.md')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/First.md')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/Second.md')).not.toBeNull()
 
     // Reload and verify the embedded tasks survived as per-file tasks.
     const reloaded = await store.loadProject(file)
@@ -344,8 +344,8 @@ describe('ProjectStore task attachments', () => {
 
     const file = await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
 
-    expect(file.path).toBe('Projects/Imgs/Tasks/shot/attachments/pic.png')
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/shot/attachments/pic.png')).not.toBeNull()
+    expect(file.path).toBe('Projects/Imgs/Tasks/Shot/attachments/pic.png')
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Shot/attachments/pic.png')).not.toBeNull()
   })
 
   it('disambiguates a colliding attachment name', async () => {
@@ -356,8 +356,8 @@ describe('ProjectStore task attachments', () => {
     const first = await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
     const second = await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
 
-    expect(first.path).toBe('Projects/Imgs/Tasks/shot/attachments/pic.png')
-    expect(second.path).toBe('Projects/Imgs/Tasks/shot/attachments/pic 1.png')
+    expect(first.path).toBe('Projects/Imgs/Tasks/Shot/attachments/pic.png')
+    expect(second.path).toBe('Projects/Imgs/Tasks/Shot/attachments/pic 1.png')
   })
 
   it('trashes the attachments folder when the task is deleted', async () => {
@@ -368,8 +368,8 @@ describe('ProjectStore task attachments', () => {
 
     await store.deleteTask(project, task.id)
 
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/shot')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Shot')).toBeNull()
   })
 
   it('moves the attachments folder when the task is renamed', async () => {
@@ -380,8 +380,8 @@ describe('ProjectStore task attachments', () => {
 
     await store.updateTask(project, task.id, { title: 'Photo' })
 
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/photo/attachments/pic.png')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Photo/attachments/pic.png')).not.toBeNull()
   })
 
   it('moves the attachments folder when the task is archived and back when unarchived', async () => {
@@ -391,12 +391,12 @@ describe('ProjectStore task attachments', () => {
     await store.saveTaskAttachment(project, task, 'pic.png', new ArrayBuffer(4))
 
     await store.archiveTask(project, task.id)
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Archive/shot/attachments/pic.png')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Archive/Shot/attachments/pic.png')).not.toBeNull()
 
     await store.unarchiveTask(project, task.id)
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Archive/shot/attachments/pic.png')).toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/shot/attachments/pic.png')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Archive/Shot/attachments/pic.png')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Imgs/Tasks/Shot/attachments/pic.png')).not.toBeNull()
   })
 })
 
@@ -416,10 +416,10 @@ describe('ProjectStore nested subtask files', () => {
     const child = await addNamed(store, project, 'Child', parent.id)
     const grand = await addNamed(store, project, 'Grand', child.id)
 
-    expect(parent.filePath).toBe('Projects/Nest/Tasks/parent.md')
-    expect(child.filePath).toBe('Projects/Nest/Tasks/parent/child.md')
-    expect(grand.filePath).toBe('Projects/Nest/Tasks/parent/child/grand.md')
-    expect(vault.getAbstractFileByPath('Projects/Nest/Tasks/parent/child/grand.md')).toBeInstanceOf(TFile)
+    expect(parent.filePath).toBe('Projects/Nest/Tasks/Parent.md')
+    expect(child.filePath).toBe('Projects/Nest/Tasks/Parent/Child.md')
+    expect(grand.filePath).toBe('Projects/Nest/Tasks/Parent/Child/Grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Nest/Tasks/Parent/Child/Grand.md')).toBeInstanceOf(TFile)
   })
 
   it('a parent title rename carries nested subtask files and keeps them loadable', async () => {
@@ -431,11 +431,11 @@ describe('ProjectStore nested subtask files', () => {
 
     await store.updateTask(project, parent.id, { title: 'Renamed' })
 
-    expect(parent.filePath).toBe('Projects/Carry/Tasks/renamed.md')
-    expect(child.filePath).toBe('Projects/Carry/Tasks/renamed/child.md')
-    expect(grand.filePath).toBe('Projects/Carry/Tasks/renamed/child/grand.md')
-    expect(vault.getAbstractFileByPath('Projects/Carry/Tasks/renamed/child/grand.md')).toBeInstanceOf(TFile)
-    expect(vault.getAbstractFileByPath('Projects/Carry/Tasks/parent')).toBeNull()
+    expect(parent.filePath).toBe('Projects/Carry/Tasks/Renamed.md')
+    expect(child.filePath).toBe('Projects/Carry/Tasks/Renamed/Child.md')
+    expect(grand.filePath).toBe('Projects/Carry/Tasks/Renamed/Child/Grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Carry/Tasks/Renamed/Child/Grand.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Carry/Tasks/Parent')).toBeNull()
 
     const reloaded = await reload(app, vault, project.filePath)
     const rParent = expectDefined(flattenTasks(reloaded.tasks).find((f) => f.task.id === parent.id)).task
@@ -452,15 +452,15 @@ describe('ProjectStore nested subtask files', () => {
     const grand = await addNamed(store, project, 'Grand', child.id)
 
     await store.moveTask(project, child.id, p2.id)
-    expect(child.filePath).toBe('Projects/Repar/Tasks/parent-two/child.md')
-    expect(grand.filePath).toBe('Projects/Repar/Tasks/parent-two/child/grand.md')
-    expect(vault.getAbstractFileByPath('Projects/Repar/Tasks/parent-two/child/grand.md')).toBeInstanceOf(TFile)
-    expect(vault.getAbstractFileByPath('Projects/Repar/Tasks/parent-one/child.md')).toBeNull()
+    expect(child.filePath).toBe('Projects/Repar/Tasks/Parent two/Child.md')
+    expect(grand.filePath).toBe('Projects/Repar/Tasks/Parent two/Child/Grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Repar/Tasks/Parent two/Child/Grand.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Repar/Tasks/Parent one/Child.md')).toBeNull()
 
     await store.moveTask(project, child.id, null)
-    expect(child.filePath).toBe('Projects/Repar/Tasks/child.md')
-    expect(grand.filePath).toBe('Projects/Repar/Tasks/child/grand.md')
-    expect(vault.getAbstractFileByPath('Projects/Repar/Tasks/child/grand.md')).toBeInstanceOf(TFile)
+    expect(child.filePath).toBe('Projects/Repar/Tasks/Child.md')
+    expect(grand.filePath).toBe('Projects/Repar/Tasks/Child/Grand.md')
+    expect(vault.getAbstractFileByPath('Projects/Repar/Tasks/Child/Grand.md')).toBeInstanceOf(TFile)
   })
 
   it('round-trips a nested layout and ignores stray non-task notes in task folders', async () => {
@@ -491,9 +491,9 @@ describe('ProjectStore nested subtask files', () => {
 
     expect(copy.title).toBe('Parent (copy)')
     expect(copy.subtasks[0].title).toBe('Child')
-    expect(copy.filePath).toBe('Projects/DupNest/Tasks/parent-(copy).md')
-    expect(copy.subtasks[0].filePath).toBe('Projects/DupNest/Tasks/parent-(copy)/child.md')
-    expect(vault.getAbstractFileByPath('Projects/DupNest/Tasks/parent-(copy)/child.md')).toBeInstanceOf(TFile)
+    expect(copy.filePath).toBe('Projects/DupNest/Tasks/Parent (copy).md')
+    expect(copy.subtasks[0].filePath).toBe('Projects/DupNest/Tasks/Parent (copy)/Child.md')
+    expect(vault.getAbstractFileByPath('Projects/DupNest/Tasks/Parent (copy)/Child.md')).toBeInstanceOf(TFile)
   })
 
   it('nestSubtaskFiles migrates a flat vault into nested folders, idempotently', async () => {
@@ -845,8 +845,8 @@ describe('ProjectStore concurrent-save race', () => {
     const second = store.updateTask(project, b.id, { title: 'B new' })
     await Promise.all([first, second])
 
-    expect(vault.getAbstractFileByPath('Projects/Race/Tasks/a-new.md')).not.toBeNull()
-    expect(vault.getAbstractFileByPath('Projects/Race/Tasks/b-new.md')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Race/Tasks/A new.md')).not.toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Race/Tasks/B new.md')).not.toBeNull()
     expect(vault.getAbstractFileByPath(aOldPath)).toBeNull()
     expect(vault.getAbstractFileByPath(bOldPath)).toBeNull()
   })
@@ -958,7 +958,7 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(result).toBe('imported')
     expect(vault.getAbstractFileByPath('Notes/Idea.md')).toBeInstanceOf(TFile)
 
-    const created = vault.getAbstractFileByPath('Projects/Import/Tasks/idea.md')
+    const created = vault.getAbstractFileByPath('Projects/Import/Tasks/Idea.md')
     if (!(created instanceof TFile)) throw new Error('imported task file missing')
     const content = await vault.read(created)
     expect(content).toContain('pm-task: true')
@@ -972,7 +972,7 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(result).toBe('imported')
     expect(vault.getAbstractFileByPath('Notes/Idea.md')).toBeNull()
 
-    const moved = vault.getAbstractFileByPath('Projects/Import/Tasks/idea.md')
+    const moved = vault.getAbstractFileByPath('Projects/Import/Tasks/Idea.md')
     if (!(moved instanceof TFile)) throw new Error('imported task file missing')
     const content = await vault.read(moved)
     expect(content).toContain('pm-task: true')
@@ -990,7 +990,7 @@ describe('ProjectStore.importNoteAsTask', () => {
 
   it('skips notes that are already tasks', async () => {
     const { store, vault, project } = await importInto('copy')
-    const existing = vault.getAbstractFileByPath('Projects/Import/Tasks/idea.md')
+    const existing = vault.getAbstractFileByPath('Projects/Import/Tasks/Idea.md')
     if (!(existing instanceof TFile)) throw new Error('imported task file missing')
     const before = await vault.read(existing)
 
@@ -1040,7 +1040,7 @@ describe('ProjectStore.importTaskForest', () => {
     const task = makeTask({ title: 'Old', archived: true })
 
     await store.importTaskForest(project, [task], new Map([[task.id, source]]), 'copy')
-    expect(vault.getAbstractFileByPath('Projects/Arch/Tasks/Archive/old.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Arch/Tasks/Archive/Old.md')).toBeInstanceOf(TFile)
     expect(vault.getAbstractFileByPath('Notes/Old.md')).toBeInstanceOf(TFile)
   })
 })
@@ -1392,7 +1392,7 @@ describe('v3 self-contained project folders', () => {
     const project = await store.createProject('Acme', 'Projects')
     expect(project.filePath).toBe('Projects/Acme/Acme.md')
     const task = await addNamed(store, project, 'Recon')
-    expect(task.filePath).toBe('Projects/Acme/Tasks/recon.md')
+    expect(task.filePath).toBe('Projects/Acme/Tasks/Recon.md')
     expect(vault.getAbstractFileByPath('Projects/Acme/Acme.md')).toBeInstanceOf(TFile)
   })
 
@@ -1401,11 +1401,40 @@ describe('v3 self-contained project folders', () => {
     const project = await store.createProject('Cases', '')
     expect(project.filePath).toBe('Cases/Cases.md')
     const task = await addNamed(store, project, 'First')
-    expect(task.filePath).toBe('Cases/Tasks/first.md')
+    expect(task.filePath).toBe('Cases/Tasks/First.md')
     expect(vault.getAbstractFileByPath('Cases/Cases.md')).toBeInstanceOf(TFile)
 
     const found = await store.loadAllProjects('')
     expect(found.map((p) => p.title)).toEqual(['Cases'])
+  })
+
+  it('an existing old-slug task file is left in place on an unchanged-title save', async () => {
+    const { store, vault } = newStore()
+    // Fixture: a vault written by the pre-2.3 slug scheme — title "Bug Fix" on disk as bug-fix.md.
+    await vault.create(
+      'Projects/Keep/Keep.md',
+      ['---', 'pm-project: true', 'id: keep', 'title: Keep', 'taskIds:', '  - t1', '---', ''].join('\n')
+    )
+    await vault.create(
+      'Projects/Keep/Tasks/bug-fix.md',
+      ['---', 'pm-task: true', 'id: t1', 'title: Bug Fix', 'status: todo', '---', ''].join('\n')
+    )
+    const file = vault.getAbstractFileByPath('Projects/Keep/Keep.md')
+    if (!(file instanceof TFile)) throw new Error('fixture project missing')
+    const project = expectDefined(await store.loadProject(file))
+    const task = expectDefined(findTask(project.tasks, 't1'))
+
+    // Unchanged title: the legacy-slug file stays put — no mass rename on adoption.
+    await store.updateTask(project, task.id, { status: 'in-progress' })
+    expect(task.filePath).toBe('Projects/Keep/Tasks/bug-fix.md')
+    expect(vault.getAbstractFileByPath('Projects/Keep/Tasks/bug-fix.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Keep/Tasks/Bug Fix.md')).toBeNull()
+
+    // A real title change abandons the legacy slug and adopts the exact-title name.
+    await store.updateTask(project, task.id, { title: 'Bug Fixed' })
+    expect(task.filePath).toBe('Projects/Keep/Tasks/Bug Fixed.md')
+    expect(vault.getAbstractFileByPath('Projects/Keep/Tasks/Bug Fixed.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Keep/Tasks/bug-fix.md')).toBeNull()
   })
 
   it('refuses to create a project whose folder already exists', async () => {
@@ -1459,11 +1488,11 @@ describe('v3 self-contained project folders', () => {
     const moved = await store.renameProjectFolder(project, 'After')
     expect(moved).toEqual({ from: 'Projects/Before/Before.md', to: 'Projects/After/After.md' })
     expect(project.filePath).toBe('Projects/After/After.md')
-    expect(parent.filePath).toBe('Projects/After/Tasks/parent.md')
-    expect(child.filePath).toBe('Projects/After/Tasks/parent/child.md')
-    expect(gone.filePath).toBe('Projects/After/Tasks/Archive/shelved.md')
-    expect(vault.getAbstractFileByPath('Projects/After/Tasks/parent/child.md')).toBeInstanceOf(TFile)
-    expect(vault.getAbstractFileByPath('Projects/After/Tasks/parent/attachments/pic.png')).toBeInstanceOf(TFile)
+    expect(parent.filePath).toBe('Projects/After/Tasks/Parent.md')
+    expect(child.filePath).toBe('Projects/After/Tasks/Parent/Child.md')
+    expect(gone.filePath).toBe('Projects/After/Tasks/Archive/Shelved.md')
+    expect(vault.getAbstractFileByPath('Projects/After/Tasks/Parent/Child.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/After/Tasks/Parent/attachments/pic.png')).toBeInstanceOf(TFile)
     expect(vault.getAbstractFileByPath('Projects/Before')).toBeNull()
 
     // The canonical cached object keeps its identity under the new key.

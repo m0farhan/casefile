@@ -141,6 +141,12 @@
   margin-bottom: 0;
 }
 
+.pm-desc-toolbar {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
 .pm-modal-description {
   width: 100%;
   min-height: 80px;

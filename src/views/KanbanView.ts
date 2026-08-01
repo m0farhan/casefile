@@ -1,4 +1,4 @@
-import { Menu } from 'obsidian'
+import { Menu, Notice } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task, TaskStatus, FilterState, ResolvedProjectConfig } from '../types'
 import { flattenTasks, totalLoggedHours } from '../store/TaskTreeOps'
@@ -14,6 +14,15 @@ import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { captureRects, motionOK, playFlip } from '../ui/motion'
 import { computeLanes, isLaneGroup, LANE_GROUPS, type KanbanLaneGroup } from './kanbanLanes'
 import type { SubView } from './SubView'
+
+/**
+ * Reserved column id for the always-present Archive column. Reuses the
+ * status-column collapse persistence (collapsedKanbanColumns is keyed by
+ * arbitrary string ids per project, pruned only by project path).
+ * ponytail: a user-defined status id could collide with this; double
+ * underscores make that vanishingly unlikely — no registry needed.
+ */
+const ARCHIVE_COLUMN_ID = '__archive__'
 
 export class KanbanView implements SubView {
   private dragTask: Task | null = null
@@ -55,6 +64,7 @@ export class KanbanView implements SubView {
       severities: this.config.severities
     })
 
+    let lastBoard: HTMLElement | null = null
     for (const lane of lanes) {
       if (groupBy !== 'none') {
         const header = this.container.createDiv('pm-kanban-lane-header')
@@ -62,6 +72,7 @@ export class KanbanView implements SubView {
         header.createSpan({ text: String(lane.tasks.length), cls: 'pm-kanban-lane-count' })
       }
       const board = this.container.createDiv('pm-kanban-board')
+      lastBoard = board
       for (const status of this.config.statuses) {
         const tasks = lane.tasks.filter((t) => t.status === status.id)
         // The epic chip is noise inside its own epic's lane — the lane header already says it.
@@ -86,6 +97,11 @@ export class KanbanView implements SubView {
         })
       }
     }
+    // Archive column: always one trailing column, never per-lane — archived
+    // tasks have no lane identity worth partitioning, and N drop targets for
+    // one action invite mis-drops. With lanes off it joins the single board
+    // row; with lanes on it gets its own trailing board row.
+    this.renderArchiveColumn(groupBy === 'none' && lastBoard ? lastBoard : this.container.createDiv('pm-kanban-board'))
     // Restore scroll positions captured before the rebuild.
     const cardLists = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-cards')]
     cardScrolls.forEach((top, i) => {
@@ -137,11 +153,46 @@ export class KanbanView implements SubView {
     }
   }
 
+  private candidateTasks(): Task[] {
+    return this.config.kanbanShowSubtasks ? flattenTasks(this.project.tasks).map((ft) => ft.task) : this.project.tasks
+  }
+
   private visibleTasks(): Task[] {
-    const candidates = this.config.kanbanShowSubtasks
-      ? flattenTasks(this.project.tasks).map((ft) => ft.task)
-      : this.project.tasks
-    return candidates.filter((t) => matchesFilter(t, this.filter, this.config.statuses, this.queryCtx()))
+    // Archived tasks live in the Archive column only — even with the filter's
+    // showArchived on they don't double up in their old status column.
+    return this.candidateTasks().filter(
+      (t) => !t.archived && matchesFilter(t, this.filter, this.config.statuses, this.queryCtx())
+    )
+  }
+
+  /** The Archive column's content: same filter with only the archived gate lifted,
+   *  so text/status/tag terms still narrow archived cards. */
+  private archivedTasks(): Task[] {
+    const filter: FilterState = { ...this.filter, showArchived: true }
+    return this.candidateTasks().filter(
+      (t) => t.archived === true && matchesFilter(t, filter, this.config.statuses, this.queryCtx())
+    )
+  }
+
+  private renderArchiveColumn(board: HTMLElement): void {
+    new KanbanColumn(board, {
+      status: { id: ARCHIVE_COLUMN_ID, label: 'Archive', color: 'var(--gs-ink-subtle)', icon: 'archive' },
+      cards: this.archivedTasks().map((task) => this.buildCardData(task, true)),
+      collapsed: this.plugin.isKanbanColumnCollapsed(this.project, ARCHIVE_COLUMN_ID),
+      onToggleCollapse: safeAsync(async () => {
+        await this.plugin.toggleKanbanColumnCollapsed(this.project, ARCHIVE_COLUMN_ID)
+        this.renderBoard()
+      }),
+      onCardClick: (task) => this.openTask(task),
+      onCardContextMenu: (task, e) => this.openContextMenu(task, e),
+      onCardDragStart: (task) => {
+        this.dragTask = task
+      },
+      onCardDragEnd: () => {
+        this.dragTask = null
+      },
+      onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before)
+    })
   }
 
   /**
@@ -149,7 +200,7 @@ export class KanbanView implements SubView {
    * for the cards on the board, then re-render once so previews fill in.
    */
   private async hydrateDescriptions(): Promise<void> {
-    const pending = this.visibleTasks().filter((t) => t.filePath && !t.description)
+    const pending = [...this.visibleTasks(), ...this.archivedTasks()].filter((t) => t.filePath && !t.description)
     if (!pending.length) return
     await Promise.all(pending.map((t) => this.plugin.store.loadTaskBody(t)))
     if (pending.some((t) => t.description)) this.renderBoard()
@@ -232,13 +283,39 @@ export class KanbanView implements SubView {
     if (!this.dragTask || this.dragTask.id !== taskId) return
     // Capture now — dragend nulls this.dragTask before the guard's modal settles.
     const task = this.dragTask
+    if (newStatus === ARCHIVE_COLUMN_ID) {
+      if (!task.archived) {
+        // Same semantics as the modal/context-menu Archive action: the store
+        // moves the file into the project's Tasks/Archive folder (created on
+        // demand). No verdict guard — archiving is not a status change.
+        // ponytail: drop order inside the Archive column isn't persisted;
+        // archive order is tree order, reordering archived files is noise.
+        await this.plugin.store.archiveTask(this.project, taskId)
+        new Notice('Task archived')
+        await this.refreshWithFlip(taskId)
+      } else {
+        this.renderBoard() // already archived: snap the live-moved card back
+      }
+      return
+    }
     if (newStatus !== task.status) {
       const extra = await guardVerdictOnClose(this.plugin, this.project, task, newStatus)
       if (extra === null) {
         this.renderBoard() // cancelled: snap the live-moved card back
         return
       }
+      // Drop out of Archive: unarchive first (the guard already passed), then
+      // apply the target status through the normal path.
+      if (task.archived) {
+        await this.plugin.store.unarchiveTask(this.project, taskId)
+        new Notice('Task unarchived')
+      }
       await this.plugin.store.updateTask(this.project, taskId, { status: newStatus, ...extra })
+    } else if (task.archived) {
+      // Drop out of Archive onto the column matching the stored status: no
+      // status write, no verdict guard (status unchanged) — just unarchive.
+      await this.plugin.store.unarchiveTask(this.project, taskId)
+      new Notice('Task unarchived')
     }
     // reorderTask persists sibling order through the shared parent's list, so a
     // neighbor under a different parent (possible when subtask cards are shown)
@@ -247,6 +324,11 @@ export class KanbanView implements SubView {
     if (before && findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
       await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
     }
+    await this.refreshWithFlip(taskId)
+  }
+
+  /** Refresh after a drop, FLIP-animating card moves when motion is allowed. */
+  private async refreshWithFlip(taskId: string): Promise<void> {
     // FLIP only on the drop path — background refreshes render instantly
     // (a change the analyst didn't make animating would be noise, not signal).
     const first = motionOK(this.plugin) ? captureRects(this.container, '.pm-kanban-card[data-task-id]') : null

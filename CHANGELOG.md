@@ -42,6 +42,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.3.0] - 2026-08-01
+
+### Changed
+
+- **Severity replaces priority.** Severity (relabeled Critical / High / Medium /
+  Low) is the single urgency dial, editable on every task type; priority is
+  retired from the UI while staying in the file format for round-trip. Query
+  values match labels too (`sev:>=high`); old `sev:>=sev2` and saved `prio:`
+  views keep working. SLA clocks remain incident-only.
+- **Task files keep their exact title** ("SOC166 - Javascript Code Detected in
+  Requested URL.md") — no more lowercase-dash slugs. Existing files stay where
+  they are and adopt the exact name only when their title changes.
+- Verdicts: *Benign True Positive* replaced by **True Positive - Security
+  Testing**; new **Anomalous Safe** verdict.
+
+### Added
+
+- **Archive column** on the kanban board, always visible after the status
+  columns: drop a card in to archive it (its file moves to the project's
+  `Tasks/Archive/` folder automatically), drag it out to restore — the verdict
+  close-guard still applies. Archived cards render muted; the column collapses
+  like any other.
+- Description formatting: bold / italic / inline-code toolbar in edit mode and
+  Cmd+B / Cmd+I / Cmd+E hotkeys that wrap or unwrap the selection.
+
 ## [2.2.1] - 2026-08-01
 
 ### Changed

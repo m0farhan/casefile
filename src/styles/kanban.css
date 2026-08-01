@@ -266,6 +266,12 @@
   background: var(--gs-accent-tint);
 }
 
+/* Archive column: cards render normally but muted */
+.pm-kanban-col[data-status='__archive__'] .pm-kanban-card {
+  opacity: 0.7;
+  filter: saturate(0.5);
+}
+
 /* ─ Casefile SOC ambient ─ */
 /* Severity + sla + ioc-count chips on incident cards (chip bases shared with the table) */
 .pm-kanban-card-soc {
