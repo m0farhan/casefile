@@ -81,3 +81,81 @@ export function detectIocType(value: string): IocType {
   if (v.includes('@')) return 'email'
   return 'domain'
 }
+
+/** Defanged-or-real fragment patterns for prose scanning. */
+const RE_URL = /\bh(?:xx|tt)ps?(?:\[:\]|:)\/\/[^\s<>"')]+/gi
+const RE_IP = /\b\d{1,3}(?:(?:\[\.\]|\(\.\)|\.)\d{1,3}){3}\b/g
+const RE_HASH = /\b[a-f0-9]{64}\b|\b[a-f0-9]{40}\b|\b[a-f0-9]{32}\b/gi
+const RE_EMAIL = /\b[\w.+-]+(?:@|\[at\]|\(at\))[\w-]+(?:(?:\[\.\]|\(\.\)|\.)[\w-]+)+\b/gi
+const RE_DEFANGED_DOMAIN = /\b[\w-]+(?:(?:\[\.\]|\(\.\))[\w-]+)+\b/g
+// ponytail: bare (non-defanged) domains in prose need a TLD gate or every
+// "file.js" becomes an indicator; extend the list when a real miss shows up.
+const BARE_DOMAIN_TLDS = new Set([
+  'com',
+  'net',
+  'org',
+  'io',
+  'ru',
+  'cn',
+  'info',
+  'biz',
+  'co',
+  'uk',
+  'de',
+  'fr',
+  'xyz',
+  'top',
+  'online',
+  'site',
+  'club',
+  'live',
+  'pw',
+  'cc',
+  'su',
+  'tk',
+  'ws'
+])
+const RE_BARE_DOMAIN = /\b[\w-]+(?:\.[\w-]+)+\b/g
+
+function validIp(v: string): boolean {
+  return v.split('.').every((o) => Number(o) <= 255)
+}
+
+/**
+ * Scan free prose (a case note) for indicators — defanged or real — and
+ * return the NEW ones as typed rows, deduped against `existingValues` and
+ * within the scan, in order of first appearance. Conservative by design:
+ * bare domains must end in a known TLD; everything else matches by shape.
+ */
+export function extractIocsFromText(text: string, existingValues: string[]): Ioc[] {
+  const seen = new Set(existingValues.map((v) => refangIoc(v).toLowerCase()))
+  const out: Ioc[] = []
+  const found: { index: number; value: string }[] = []
+  const collect = (re: RegExp, filter?: (v: string) => boolean) => {
+    for (const m of text.matchAll(re)) {
+      const raw = m[0].replace(/[),.;:!?'"\]]+$/, '')
+      const value = refangIoc(raw)
+      if (filter && !filter(value)) continue
+      found.push({ index: m.index ?? 0, value })
+    }
+  }
+  collect(RE_URL)
+  collect(RE_IP, validIp)
+  collect(RE_HASH)
+  collect(RE_EMAIL)
+  collect(RE_DEFANGED_DOMAIN, (v) => v.includes('.') && !/^\d+(\.\d+)*$/.test(v))
+  collect(RE_BARE_DOMAIN, (v) => {
+    const labels = v.toLowerCase().split('.')
+    return labels.length >= 2 && BARE_DOMAIN_TLDS.has(labels[labels.length - 1])
+  })
+  found.sort((a, b) => a.index - b.index)
+  for (const f of found) {
+    const key = f.value.toLowerCase()
+    if (seen.has(key)) continue
+    // Skip fragments of an already-captured longer indicator (ip inside url is
+    // kept deliberately: both are real indicators with distinct values).
+    seen.add(key)
+    out.push({ type: detectIocType(f.value), value: f.value })
+  }
+  return out
+}

@@ -42,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.5.0] - 2026-08-01
+
+### Added
+
+- **Extract indicators from the note.** A scan button on the Indicators header
+  reads the case description and comments, finds indicators (IPs, URLs,
+  hashes, emails, domains — defanged or real), skips ones already recorded,
+  and adds the rest in one step
+
+### Fixed
+
+- Editing any dropdown in the task modal no longer steals focus back to the
+  title field
+
 ## [2.4.1] - 2026-08-01
 
 ### Fixed

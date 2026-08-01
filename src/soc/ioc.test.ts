@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defangIoc, detectIocType, formatIocLine, parseIocPaste, refangIoc } from './ioc'
+import { defangIoc, detectIocType, extractIocsFromText, formatIocLine, parseIocPaste, refangIoc } from './ioc'
 
 describe('refangIoc', () => {
   it('undoes the standard defang forms', () => {
@@ -82,5 +82,52 @@ describe('formatIocLine', () => {
     expect(formatIocLine({ type: 'hash', value: 'd41d8cd98f00b204e9800998ecf8427e' })).toBe(
       'hash: d41d8cd98f00b204e9800998ecf8427e'
     )
+  })
+})
+
+describe('extractIocsFromText', () => {
+  const note = [
+    'Rule: SOC166 - Javascript Code Detected in Requested URL',
+    'Hostname: WebServer1002',
+    'Destination IP Address: 172.16.17.17',
+    'Source IP Address: 112.85.42.13',
+    'Requested URL: https://172.16.17.17/search/?q=<$script>javascript:$alert(1)</script>',
+    'Traffic was observed from 112[.]85[.]42[.]13 and reported multiple times.',
+    'Payload hash: d41d8cd98f00b204e9800998ecf8427e.',
+    'C2 host evil-cdn[.]top, sender phish[at]bad-mail[.]ru, and see letsdefend.io docs.'
+  ].join('\n')
+
+  it('pulls typed indicators out of alert prose, defanged or real, in order', () => {
+    const got = extractIocsFromText(note, [])
+    const values = got.map((i) => i.value)
+    expect(values).toContain('172.16.17.17')
+    expect(values).toContain('112.85.42.13')
+    expect(values.some((v) => v.startsWith('https://172.16.17.17/search/'))).toBe(true)
+    expect(values).toContain('d41d8cd98f00b204e9800998ecf8427e')
+    expect(values).toContain('evil-cdn.top')
+    expect(values).toContain('phish@bad-mail.ru')
+    expect(values).toContain('letsdefend.io')
+    const types = Object.fromEntries(got.map((i) => [i.value, i.type]))
+    expect(types['112.85.42.13']).toBe('ip')
+    expect(types['d41d8cd98f00b204e9800998ecf8427e']).toBe('hash')
+    expect(types['evil-cdn.top']).toBe('domain')
+    expect(types['phish@bad-mail.ru']).toBe('email')
+  })
+
+  it('dedups against existing rows and within the note (defanged == real)', () => {
+    const got = extractIocsFromText(note, ['112.85.42.13'])
+    expect(got.filter((i) => i.value === '112.85.42.13')).toHaveLength(0)
+    const all = extractIocsFromText(note, [])
+    expect(all.filter((i) => i.value === '112.85.42.13')).toHaveLength(1)
+  })
+
+  it('does not turn ordinary prose into indicators', () => {
+    const got = extractIocsFromText('Reviewed app.js and config.yaml; verdict recorded. Version 300.1.2.3 invalid.', [])
+    expect(got).toEqual([])
+  })
+
+  it('rejects impossible IPs and trims trailing punctuation', () => {
+    expect(extractIocsFromText('bad ip 999.1.1.1 here', []).filter((i) => i.type === 'ip')).toEqual([])
+    expect(extractIocsFromText('contact evil[.]com.', []).map((i) => i.value)).toEqual(['evil.com'])
   })
 })

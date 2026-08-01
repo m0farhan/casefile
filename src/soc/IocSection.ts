@@ -1,7 +1,16 @@
 import type { Ioc, IocType, Task } from '../types'
-import { IOC_TYPE_LABELS, defangIoc, detectIocType, formatIocLine, parseIocPaste, refangIoc } from './ioc'
+import {
+  IOC_TYPE_LABELS,
+  defangIoc,
+  detectIocType,
+  extractIocsFromText,
+  formatIocLine,
+  parseIocPaste,
+  refangIoc
+} from './ioc'
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
+import { Notice } from 'obsidian'
 
 const IOC_TYPES = Object.keys(IOC_TYPE_LABELS) as IocType[]
 
@@ -28,6 +37,24 @@ export function renderIocSection(
   const section = container.createDiv('pm-modal-section pm-ioc-section')
   const header = section.createDiv('pm-modal-section-header')
   const title = header.createEl('h4', { cls: 'pm-modal-section-title' })
+  // Auto-populate from the note: scan description + comments for indicators
+  // (defanged or real), skip ones already recorded, append the rest.
+  const scanBtn = new IconButton(header).setIcon('text-search').setTooltip('Extract indicators from this note')
+  scanBtn.onClick(() => {
+    const prose = [task.description, ...(task.comments ?? []).map((c) => c.text)].join('\n')
+    const found = extractIocsFromText(
+      prose,
+      task.iocs.map((i) => i.value)
+    )
+    if (!found.length) {
+      new Notice('No new indicators found in the note')
+      return
+    }
+    task.iocs.push(...found)
+    renderRows()
+    opts.onChange()
+    new Notice(`Added ${found.length} indicator(s) from the note`)
+  })
   const copyAllBtn = new IconButton(header).setIcon('clipboard-copy').setTooltip('Copy defanged block')
   copyAllBtn.onClick(
     safeAsync(async () => {

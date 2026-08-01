@@ -31,6 +31,8 @@ export class TaskModal extends Modal {
   private commentsSection: CommentsSectionHandle | null = null
   private shownExtras = new Set<string>()
   private saveKeyHandler: ((e: KeyboardEvent) => void) | null = null
+  /** Title autofocus fires on the first render only; rerenders must not steal focus. */
+  private focusedTitleOnce = false
 
   constructor(
     app: App,
@@ -289,8 +291,13 @@ export class TaskModal extends Modal {
       if (e.key === 'Enter' && !e.shiftKey) e.preventDefault()
     })
     window.setTimeout(autosizeTitle, 0)
-    titleInput.focus()
-    if (this.isNew) titleInput.select()
+    // First render only — field edits rerender, and yanking focus back to the
+    // title on every dropdown change made multi-field editing miserable.
+    if (!this.focusedTitleOnce) {
+      this.focusedTitleOnce = true
+      titleInput.focus()
+      if (this.isNew) titleInput.select()
+    }
 
     // Properties
     const props = body.createDiv('pm-te-props')
