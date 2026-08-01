@@ -36,6 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.2.0] - 2026-08-01
+
+### Changed
+
+- **Self-contained project folders.** Creating a project now creates one folder
+  named after it (at the vault root by default) holding the project file and
+  its whole `Tasks/` tree — no shared parent folder. The projects-folder
+  setting still works; leaving it empty means the vault root. Existing vaults
+  keep loading unchanged.
+
+### Added
+
+- Command **Move each case into its own folder** — converts an existing vault
+  to the new layout (link-aware, idempotent, leaves unrelated notes alone)
+
 ## [2.1.2] - 2026-07-31
 
 ### Changed
