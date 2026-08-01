@@ -1,13 +1,13 @@
-import { App, ButtonComponent, Modal } from 'obsidian'
+import { App, ButtonComponent, Modal, Notice } from 'obsidian'
 import type PMPlugin from '../main'
 import { type Project, type ProjectConfig, type CustomFieldDef, makeId, makeProject } from '../types'
-import { rebuildTaskIndex } from '../store'
+import { ProjectStore, rebuildTaskIndex } from '../store'
 import { safeAsync } from '../utils'
 import { renderAddButton } from '../ui/composites/addButton'
 import { Avatar } from '../ui/primitives/Avatar'
 import { IconButton } from '../ui/primitives/IconButton'
 import { renderPriorityListEditor, renderStatusListEditor } from '../ui/PaletteListEditor'
-import { caseFilePath } from '../store/layout'
+import { caseFilePath, projectFileName } from '../store/layout'
 
 const PROJECT_COLORS = [
   '#8b72be',
@@ -35,6 +35,8 @@ const PROJECT_ICONS = ['📋', '🚀', '💡', '🎯', '🔬', '🏗', '📊', '
 export class ProjectModal extends Modal {
   private project: Project
   private isNew: boolean
+  /** Title at open time — a differing title on save is a rename. */
+  private originalTitle: string
 
   constructor(
     app: App,
@@ -52,6 +54,7 @@ export class ProjectModal extends Modal {
       this.project = makeProject('New Project', '')
       this.isNew = true
     }
+    this.originalTitle = existingProject?.title ?? ''
   }
 
   onOpen(): void {
@@ -318,12 +321,34 @@ export class ProjectModal extends Modal {
             titleInput.focus()
             return
           }
-          this.project.title = title
 
           if (this.isNew) {
-            this.project.filePath = caseFilePath(this.plugin.settings.projectsFolder, title)
-            await this.plugin.store.ensureFolder(`${this.plugin.settings.projectsFolder}/Cases`)
+            const store = this.plugin.store
+            const filePath =
+              store instanceof ProjectStore
+                ? store.newProjectFilePath(this.plugin.settings.projectsFolder, title)
+                : caseFilePath(this.plugin.settings.projectsFolder, title)
+            if (!filePath) {
+              new Notice(`A folder named "${projectFileName(title)}" already exists — pick another project name.`)
+              titleInput.addClass('pm-input-error')
+              titleInput.focus()
+              return
+            }
+            this.project.filePath = filePath
+            await this.plugin.store.ensureFolder(filePath.slice(0, filePath.lastIndexOf('/')))
+          } else if (title !== this.originalTitle) {
+            // Title set before the rename so any re-render mid-move already
+            // shows it. v3: the project folder and file carry the new name;
+            // refusal (target folder occupied) keeps the modal open.
+            this.project.title = title
+            if (!(await this.plugin.renameProjectFiles(this.project, title))) {
+              this.project.title = this.originalTitle
+              titleInput.addClass('pm-input-error')
+              titleInput.focus()
+              return
+            }
           }
+          this.project.title = title
 
           await this.plugin.store.saveProject(this.project)
           await this.onSave(this.project)

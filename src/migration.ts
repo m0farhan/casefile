@@ -7,10 +7,12 @@ import { parseFrontmatter, isOldFormat } from './store/YamlParser'
  * to new format (individual .md files per task).
  */
 export async function migrateProjects(plugin: PMPlugin): Promise<void> {
-  const folder = plugin.settings.projectsFolder
+  // Old-format projects only ever lived directly in the projects folder
+  // ('' = vault root, so direct children of the root).
+  const prefix = plugin.settings.projectsFolder ? plugin.settings.projectsFolder + '/' : ''
   const files = plugin.app.vault
     .getMarkdownFiles()
-    .filter((f) => f.path.startsWith(folder + '/') && f.path.split('/').length === 2)
+    .filter((f) => f.path.startsWith(prefix) && !f.path.slice(prefix.length).includes('/'))
 
   let migrated = 0
 

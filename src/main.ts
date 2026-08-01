@@ -1,4 +1,4 @@
-import { MarkdownView, Menu, Plugin, Notice, TFile } from 'obsidian'
+import { MarkdownView, Menu, Plugin, Notice, TFile, TFolder, normalizePath } from 'obsidian'
 import { DEFAULT_SETTINGS, type PMSettings, type Project, type Task } from './types'
 import { flattenTasks, findTask } from './store/TaskTreeOps'
 import { ProjectStore } from './store'
@@ -23,7 +23,7 @@ import { Notifier } from './components/Notifier'
 import { buildHandover } from './soc/handover'
 import { ensureFolder } from './store/vaultFs'
 import { migrateProjects } from './migration'
-import { isCasesLayout, taskFolderForProjectPath } from './store/layout'
+import { isCasesLayout, isProjectFolderLayout, projectFileName, taskFolderForProjectPath } from './store/layout'
 import { safeAsync } from './utils'
 
 export default class PMPlugin extends Plugin {
@@ -152,6 +152,14 @@ export default class PMPlugin extends Plugin {
       name: 'Move cases and tasks into tidy folders',
       callback: () => {
         void this.migrateToCasesLayout()
+      }
+    })
+
+    this.addCommand({
+      id: 'migrate-to-project-folders',
+      name: 'Move each case into its own folder',
+      callback: () => {
+        void this.migrateToProjectFolders()
       }
     })
 
@@ -434,7 +442,7 @@ export default class PMPlugin extends Plugin {
   private async migrateToCasesLayout(): Promise<void> {
     const root = this.settings.projectsFolder
     const projects = await this.store.loadAllProjects(root)
-    const legacy = projects.filter((p) => !isCasesLayout(p.filePath))
+    const legacy = projects.filter((p) => !isCasesLayout(p.filePath) && !isProjectFolderLayout(p.filePath))
     if (!legacy.length) {
       this.showNotice('All cases already use the Cases/Tasks layout.')
       return
@@ -448,47 +456,139 @@ export default class PMPlugin extends Plugin {
     await this.store.ensureFolder(`${root}/Cases`)
     await this.store.ensureFolder(`${root}/Tasks`)
 
-    const moved = new Map<string, string>()
+    let moved = 0
     for (const p of legacy) {
       const oldPath = p.filePath
       const oldTaskFolder = taskFolderForProjectPath(oldPath)
       const base = oldPath.slice(oldPath.lastIndexOf('/') + 1)
-      const newPath = `${root}/Cases/${base}`
+      const newPath = normalizePath(`${root}/Cases/${base}`)
 
       const file = this.app.vault.getAbstractFileByPath(oldPath)
       if (!file) continue
       await this.app.fileManager.renameFile(file, newPath)
       const taskFolder = this.app.vault.getAbstractFileByPath(oldTaskFolder)
       if (taskFolder) {
-        await this.app.fileManager.renameFile(taskFolder, `${root}/Tasks/${base.replace(/\.md$/, '')}`)
+        await this.app.fileManager.renameFile(taskFolder, normalizePath(`${root}/Tasks/${base.replace(/\.md$/, '')}`))
       }
-      moved.set(oldPath, newPath)
-
-      for (const map of [
-        this.settings.projectFilters as Record<string, unknown>,
-        this.settings.collapsedTasks as Record<string, unknown>,
-        this.settings.collapsedKanbanColumns as Record<string, unknown>
-      ]) {
-        if (map[oldPath] !== undefined) {
-          map[newPath] = map[oldPath]
-          Reflect.deleteProperty(map, oldPath)
-        }
-      }
-      for (const r of this.settings.recentCases ?? []) {
-        if (r.path === oldPath) r.path = newPath
-      }
+      await this.rekeyProjectPath(oldPath, newPath)
+      moved++
     }
     await this.saveSettings()
+    this.showNotice(`Moved ${moved} case(s) into the Cases/Tasks layout.`)
+  }
 
-    // Open project views still point at the old paths — re-target them.
-    for (const leaf of this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
-      const view = leaf.view
-      if (view instanceof ProjectView) {
-        const newPath = moved.get(view.filePath)
-        if (newPath) await leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: newPath } })
+  /**
+   * v3 migration: give every case its own self-contained folder at the vault
+   * root (`<Name>/<Name>.md` + `<Name>/Tasks/…`), then point the projects
+   * folder setting at the root so new projects land there too. Empty leftover
+   * folders (`<root>/Cases`, `<root>/Tasks`, the old projects folder) are
+   * removed; anything non-empty — like unrelated notes — is left untouched.
+   */
+  private async migrateToProjectFolders(): Promise<void> {
+    if (!(this.store instanceof ProjectStore)) return
+    const store = this.store
+    const root = this.settings.projectsFolder
+    const projects = await store.loadAllProjects(root)
+    // Pending = not already at `<Name>/<Name>.md` under the vault root.
+    const pending = projects.filter((p) => {
+      const name = p.filePath.slice(p.filePath.lastIndexOf('/') + 1).replace(/\.md$/, '')
+      return p.filePath !== `${name}/${name}.md`
+    })
+    if (!pending.length) {
+      if (root !== '') {
+        this.settings.projectsFolder = ''
+        await this.saveSettings()
+      }
+      this.showNotice('Every case already lives in its own folder at the vault root.')
+      return
+    }
+    const ok = await confirmDialog(
+      this.app,
+      `Move ${pending.length} case(s) into their own folders at the vault root (one folder per case, holding its file and tasks). Links to the moved notes update automatically, and new projects will be created at the vault root.`,
+      'Move'
+    )
+    if (!ok) return
+
+    let cases = 0
+    let files = 0
+    const occupied: string[] = []
+    for (const p of pending) {
+      const result = await store.moveProjectToOwnFolder(p, '')
+      if (result === 'occupied') {
+        occupied.push(p.filePath.split('/').pop()?.replace(/\.md$/, '') ?? p.filePath)
+        continue
+      }
+      if (!result) continue
+      await this.rekeyProjectPath(result.from, result.to)
+      cases++
+      files += result.files
+    }
+
+    // Sweep leftover skeleton folders, but only when truly empty — the old
+    // projects folder can hold unrelated notes that must stay put. The vault
+    // root itself is never swept.
+    const leftovers = root ? [`${root}/Cases`, `${root}/Tasks`, root] : ['Cases', 'Tasks']
+    for (const path of leftovers) {
+      const folder = this.app.vault.getAbstractFileByPath(path)
+      if (folder instanceof TFolder && folder.children.length === 0) {
+        await this.app.fileManager.trashFile(folder)
       }
     }
-    this.showNotice(`Moved ${moved.size} case(s) into the Cases/Tasks layout.`)
+    this.settings.projectsFolder = ''
+    await this.saveSettings()
+
+    const parts = [`Moved ${cases} case(s) (${files} file(s)) into their own folders at the vault root.`]
+    if (occupied.length) {
+      parts.push(`Skipped ${occupied.length} case(s) whose folder name is already taken: ${occupied.join(', ')}.`)
+    }
+    new Notice(parts.join('\n'), 10000)
+  }
+
+  /**
+   * A project file moved: re-key every path-keyed setting (filters, collapse
+   * state, recent cases) and re-target open project views. Callers save
+   * settings themselves (batched flows save once at the end).
+   */
+  private async rekeyProjectPath(oldPath: string, newPath: string): Promise<void> {
+    for (const map of [
+      this.settings.projectFilters as Record<string, unknown>,
+      this.settings.collapsedTasks as Record<string, unknown>,
+      this.settings.collapsedKanbanColumns as Record<string, unknown>
+    ]) {
+      if (map[oldPath] !== undefined) {
+        map[newPath] = map[oldPath]
+        Reflect.deleteProperty(map, oldPath)
+      }
+    }
+    for (const r of this.settings.recentCases ?? []) {
+      if (r.path === oldPath) r.path = newPath
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
+      const view = leaf.view
+      if (view instanceof ProjectView && view.filePath === oldPath) {
+        await leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: newPath } })
+      }
+    }
+  }
+
+  /**
+   * Apply a project title change to disk. Under v3 this renames the project's
+   * folder and file (link-aware) and re-keys path-keyed settings; older
+   * layouts change nothing on disk (the frontmatter title is authoritative).
+   * Returns false when the rename was refused (target folder occupied).
+   */
+  async renameProjectFiles(project: Project, newTitle: string): Promise<boolean> {
+    if (!(this.store instanceof ProjectStore)) return true
+    const moved = await this.store.renameProjectFolder(project, newTitle)
+    if (moved === 'occupied') {
+      this.showNotice(`A folder named "${projectFileName(newTitle.trim())}" already exists — case not renamed.`)
+      return false
+    }
+    if (moved) {
+      await this.rekeyProjectPath(moved.from, moved.to)
+      await this.saveSettings()
+    }
+    return true
   }
 
   /**

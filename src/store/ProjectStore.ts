@@ -40,7 +40,7 @@ import {
   TASK_SLUG_MAX_LENGTH
 } from './YamlSerializer'
 import { ensureFolder, moveTaskAttachmentFolder } from './vaultFs'
-import { caseFilePath, taskFolderForProjectPath } from './layout'
+import { caseFilePath, projectFileName, projectFolderForProjectPath, taskFolderForProjectPath } from './layout'
 import type { ImportNoteOptions, TaskSource } from './TaskSource'
 
 /**
@@ -112,11 +112,11 @@ function fileNameFromPath(path: string): string {
 /**
  * Handles all read/write operations against the Obsidian vault.
  *
- * Storage layout:
- *   Projects/<ProjectName>.md                — project metadata (no task data)
- *   Projects/<ProjectName>/<slug>.md         — one .md per top-level task
- *   Projects/<ProjectName>/<slug>/<sub>.md   — subtask files nest inside their
- *                                              parent's own folder, recursively
+ * Storage layout (v3 — see layout.ts for the older recognized shapes):
+ *   <Name>/<Name>.md                — project metadata (no task data)
+ *   <Name>/Tasks/<slug>.md          — one .md per top-level task
+ *   <Name>/Tasks/<slug>/<sub>.md    — subtask files nest inside their
+ *                                     parent's own folder, recursively
  *
  * The loader is layout-agnostic (it scans all subfolders and rebuilds the tree
  * from frontmatter), so flat legacy vaults keep loading unchanged. The
@@ -290,20 +290,45 @@ export class ProjectStore implements TaskSource {
   // ─── Load ──────────────────────────────────────────────────────────────────
 
   async loadAllProjects(folder: string): Promise<Project[]> {
-    await this.ensureFolder(folder)
-    // Walk the projects folder and its Cases/ subfolder. Don't scan the whole
-    // vault: top-level files are the legacy layout, Cases/ is the current one.
-    const files: TFile[] = []
-    for (const path of [folder, `${folder}/Cases`]) {
-      const folderObj = this.app.vault.getAbstractFileByPath(path)
-      if (!(folderObj instanceof TFolder)) continue
-      for (const child of folderObj.children) {
-        if (child instanceof TFile && child.extension === 'md') files.push(child)
-      }
-    }
+    if (folder) await this.ensureFolder(folder)
+    const files = this.findProjectFiles(folder)
     const loaded = await Promise.all(files.map((f) => this.loadProject(f)))
     const projects = loaded.filter((p): p is Project => p !== null)
     return projects.sort((a, b) => a.title.localeCompare(b.title))
+  }
+
+  /**
+   * Enumerate candidate project files under the base folder ('' = vault root)
+   * across every layout without reading bodies: legacy `<base>/X.md`, v2
+   * `<base>/Cases/X.md`, v3 `<base>/<Name>/<Name>.md`. Files the metadataCache
+   * already knows are not pm-projects are skipped without a disk read;
+   * loadProject re-verifies the frontmatter of the rest.
+   */
+  private findProjectFiles(base: string): TFile[] {
+    const root = this.app.vault.getAbstractFileByPath(normalizePath(base || '/'))
+    if (!(root instanceof TFolder)) return []
+    const out: TFile[] = []
+    const seen = new Set<string>()
+    const push = (f: TAbstractFile | null): void => {
+      if (!(f instanceof TFile) || f.extension !== 'md' || seen.has(f.path)) return
+      const cached = this.app.metadataCache.getFileCache(f)?.frontmatter
+      if (cached && cached[FRONTMATTER_KEY] !== true) return
+      seen.add(f.path)
+      out.push(f)
+    }
+    for (const child of root.children) {
+      if (child instanceof TFile) {
+        push(child) // legacy
+      } else if (child instanceof TFolder) {
+        push(this.app.vault.getAbstractFileByPath(`${child.path}/${child.name}.md`)) // v3
+        if (child.name === 'Cases') {
+          for (const c of child.children) {
+            if (c instanceof TFile) push(c) // v2
+          }
+        }
+      }
+    }
+    return out
   }
 
   async loadProject(file: TFile): Promise<Project | null> {
@@ -750,10 +775,24 @@ export class ProjectStore implements TaskSource {
 
   // ─── CRUD shortcuts ────────────────────────────────────────────────────────
 
-  async createProject(title: string, folder: string): Promise<Project> {
+  /**
+   * The path a new project's file would get, or null when its folder already
+   * exists — creating into an existing folder would merge with (or overwrite
+   * parts of) unrelated content, so callers must refuse instead.
+   */
+  newProjectFilePath(folder: string, title: string): string | null {
     const filePath = caseFilePath(folder, title)
+    const projectFolder = filePath.slice(0, filePath.lastIndexOf('/'))
+    return this.app.vault.getAbstractFileByPath(projectFolder) ? null : filePath
+  }
+
+  async createProject(title: string, folder: string): Promise<Project> {
+    const filePath = this.newProjectFilePath(folder, title)
+    if (!filePath) {
+      throw new Error(`A folder named "${projectFileName(title)}" already exists — not creating a project inside it.`)
+    }
     const project = makeProject(title, filePath)
-    await this.ensureFolder(`${folder}/Cases`)
+    await this.ensureFolder(filePath.slice(0, filePath.lastIndexOf('/')))
     await this.ensureFolder(this.projectTaskFolder(project))
     await this.saveProject(project)
     return project
@@ -1253,6 +1292,152 @@ export class ProjectStore implements TaskSource {
   }
 
   /**
+   * v3 rename: move the project's folder (and the file inside it) to the new
+   * title's name via link-aware renames; the task tree, Archive and attachment
+   * folders ride along with the folder. Returns the moved file-path pair,
+   * 'occupied' when the target folder already exists (refuse — never rename
+   * into unrelated content), or null when nothing needs moving (not a v3
+   * project, or the name is unchanged).
+   */
+  async renameProjectFolder(
+    project: Project,
+    newTitle: string
+  ): Promise<{ from: string; to: string } | 'occupied' | null> {
+    const oldFolder = projectFolderForProjectPath(project.filePath)
+    if (!oldFolder) return null
+    const name = projectFileName(newTitle.trim())
+    if (!name) return null
+    const parent = oldFolder.slice(0, oldFolder.lastIndexOf('/') + 1) // '' at the vault root
+    const newFolder = normalizePath(`${parent}${name}`)
+    if (newFolder === oldFolder) return null
+    if (this.app.vault.getAbstractFileByPath(newFolder)) return 'occupied'
+    const folder = this.app.vault.getAbstractFileByPath(oldFolder)
+    if (!(folder instanceof TFolder)) return null
+
+    const oldFile = project.filePath
+    const oldName = oldFolder.slice(oldFolder.lastIndexOf('/') + 1)
+    const newFile = `${newFolder}/${name}.md`
+    const oldTaskFolder = `${oldFolder}/Tasks`
+    const newTaskFolder = `${newFolder}/Tasks`
+    this.markProjectMove(project, oldFile, newFile, oldTaskFolder, newTaskFolder)
+    this.markSelfWrite(oldFolder)
+    this.markSelfWrite(newFolder)
+    this.markSelfWrite(`${newFolder}/${oldName}.md`)
+
+    await this.app.fileManager.renameFile(folder, newFolder)
+    const carried = this.app.vault.getAbstractFileByPath(`${newFolder}/${oldName}.md`)
+    if (carried instanceof TFile) {
+      await this.app.fileManager.renameFile(carried, newFile)
+    }
+    this.repointProjectPaths(project, oldFile, newFile, oldTaskFolder, newTaskFolder)
+    return { from: oldFile, to: newFile }
+  }
+
+  /**
+   * One-time v3 migration step: move this project into its own folder directly
+   * under `base` ('' = vault root) — `<Name>/<Name>.md` + `<Name>/Tasks/…`.
+   * Link-aware renames with self-write marking; nested subtasks, Archive and
+   * attachment folders ride along with the folder renames. Returns the moved
+   * paths and re-pointed file count, 'occupied' when the target folder is
+   * taken, or null when the project already lives at the target (idempotent).
+   */
+  async moveProjectToOwnFolder(
+    project: Project,
+    base: string
+  ): Promise<{ from: string; to: string; files: number } | 'occupied' | null> {
+    const oldFile = project.filePath
+    const name = oldFile.slice(oldFile.lastIndexOf('/') + 1).replace(/\.md$/, '')
+    const targetFolder = normalizePath(`${base}/${name}`)
+    const newFile = `${targetFolder}/${name}.md`
+    if (oldFile === newFile) return null
+    if (this.app.vault.getAbstractFileByPath(targetFolder)) return 'occupied'
+    const file = this.app.vault.getAbstractFileByPath(oldFile)
+    if (!(file instanceof TFile)) return null
+
+    const oldTaskFolder = taskFolderForProjectPath(oldFile)
+    const newTaskFolder = `${targetFolder}/Tasks`
+    this.markProjectMove(project, oldFile, newFile, oldTaskFolder, newTaskFolder)
+
+    const ownFolder = projectFolderForProjectPath(oldFile)
+    if (ownFolder) {
+      // Already v3-shaped, just not at the base (e.g. still under the old
+      // projects folder): one folder rename carries file and task tree together.
+      const folder = this.app.vault.getAbstractFileByPath(ownFolder)
+      if (!(folder instanceof TFolder)) return null
+      this.markSelfWrite(ownFolder)
+      this.markSelfWrite(targetFolder)
+      await this.app.fileManager.renameFile(folder, targetFolder)
+    } else {
+      await this.ensureFolder(targetFolder)
+      await this.app.fileManager.renameFile(file, newFile)
+      const taskFolder = this.app.vault.getAbstractFileByPath(oldTaskFolder)
+      if (taskFolder instanceof TFolder) {
+        await this.app.fileManager.renameFile(taskFolder, newTaskFolder)
+      }
+    }
+    const files = this.repointProjectPaths(project, oldFile, newFile, oldTaskFolder, newTaskFolder)
+    return { from: oldFile, to: newFile, files }
+  }
+
+  /** Mark every path a project move will touch as self-written, before the vault ops fire events. */
+  private markProjectMove(
+    project: Project,
+    oldFile: string,
+    newFile: string,
+    oldTaskFolder: string,
+    newTaskFolder: string
+  ): void {
+    this.markSelfWrite(oldFile)
+    this.markSelfWrite(newFile)
+    this.markSelfWrite(oldTaskFolder)
+    this.markSelfWrite(newTaskFolder)
+    for (const { task } of flattenTasks(project.tasks)) {
+      if (task.filePath?.startsWith(oldTaskFolder + '/')) {
+        this.markSelfWrite(task.filePath)
+        this.markSelfWrite(newTaskFolder + task.filePath.slice(oldTaskFolder.length))
+      }
+    }
+  }
+
+  /**
+   * After the vault moved a project's file and task tree, make memory match:
+   * re-point the project and every task file path, and re-key the path-keyed
+   * store maps. Returns the number of files re-pointed (project file included).
+   */
+  private repointProjectPaths(
+    project: Project,
+    oldFile: string,
+    newFile: string,
+    oldTaskFolder: string,
+    newTaskFolder: string
+  ): number {
+    project.filePath = newFile
+    let files = 1
+    for (const { task } of flattenTasks(project.tasks)) {
+      if (task.filePath?.startsWith(oldTaskFolder + '/')) {
+        task.filePath = newTaskFolder + task.filePath.slice(oldTaskFolder.length)
+        files++
+      }
+    }
+    const dirty = this.dirtyTasks.get(oldFile)
+    if (dirty) {
+      this.dirtyTasks.delete(oldFile)
+      this.dirtyTasks.set(newFile, dirty)
+    }
+    const queue = this.saveQueues.get(oldFile)
+    if (queue) {
+      this.saveQueues.delete(oldFile)
+      this.saveQueues.set(newFile, queue)
+    }
+    // The re-pointed object becomes the canonical cached copy under the new
+    // key (same doctrine as doSaveProject: a modal clone that gets saved is
+    // canonical). The old entry — possibly a stale original — is dropped.
+    this.projectCache.delete(oldFile)
+    this.projectCache.set(newFile, project)
+    return files
+  }
+
+  /**
    * Move a task before/after a sibling. Sibling order persists in the parent's
    * subtaskIds (or the project file's taskIds for top-level tasks), so only the
    * parent needs a rewrite.
@@ -1353,8 +1538,11 @@ export class ProjectStore implements TaskSource {
   }
 
   async deleteProject(project: Project): Promise<void> {
+    // v3: the project's own folder holds everything — trash it whole.
+    // Older layouts: task folder + project file live apart, delete both.
+    const ownFolder = projectFolderForProjectPath(project.filePath)
     const taskFolder = this.projectTaskFolder(project)
-    const folder = this.app.vault.getAbstractFileByPath(taskFolder)
+    const folder = this.app.vault.getAbstractFileByPath(ownFolder ?? taskFolder)
     if (folder instanceof TFolder) {
       await this.deleteFolderRecursive(folder)
     }

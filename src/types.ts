@@ -251,6 +251,7 @@ export interface IncidentTemplate {
 }
 
 export interface PMSettings {
+  /** Base folder for the per-project folders; '' means the vault root. */
   projectsFolder: string
   defaultView: ViewMode
   ganttGranularity: GanttGranularity
@@ -396,7 +397,8 @@ export const DEFAULT_INCIDENT_TEMPLATES: IncidentTemplate[] = [
 ]
 
 export const DEFAULT_SETTINGS: PMSettings = {
-  projectsFolder: 'Projects',
+  // '' = vault root: a new project "Cases" creates a top-level Cases/ folder.
+  projectsFolder: '',
   defaultView: 'table',
   ganttGranularity: 'week',
   ganttWeekLabel: 'weekNumber',

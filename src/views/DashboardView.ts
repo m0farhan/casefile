@@ -51,7 +51,8 @@ export class DashboardView extends ItemView {
   private registerVaultListeners(): void {
     const isRelevant = (path: string) => {
       const folder = this.plugin.settings.projectsFolder
-      return path === folder || path.startsWith(`${folder}/`)
+      // Empty folder = vault root: everything is in scope.
+      return folder === '' || path === folder || path.startsWith(`${folder}/`)
     }
     const scheduleReload = (path: string) => {
       if (!isRelevant(path)) return

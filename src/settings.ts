@@ -27,13 +27,13 @@ export class PMSettingTab extends PluginSettingTab {
     // ── General ──────────────────────────────────────────────────────────────
     new Setting(containerEl)
       .setName('Projects folder')
-      .setDesc('Vault folder where project files are stored.')
+      .setDesc('Vault folder that holds each project folder. Leave empty to use the vault root.')
       .addText((text) =>
         text
-          .setPlaceholder('Projects')
+          .setPlaceholder('Vault root')
           .setValue(this.plugin.settings.projectsFolder)
           .onChange(async (v) => {
-            this.plugin.settings.projectsFolder = v.trim() || 'Projects'
+            this.plugin.settings.projectsFolder = v.trim()
             await this.plugin.saveSettings()
           })
       )

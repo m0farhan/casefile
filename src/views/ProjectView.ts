@@ -368,7 +368,21 @@ export class ProjectView extends ItemView {
       'blur',
       safeAsync(async () => {
         if (!this.project) return
-        this.project.title = this.titleEl2.textContent?.trim() ?? this.project.title
+        const next = this.titleEl2.textContent?.trim() ?? this.project.title
+        if (next && next !== this.project.title) {
+          // Title set before the rename so re-renders mid-move already show
+          // it. v3: the project folder and file carry the new name; on refusal
+          // (target folder occupied) revert the header and keep the old title.
+          const prev = this.project.title
+          this.project.title = next
+          if (!(await this.plugin.renameProjectFiles(this.project, next))) {
+            this.project.title = prev
+            this.titleEl2.textContent = prev
+            return
+          }
+          this.filePath = this.project.filePath
+        }
+        this.project.title = next
         await this.plugin.store.saveProject(this.project)
       })
     )
