@@ -1,13 +1,5 @@
 import { Menu } from 'obsidian'
-import type {
-  Project,
-  FilterState,
-  StatusConfig,
-  PriorityConfig,
-  SeverityConfig,
-  VerdictConfig,
-  DueDateFilter
-} from '../../../types'
+import type { Project, FilterState, StatusConfig, SeverityConfig, VerdictConfig, DueDateFilter } from '../../../types'
 import { collectAllAssignees, collectAllTags, flattenTasks } from '../../../store'
 import { countActiveFilters, matchesFilter } from '../../../store/TaskFilter'
 import type { QueryCtx } from '../../../store/QueryParser'
@@ -18,7 +10,6 @@ import { formatBadgeText } from '../../../utils'
 export interface FilterRowProps {
   project: Project
   statuses: StatusConfig[]
-  priorities: PriorityConfig[]
   /** Configured severity catalog; absent/empty → no severity dropdown. */
   severities?: SeverityConfig[]
   /** Configured verdict catalog; absent/empty → no verdict dropdown. */
@@ -53,7 +44,7 @@ export class FilterRow {
 
   private render(): void {
     this.el.empty()
-    const { filter, statuses, priorities, severities, verdicts, project } = this.props
+    const { filter, statuses, severities, verdicts, project } = this.props
 
     const notify = () => {
       this.props.onFilterChange()
@@ -71,17 +62,8 @@ export class FilterRow {
       }
     )
 
-    renderFilterDropdown(
-      this.el,
-      'Priority',
-      filter.priorities,
-      priorities.map((p) => ({ id: p.id, label: formatBadgeText(p.icon, p.label) })),
-      (selected) => {
-        filter.priorities = selected
-        notify()
-      }
-    )
-
+    // No Priority dropdown: priority is UI-retired. A saved filter.priorities from before
+    // the retirement still applies via matchesFilter and clears with the Clear button.
     if (severities?.length) {
       renderFilterDropdown(
         this.el,

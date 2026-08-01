@@ -1,6 +1,6 @@
 import { Menu } from 'obsidian'
-import type { Task, TaskStatus, TaskPriority, StatusConfig, PriorityConfig } from '../types'
-import { getStatusConfig, getPriorityConfig, formatBadgeText, isIconName } from '../utils'
+import type { Task, TaskStatus, StatusConfig } from '../types'
+import { getStatusConfig, formatBadgeText, isIconName } from '../utils'
 import { Chip } from './primitives/Chip'
 
 /** Returns the config's icon when it's a named (Lucide) icon; emoji/text icons render inline via formatBadgeText. */
@@ -36,47 +36,6 @@ export function renderStatusBadge(
     })
   const icon = namedIcon(config)
   if (icon) badge.setLeadingIcon(icon)
-  return badge.el
-}
-
-export const PRIORITY_CHEVRONS: Record<string, string> = {
-  critical: 'chevrons-up',
-  high: 'chevron-up',
-  medium: 'equal',
-  low: 'chevron-down'
-}
-
-export function renderPriorityBadge(
-  container: HTMLElement,
-  task: Task,
-  priorities: PriorityConfig[],
-  onChange: (priority: TaskPriority) => void
-): HTMLElement {
-  const config = getPriorityConfig(priorities, task.priority)
-  const badge = new Chip(container)
-    .setLabel(formatBadgeText(config?.icon, config?.label ?? task.priority))
-    .setColor(config?.color ?? 'var(--text-muted)')
-    .setVariant('plain')
-  const icon = namedIcon(config)
-  if (icon) {
-    badge.setLeadingIcon(icon)
-  } else if (!config?.icon) {
-    badge.setLeadingIcon(PRIORITY_CHEVRONS[task.priority] ?? 'equal')
-  }
-  badge.onClick((e) => {
-    const menu = new Menu()
-    for (const p of priorities) {
-      menu.addItem((item) => {
-        item
-          .setTitle(formatBadgeText(p.icon, p.label))
-          .setChecked(p.id === task.priority)
-          .onClick(() => onChange(p.id))
-        const itemIcon = namedIcon(p)
-        if (itemIcon) item.setIcon(itemIcon)
-      })
-    }
-    menu.showAtMouseEvent(e)
-  })
   return badge.el
 }
 

@@ -253,32 +253,8 @@ export class PMSettingTab extends PluginSettingTab {
         })
     )
 
-    // ── Priorities ────────────────────────────────────────────────────────────
-    new Setting(containerEl).setName('Priorities').setHeading()
-    containerEl.createEl('p', {
-      cls: 'pm-settings-desc',
-      text: 'Customize priority labels, colors, and icons. Drag to reorder from most to least important.'
-    })
-
-    const priorityContainer = containerEl.createDiv('pm-settings-statuses')
-    this.renderPriorityList(priorityContainer)
-
-    new Setting(containerEl).addButton((btn) =>
-      btn
-        .setButtonText('+ add priority')
-        .setCta()
-        .onClick(() => {
-          const id = 'priority-' + makeId().slice(0, 6)
-          this.plugin.settings.priorities.push({
-            id,
-            label: 'New priority',
-            color: '#8a94a0',
-            icon: ''
-          })
-          void this.plugin.saveSettings()
-          this.renderPriorityList(priorityContainer)
-        })
-    )
+    // No Priorities section: priority is UI-retired (severity is the urgency dial).
+    // settings.priorities stays in data.json so existing task files keep round-tripping.
 
     // ── Issue types ───────────────────────────────────────────────────────────
     new Setting(containerEl).setName('Issue types').setHeading()
@@ -366,7 +342,7 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Incident response targets').setHeading()
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Severity is impact and drives the response clock. Priority is your work order. Times are minutes; leave both fields empty to run no clock for a severity.'
+      text: 'Severity drives the response clock on incidents. Times are minutes; leave both fields empty to run no clock for a severity.'
     })
 
     this.slaContainer = containerEl.createDiv('pm-settings-sla')
@@ -406,7 +382,7 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Incident templates').setHeading()
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Playbook presets for the new-incident command: issue type, severity, priority, tags and a checklist body.'
+      text: 'Playbook presets for the new-incident command: issue type, severity, tags and a checklist body.'
     })
     const templatesContainer = containerEl.createDiv('pm-settings-templates')
     this.renderTemplatesList(templatesContainer)
@@ -427,8 +403,10 @@ export class PMSettingTab extends PluginSettingTab {
       new Setting(containerEl).setName('TaskNotes').setHeading()
 
       new Setting(containerEl)
-        .setName('Import statuses and priorities')
-        .setDesc('Add or update statuses and priorities to match TaskNotes. Entries TaskNotes does not know are kept.')
+        .setName('Import statuses')
+        .setDesc(
+          'Add or update statuses to match TaskNotes; its priorities are recorded too so imported tasks round-trip. Entries TaskNotes does not know are kept.'
+        )
         .addButton((btn) =>
           btn.setButtonText('Import from TaskNotes').onClick(() => {
             const api = getTaskNotesApi(this.app)
@@ -503,15 +481,6 @@ export class PMSettingTab extends PluginSettingTab {
         tpl.taskDefaults.severity = sevSelect.value
         void this.plugin.saveSettings()
       })
-      const prioSelect = defaults.createEl('select', { cls: 'dropdown' })
-      for (const p of this.plugin.settings.priorities) {
-        prioSelect.createEl('option', { text: p.label, value: p.id })
-      }
-      prioSelect.value = tpl.taskDefaults.priority ?? 'high'
-      prioSelect.addEventListener('change', () => {
-        tpl.taskDefaults.priority = prioSelect.value
-        void this.plugin.saveSettings()
-      })
       const tagsInput = defaults.createEl('input', { type: 'text', cls: 'pm-input' })
       tagsInput.placeholder = 'Tags, comma-separated'
       tagsInput.value = (tpl.taskDefaults.tags ?? []).join(', ')
@@ -535,24 +504,22 @@ export class PMSettingTab extends PluginSettingTab {
   }
 
   private async remapOrphanTasks(
-    field: 'status' | 'priority' | 'issueType' | 'severity' | 'verdict',
+    field: 'status' | 'issueType' | 'severity' | 'verdict',
     deletedId: string,
     deletedLabel: string
   ): Promise<void> {
     const configs =
       field === 'status'
         ? this.plugin.settings.statuses
-        : field === 'priority'
-          ? this.plugin.settings.priorities
-          : field === 'issueType'
-            ? this.plugin.settings.issueTypes
-            : null
+        : field === 'issueType'
+          ? this.plugin.settings.issueTypes
+          : null
     // Severity/verdict '' is the valid "none" state, so their orphans clear rather than remap.
     let fallbackId = ''
     let fallbackLabel = 'none'
     if (configs) {
       if (configs.length === 0) return
-      // Orphaned issue types remap to 'task' (the neutral default); statuses/priorities to the first entry.
+      // Orphaned issue types remap to 'task' (the neutral default); statuses to the first entry.
       const fallback = (field === 'issueType' && configs.find((c) => c.id === 'task')) || configs[0]
       fallbackId = fallback.id
       fallbackLabel = fallback.label
@@ -564,13 +531,7 @@ export class PMSettingTab extends PluginSettingTab {
       // A project that defines this entry itself is unaffected by the global delete.
       // Severities/verdicts are global-only in v1 — no per-project override to check.
       const own =
-        field === 'status'
-          ? project.config?.statuses
-          : field === 'priority'
-            ? project.config?.priorities
-            : field === 'issueType'
-              ? project.config?.issueTypes
-              : undefined
+        field === 'status' ? project.config?.statuses : field === 'issueType' ? project.config?.issueTypes : undefined
       if (own?.some((entry) => entry.id === deletedId)) continue
       const ids = flattenTasks(project.tasks)
         .filter(({ task }) => task[field] === deletedId)
@@ -594,19 +555,9 @@ export class PMSettingTab extends PluginSettingTab {
     })
   }
 
-  private renderPriorityList(container: HTMLElement): void {
-    renderPriorityListEditor(container, {
-      app: this.app,
-      priorities: this.plugin.settings.priorities,
-      onChanged: () => void this.plugin.saveSettings(),
-      onDeleted: (deleted) => void this.remapOrphanTasks('priority', deleted.id, deleted.label)
-    })
-  }
-
   private renderIssueTypeList(container: HTMLElement): void {
     // ponytail: IssueTypeConfig is structurally a PriorityConfig, so the priority palette editor
-    // is reused as-is. Known ceiling: the min-one Notice says "priority" — generalize
-    // PaletteListEditor with a dedicated entry point if that copy ever matters.
+    // is reused as-is (its min-one Notice copy is generic).
     renderPriorityListEditor(container, {
       app: this.app,
       priorities: this.plugin.settings.issueTypes,

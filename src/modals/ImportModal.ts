@@ -178,21 +178,8 @@ export class ImportModal extends Modal {
       this.defaultStatus = (e.target as HTMLSelectElement).value
     })
 
-    // Priority dropdown
-    const priorityGroup = content.createDiv('import-option-group')
-    priorityGroup.createEl('label', { text: 'Default priority' })
-
-    const prioritySelect = priorityGroup.createEl('select')
-
-    this.palettes.priorities.forEach((p) => {
-      const option = prioritySelect.createEl('option', { text: p.label })
-      option.value = p.id
-      if (p.id === this.defaultPriority) option.selected = true
-    })
-
-    prioritySelect.addEventListener('change', (e) => {
-      this.defaultPriority = (e.target as HTMLSelectElement).value
-    })
+    // No priority dropdown: priority is UI-retired. Imported tasks still get the palette
+    // default written to frontmatter (this.defaultPriority) for round-trip.
 
     // File handling radio
     const handlingGroup = content.createDiv('import-option-group')

@@ -2,7 +2,7 @@ import { Menu } from 'obsidian'
 import { getStatusConfig, dueUrgency, isTerminalStatus, safeAsync, stringifyCustomValue } from '../../utils'
 import { totalLoggedHours } from '../../store/TaskTreeOps'
 import type { ResolvedProjectConfig, Task } from '../../types'
-import { renderSeverityBadge, renderSlaChip } from '../../soc/slaTicker'
+import { renderSlaChip } from '../../soc/slaTicker'
 import { guardVerdictOnClose } from '../../soc/verdictGuard'
 import { updateSelectCheckboxes, getVisibleTaskIds } from './TableRenderer'
 import type { TableContext, TableState } from './TableRenderer'
@@ -14,8 +14,8 @@ import { AssigneesCell } from '../../ui/composites/cells/AssigneesCell'
 import { CustomFieldCell } from '../../ui/composites/cells/CustomFieldCell'
 import { DueDateCell } from '../../ui/composites/cells/DueDateCell'
 import { ExpandCell } from '../../ui/composites/cells/ExpandCell'
-import { PriorityCell } from '../../ui/composites/cells/PriorityCell'
 import { ProgressCell } from '../../ui/composites/cells/ProgressCell'
+import { SeverityCell } from '../../ui/composites/cells/SeverityCell'
 import { SelectCell } from '../../ui/composites/cells/SelectCell'
 import { StatusCell } from '../../ui/composites/cells/StatusCell'
 import { TimeCell } from '../../ui/composites/cells/TimeCell'
@@ -121,23 +121,16 @@ export function renderTaskRow(
     })
   })
 
-  const priorityCell = new PriorityCell(row, {
+  const severityCell = new SeverityCell(row, {
     task,
-    priorities: ctx.priorities,
-    onChange: safeAsync(async (priority) => {
-      await ctx.plugin.store.updateTask(ctx.project, task.id, { priority })
+    severities: cfg?.severities ?? [],
+    onChange: safeAsync(async (severity) => {
+      await ctx.plugin.store.updateTask(ctx.project, task.id, { severity })
       await ctx.onRefresh()
     })
   })
-  // Ambient SOC context rides in the priority cell — no new sortable column in
-  // v1, and priority is the work-order neighbor severity reads best against.
-  if (task.severity && cfg) {
-    renderSeverityBadge(
-      priorityCell.el,
-      cfg.severities.find((s) => s.id === task.severity)
-    )
-  }
-  renderSlaChip(priorityCell.el, task, ctx.plugin.settings.slaPolicies)
+  // The SLA countdown rides in the severity cell — severity is what starts the clock.
+  renderSlaChip(severityCell.el, task, ctx.plugin.settings.slaPolicies)
 
   new AssigneesCell(row, task.assignees)
 

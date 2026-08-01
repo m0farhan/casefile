@@ -82,12 +82,14 @@ describe('matchesFilter', () => {
     expect(matchesFilter(t, filter({ showArchived: true }))).toBe(true)
   })
 
-  it('matches text against title, status, priority, assignees, and tags', () => {
+  it('matches text against title, status, assignees, and tags — never the invisible priority', () => {
     const t = task({ id: 'a', title: 'Refactor parser', assignees: ['Bob'], tags: ['cleanup'] })
     expect(matchesFilter(t, filter({ text: 'parser' }))).toBe(true)
     expect(matchesFilter(t, filter({ text: 'BOB' }))).toBe(true)
     expect(matchesFilter(t, filter({ text: 'cleanup' }))).toBe(true)
     expect(matchesFilter(t, filter({ text: 'unrelated' }))).toBe(false)
+    // Every task carries priority 'medium' by default; free text must not match it.
+    expect(matchesFilter(t, filter({ text: 'medium' }))).toBe(false)
   })
 
   it('matches a task id pasted into the search box', () => {

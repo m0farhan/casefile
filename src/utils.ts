@@ -1,5 +1,5 @@
 import { Notice, setIcon } from 'obsidian'
-import type { Task, StatusConfig, PriorityConfig, TaskPriority } from './types'
+import type { Task, StatusConfig, PriorityConfig } from './types'
 import type { DueUrgency } from './ui/composites/dueChip'
 import { today, parsePlainDate } from './dates'
 
@@ -35,7 +35,8 @@ export function getDefaultStatusId(statuses: StatusConfig[]): string {
   return statuses.length > 0 ? statuses[0].id : 'todo'
 }
 
-/** Returns the default priority id for new tasks: 'medium' when configured, else the middle of the list */
+/** Default priority id for new tasks: 'medium' when configured, else the middle of the list.
+ *  Priority is UI-retired but still written to frontmatter so files round-trip. */
 export function getDefaultPriorityId(priorities: PriorityConfig[]): string {
   if (priorities.some((p) => p.id === 'medium')) return 'medium'
   return priorities.length > 0 ? priorities[Math.floor(priorities.length / 2)].id : 'medium'
@@ -86,11 +87,6 @@ export function sanitizeFileName(title: string): string {
 /** Look up a status config by id */
 export function getStatusConfig(statuses: StatusConfig[], id: string): StatusConfig | undefined {
   return statuses.find((s) => s.id === id)
-}
-
-/** Look up a priority config by id */
-export function getPriorityConfig(priorities: PriorityConfig[], id: TaskPriority): PriorityConfig | undefined {
-  return priorities.find((p) => p.id === id)
 }
 
 const iconNameCache = new Map<string, boolean>()

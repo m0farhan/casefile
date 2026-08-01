@@ -15,7 +15,7 @@ export interface SelectControlOpts {
 
 /**
  * Single-select inline control: a quiet trigger showing the current value that opens a
- * popover option list, optionally filtered by a search box. Backs Status, Priority, Type,
+ * popover option list, optionally filtered by a search box. Backs Status, Severity, Type,
  * Repeat, and Parent task.
  */
 export function renderSelectControl(opts: SelectControlOpts): void {

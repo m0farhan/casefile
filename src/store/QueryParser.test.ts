@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Temporal } from '../dates'
 import { DEFAULT_PRIORITIES, DEFAULT_SEVERITIES, DEFAULT_STATUSES, makeTask, type Task } from '../types'
-import { evaluateQuery, FIELD_HELP, FIELD_MATCHERS, parseQuery, type QueryCtx } from './QueryParser'
+import { evaluateQuery, FIELD_HELP, FIELD_MATCHERS, HELP_HIDDEN_FIELDS, parseQuery, type QueryCtx } from './QueryParser'
 
 // Thursday; end of ISO week = 2026-08-02.
 const TODAY = Temporal.PlainDate.from('2026-07-30')
@@ -129,13 +129,44 @@ describe('field matchers', () => {
     expect(matches('prio:>=high', { priority: 'high' }, ctx({ priorities: [] }))).toBe(false)
   })
 
-  it('severity: sev:>=sev2 means sev1 or sev2', () => {
+  it('severity: sev:>=sev2 means sev1 or sev2 (old id forms keep working)', () => {
     expect(matches('sev:>=sev2', { severity: 'sev1' })).toBe(true)
     expect(matches('sev:>=sev2', { severity: 'sev2' })).toBe(true)
     expect(matches('sev:>=sev2', { severity: 'sev3' })).toBe(false)
     expect(matches('sev:>=sev2', { severity: '' })).toBe(false)
     expect(matches('severity:sev1', { severity: 'sev1' })).toBe(true)
     expect(matches('sev:!sev1', { severity: 'sev2' })).toBe(true)
+  })
+
+  it('severity: labels resolve like ids, for equality, negation, and ranking', () => {
+    // DEFAULT_SEVERITIES: sev1 Critical, sev2 High, sev3 Medium, sev4 Low
+    expect(matches('sev:critical', { severity: 'sev1' })).toBe(true)
+    expect(matches('sev:critical', { severity: 'sev2' })).toBe(false)
+    expect(matches('sev:>=high', { severity: 'sev1' })).toBe(true)
+    expect(matches('sev:>=high', { severity: 'sev2' })).toBe(true)
+    expect(matches('sev:>=high', { severity: 'sev3' })).toBe(false)
+    expect(matches('sev:!low', { severity: 'sev1' })).toBe(true)
+    expect(matches('sev:!low', { severity: 'sev4' })).toBe(false)
+    expect(matches('sev:!low', { severity: '' })).toBe(true)
+  })
+
+  it('severity: label matching is case-insensitive', () => {
+    expect(matches('sev:CRITICAL', { severity: 'sev1' })).toBe(true)
+    expect(matches('SEV:>=High', { severity: 'sev2' })).toBe(true)
+    expect(matches('severity:Medium', { severity: 'sev3' })).toBe(true)
+  })
+
+  it('severity: a value neither id nor label never matches, on any op', () => {
+    expect(matches('sev:catastrophic', { severity: 'sev1' })).toBe(false)
+    expect(matches('sev:>=catastrophic', { severity: 'sev1' })).toBe(false)
+    expect(matches('sev:!catastrophic', { severity: 'sev1' })).toBe(false)
+  })
+
+  it('priority: labels resolve like ids (help-hidden, but old saved queries keep working)', () => {
+    // DEFAULT_PRIORITIES ids already equal their lowercased labels, so this
+    // pins the label path via mixed case.
+    expect(matches('prio:>=High', { priority: 'critical' })).toBe(true)
+    expect(matches('priority:Critical', { priority: 'critical' })).toBe(true)
   })
 
   it('verdict: equality and negation', () => {
@@ -340,15 +371,23 @@ describe('ioc: matcher', () => {
 })
 
 describe('FIELD_HELP', () => {
-  it('stays in sync with FIELD_MATCHERS (every help row is a real field, every matcher has a row)', () => {
+  it('stays in sync with FIELD_MATCHERS (every help row is a real field, every matcher has a row or is deliberately hidden)', () => {
     for (const f of FIELD_HELP) {
       expect(FIELD_MATCHERS[f.field], `help row '${f.field}' has no matcher`).toBeTypeOf('function')
+      expect(HELP_HIDDEN_FIELDS.has(f.field), `'${f.field}' is help-hidden but has a help row`).toBe(false)
       expect(f.example.startsWith(`${f.field}:`), `example for '${f.field}' must use its own field`).toBe(true)
     }
-    // Aliases (priority/prio, severity/sev) share a matcher fn, so one help row covers both.
+    // Aliases (severity/sev) share a matcher fn, so one help row covers both. Retired
+    // fields (priority/prio) keep a working matcher but are deliberately absent from
+    // the help popover — HELP_HIDDEN_FIELDS is the exception list.
     const helped = new Set(FIELD_HELP.map((f) => FIELD_MATCHERS[f.field]))
     for (const [field, fn] of Object.entries(FIELD_MATCHERS)) {
+      if (HELP_HIDDEN_FIELDS.has(field)) continue
       expect(helped.has(fn), `matcher '${field}' has no help row`).toBe(true)
+    }
+    // The hidden list names real matchers, not typos.
+    for (const field of HELP_HIDDEN_FIELDS) {
+      expect(FIELD_MATCHERS[field], `help-hidden field '${field}' has no matcher`).toBeTypeOf('function')
     }
   })
 })

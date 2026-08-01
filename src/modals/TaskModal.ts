@@ -3,7 +3,7 @@ import type PMPlugin from '../main'
 import { type Project, type Task, makeTask } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { TaskFileNameConflictError } from '../store'
-import { safeAsync, getDefaultStatusId, getDefaultPriorityId, getPriorityConfig } from '../utils'
+import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { confirmDialog, openTaskModal } from '../ui/ModalFactory'
 import { findTaskById } from '../store/TaskIndex'
 import { renderKeyChip } from '../ui/composites/issueMeta'
@@ -55,6 +55,7 @@ export class TaskModal extends Modal {
       const config = plugin.store.configFor(project)
       this.task = makeTask({
         status: getDefaultStatusId(config.statuses),
+        // priority is UI-retired but still written to frontmatter (round-trip default)
         priority: getDefaultPriorityId(config.priorities),
         type: parentId ? 'subtask' : 'task',
         ...defaults
@@ -201,8 +202,9 @@ export class TaskModal extends Modal {
     // ── Header: breadcrumb · overflow · close ───────────────────────────────
     const header = contentEl.createDiv('pm-te-header')
     const config = this.plugin.store.configFor(this.project)
-    const prio = getPriorityConfig(config.priorities, this.task.priority)
-    if (prio?.color) header.setCssProps({ '--pm-accent-strip': prio.color })
+    // Accent strip keys off severity (the urgency dial); no severity → no strip.
+    const sev = config.severities.find((s) => s.id === this.task.severity)
+    if (sev?.color) header.setCssProps({ '--pm-accent-strip': sev.color })
     const crumb = header.createDiv('pm-te-crumb')
     if (this.project.icon) {
       const iconEl = crumb.createSpan({ cls: 'pm-te-crumb-icon' })
@@ -226,11 +228,10 @@ export class TaskModal extends Modal {
         })
       )
     }
+    // Severity shows on any task type; the SLA chip stays incident-only
+    // (slaState also gates on issueType, so this is belt and braces).
+    renderSeverityBadge(crumb, sev)
     if (this.task.issueType === 'incident') {
-      renderSeverityBadge(
-        crumb,
-        config.severities.find((s) => s.id === this.task.severity)
-      )
       // Registered chips unregister themselves: the shared 30s tick drops any
       // chip whose element left the DOM, and both onClose and every render()
       // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).

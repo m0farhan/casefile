@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PRIORITIES, makeTask, type Task } from '../types'
+import { DEFAULT_SEVERITIES, makeTask, type Task } from '../types'
 import { computeLanes, isLaneGroup } from './kanbanLanes'
 
-const noEpic = { epicOf: () => null, priorities: DEFAULT_PRIORITIES }
+const noEpic = { epicOf: () => null, severities: DEFAULT_SEVERITIES }
 
 function task(overrides: Partial<Task> & { id: string }): Task {
   return makeTask(overrides)
@@ -49,14 +49,16 @@ describe('computeLanes', () => {
     expect(lanes[2].tasks.map((t) => t.id)).toEqual(['b'])
   })
 
-  it('groups by priority in catalog order, skipping empty lanes, unknowns trailing', () => {
+  it('groups by severity in catalog order, unknowns trailing, No severity last', () => {
     const tasks = [
-      task({ id: 'a', priority: 'low' }),
-      task({ id: 'b', priority: 'critical' }),
-      task({ id: 'c', priority: 'p0-custom' })
+      task({ id: 'a', severity: 'sev4' }),
+      task({ id: 'b', severity: '' }),
+      task({ id: 'c', severity: 'sev1' }),
+      task({ id: 'd', severity: 'sev0-custom' })
     ]
-    const lanes = computeLanes(tasks, 'priority', noEpic)
-    expect(lanes.map((l) => l.label)).toEqual(['Critical', 'Low', 'p0-custom'])
+    const lanes = computeLanes(tasks, 'severity', noEpic)
+    expect(lanes.map((l) => l.label)).toEqual(['Critical', 'Low', 'sev0-custom', 'No severity'])
+    expect(lanes[3].tasks.map((t) => t.id)).toEqual(['b'])
   })
 
   it('groups by bucket in BUCKETS order with No bucket last, skipping empty lanes', () => {
@@ -72,9 +74,11 @@ describe('computeLanes', () => {
 
 describe('isLaneGroup', () => {
   it('accepts the five groupings and rejects anything else', () => {
-    for (const id of ['none', 'epic', 'assignee', 'priority', 'bucket']) {
+    for (const id of ['none', 'epic', 'assignee', 'severity', 'bucket']) {
       expect(isLaneGroup(id)).toBe(true)
     }
+    // 'priority' is the pre-retirement persisted value: it must degrade (to 'none'), not crash.
+    expect(isLaneGroup('priority')).toBe(false)
     expect(isLaneGroup('status')).toBe(false)
     expect(isLaneGroup(undefined)).toBe(false)
   })

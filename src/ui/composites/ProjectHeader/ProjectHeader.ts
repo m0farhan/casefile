@@ -1,4 +1,4 @@
-import type { Project, FilterState, StatusConfig, PriorityConfig, SeverityConfig, VerdictConfig } from '../../../types'
+import type { Project, FilterState, StatusConfig, SeverityConfig, VerdictConfig } from '../../../types'
 import { isFilterActive } from '../../../store/TaskFilter'
 import type { QueryCtx } from '../../../store/QueryParser'
 import { PrimaryRow } from './PrimaryRow'
@@ -7,7 +7,6 @@ import { FilterRow } from './FilterRow'
 export interface ProjectHeaderProps {
   project: Project
   statuses: StatusConfig[]
-  priorities: PriorityConfig[]
   /** Configured severity catalog for the severity dropdown; absent → no dropdown. */
   severities?: SeverityConfig[]
   /** Configured verdict catalog for the verdict dropdown; absent → no dropdown. */
@@ -93,7 +92,6 @@ export class ProjectHeader {
     this.filterRow = new FilterRow(this.el, {
       project: this.props.project,
       statuses: this.props.statuses,
-      priorities: this.props.priorities,
       severities: this.props.severities,
       verdicts: this.props.verdicts,
       queryCtx: this.props.queryCtx,

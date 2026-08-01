@@ -278,11 +278,13 @@ export class TaskDetailView extends ItemView {
       config.issueTypes.find((t) => t.id === task.issueType)
     )
     if (task.key) renderKeyChip(header, task.key, { copy: true })
+    // Severity shows on any task type; the SLA chip stays incident-only
+    // (slaState also gates on issueType, so this is belt and braces).
+    renderSeverityBadge(
+      header,
+      config.severities.find((s) => s.id === task.severity)
+    )
     if (task.issueType === 'incident') {
-      renderSeverityBadge(
-        header,
-        config.severities.find((s) => s.id === task.severity)
-      )
       // Registered chips unregister themselves: the shared 30s tick drops any
       // chip whose element left the DOM, and both onClose and every render()
       // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).

@@ -8,7 +8,7 @@ The static HTML previews under `docs/design-system/project/preview/` are design 
 
 Before writing any new UI element, find your case here:
 
-- Need a small label, badge, or token (status, priority, tag, due date, count) -> `Chip`
+- Need a small label, badge, or token (status, severity, tag, due date, count) -> `Chip`
 - Need a text button -> Obsidian `ButtonComponent`
 - Need an icon-only button -> `IconButton`
 - Need a compact button, toggleable or not -> `ChipButton`
@@ -17,7 +17,7 @@ Before writing any new UI element, find your case here:
 - Need mutually-exclusive options -> `SegmentedControl` (text) or `ViewSwitcher` (icons)
 - Need a floating panel with inputs -> `Popover` (never hand-rolled absolute positioning)
 - Need a flat action list at the cursor -> Obsidian `Menu`
-- Need a status or priority indicator -> `renderStatusBadge` / `renderPriorityBadge` / `renderStatusDot`
+- Need a status indicator -> `renderStatusBadge` / `renderStatusDot`; a severity badge -> `renderSeverityBadge` (`src/soc/slaTicker.ts`)
 - Need a logged/estimate hours chip -> `renderTimeChip`
 - Need a due-date chip with urgency colors -> `renderDueChip`
 - Need user initials -> `Avatar` / `AvatarStack`
@@ -34,7 +34,7 @@ Chained-setter API modeled on Obsidian's `ButtonComponent`. Constructor takes `p
 
 ### Chip - `Chip.ts`
 
-The unified label primitive: status, priority, tags, due dates, time, small badges.
+The unified label primitive: status, severity, tags, due dates, time, small badges.
 
 - API: `new Chip(parent).setLabel(text).setVariant('solid'|'outline'|'plain').setColor(cssColor).setDot(bool).setLeadingIcon(lucide).setTag(bool).setStrong(bool).setShape('rounded'|'pill').setSize('md'|'sm').setTooltip(text).setRemovable(onRemove).onClick(handler)`
 - CSS: `pm-chip` + `--solid/--outline/--plain/--tag/--strong/--pill/--sm/--interactive`, parts `pm-chip-label/-icon/-dot/-rm`; color flows through `--pm-chip-color`
@@ -121,7 +121,7 @@ Floating panel anchored to a trigger, for content Obsidian's `Menu` can't host (
 
 Take resolved data + callbacks via props. No `plugin`, no `store`, no `onRefresh`. If a composite needs `plugin`, it's the wrong shape; push the store access up to the orchestrator view.
 
-- **KanbanCard** - `KanbanCard.ts`. Props: task, priorityColor, descriptionPreview, parentTitle, subtaskProgress, loggedHours, overdue, showTagColors + onClick/onContextMenu/onDragStart/onDragEnd. Composes Chip (milestone/subtask/recurring badges), renderTimeChip, renderDueChip, AvatarStack, ProgressBar, renderTagChip.
+- **KanbanCard** - `KanbanCard.ts`. Props: task, descriptionPreview, parentTitle, subtaskProgress, loggedHours, overdue, showTagColors + onClick/onContextMenu/onDragStart/onDragEnd. Composes Chip (milestone/subtask/recurring badges), renderTimeChip, renderDueChip, AvatarStack, ProgressBar, renderTagChip.
 - **KanbanColumn** - `KanbanColumn.ts`. Props: status, cards + drag/drop and card callbacks. Composes KanbanCard.
 - **ProjectCard** - `ProjectCard.ts`. Props: title, icon, color, tasksDone, tasksTotal, onClick, onContextMenu. Composes ProgressBar.
 - **TaskRow** - `TaskRow.ts`. Props: taskId, depth, isDone, isArchived, isSelected, onRowClick. Bare `<tr>` with row-click routing that ignores interactive descendants; cells render into it.
@@ -129,9 +129,9 @@ Take resolved data + callbacks via props. No `plugin`, no `store`, no `onRefresh
 - **tagChip** - `tagChip.ts`. `renderTagChip(parent, tag, colored)` -> outline tag Chip with optional color dot. The only way to render a tag.
 - **timeChip** - `timeChip.ts`. `renderTimeChip(parent, logged, estimate, size?)` -> `logged/estimateh` Chip, red solid when logged exceeds the estimate; renders nothing when both are 0. The only way to render logged/estimate hours.
 - **dueChip** - `dueChip.ts`. `renderDueChip(parent, label, urgency, size?)` -> due-date Chip, orange when `urgency` is `'near'`, red solid when `'overdue'`. Caller formats the label (`formatDateLong` / `formatDateShort`). The only way to render a due date.
-- **ProjectHeader** - `ProjectHeader/`. Props: project, statuses, priorities, filter, activeSavedViewId + callbacks; methods `refresh`, `notifyMutation`, `setActiveSavedViewId`. Composes PrimaryRow (saved-view ChipButtons, save button) and FilterRow (filter dropdowns, due/archived ChipButtons).
-- **Cells** - `cells/`. One `<td>` builder per column: StatusCell, PriorityCell, TitleCell, DueDateCell, TimeCell, ProgressCell, AssigneesCell, ExpandCell, ActionsCell, SelectCell, CustomFieldCell. `inlineEdit.ts` (`makeInlineEdit`) is the shared inline text/date editor. Adding a table column means adding a cell here, not inline DOM in the renderer.
-- **Property controls** - `properties/` (barrel `index.ts`): `renderSelectControl` (single-choice popover: status, priority, type, repeat, parent), `renderMultiSelect` (multi-choice: tags, assignees, dependencies), `renderDateControl` (date popover; renders a `.pm-due` hint span only when the caller passes `hint` - a relative due-state on Due, a muted on-time/late outcome on Completed, nothing on Start), `renderAddProperty` (progressive-disclosure "Add property" built on `renderAddButton`), `optionList.ts` helpers (`renderGlyph`, `renderOptionRow`). `src/modals/TaskFormFields.ts` shows the intended composition of these with `renderPropRow`.
+- **ProjectHeader** - `ProjectHeader/`. Props: project, statuses, severities, verdicts, filter, activeSavedViewId + callbacks; methods `refresh`, `notifyMutation`, `setActiveSavedViewId`. Composes PrimaryRow (saved-view ChipButtons, save button) and FilterRow (filter dropdowns, due/archived ChipButtons).
+- **Cells** - `cells/`. One `<td>` builder per column: StatusCell, SeverityCell, TitleCell, DueDateCell, TimeCell, ProgressCell, AssigneesCell, ExpandCell, ActionsCell, SelectCell, CustomFieldCell. `inlineEdit.ts` (`makeInlineEdit`) is the shared inline text/date editor. Adding a table column means adding a cell here, not inline DOM in the renderer.
+- **Property controls** - `properties/` (barrel `index.ts`): `renderSelectControl` (single-choice popover: status, severity, type, repeat, parent), `renderMultiSelect` (multi-choice: tags, assignees, dependencies), `renderDateControl` (date popover; renders a `.pm-due` hint span only when the caller passes `hint` - a relative due-state on Due, a muted on-time/late outcome on Completed, nothing on Start), `renderAddProperty` (progressive-disclosure "Add property" built on `renderAddButton`), `optionList.ts` helpers (`renderGlyph`, `renderOptionRow`). `src/modals/TaskFormFields.ts` shows the intended composition of these with `renderPropRow`.
 
 ## Shared widgets (`src/ui/*.ts`)
 
@@ -139,10 +139,10 @@ Richer than primitives, used across views. Avoid expanding this bucket; prefer c
 
 - **FilterDropdown** - `renderFilterDropdown(parent, label, selected, options, onChange)`: a ChipButton that opens a checkable Menu with a Clear item. Any multi-select filter control.
 - **FormField** - `renderPropRow(container, label, valueBuilder, icon?)` (label + value form row), `renderChipList(container, items, { variant, shape, onRemove, onAdd?, ... })` (removable-token list with add affordance), `renderProgressSlider(container, value, onChange)`.
-- **StatusBadge** - `renderStatusBadge(container, task, statuses, onChange)` (solid dot-led Chip + picker Menu), `renderPriorityBadge(...)` (plain Chip with chevron icon + picker Menu), `renderStatusDot(container, status, statuses, cls?)` (bare colored dot), `PRIORITY_CHEVRONS`. The only way to render status/priority.
+- **StatusBadge** - `renderStatusBadge(container, task, statuses, onChange)` (solid dot-led Chip + picker Menu), `renderStatusDot(container, status, statuses, cls?)` (bare colored dot). The only way to render status.
 - **TaskContextMenu** - `buildTaskContextMenu(menu, task, ctx)`: the task right-click menu.
 - **ModalFactory** - all modal opening: `openTaskModal`, `openProjectModal`, `openProjectPicker`, `openTaskPicker`, `openImportModal`, `confirmDialog`, `confirmDuplicateSubtasks`, `promptText`. Never instantiate a modal directly from a view.
-- **PaletteListEditor** - `renderStatusListEditor` / `renderPriorityListEditor` for settings-style palette editing, plus `attachIconSuggest`, `wireRowDragReorder`.
+- **PaletteListEditor** - `renderStatusListEditor` / `renderPriorityListEditor` (the generic palette editor, reused for issue types/severities/verdicts; the priorities palette itself is UI-retired) for settings-style palette editing, plus `attachIconSuggest`, `wireRowDragReorder`.
 
 ## Native Obsidian components to use directly
 

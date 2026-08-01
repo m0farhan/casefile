@@ -110,9 +110,6 @@ export class TableView implements SubView {
         case 'set-status':
           await this.plugin.store.updateTasks(this.project, ids, { status: action.status })
           break
-        case 'set-priority':
-          await this.plugin.store.updateTasks(this.project, ids, { priority: action.priority })
-          break
         case 'set-assignee':
           if (action.assignee === '') {
             await this.plugin.store.updateTasks(this.project, ids, { assignees: [] })
@@ -192,7 +189,6 @@ export class TableView implements SubView {
       project: this.project,
       plugin: this.plugin,
       statuses: config.statuses,
-      priorities: config.priorities,
       state: this.state,
       onRefresh: this.onRefresh,
       onSelectionChange: () => {

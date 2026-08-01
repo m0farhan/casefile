@@ -15,7 +15,6 @@ export interface KanbanColumnStatus {
 
 export interface KanbanCardData {
   task: Task
-  priorityColor?: string
   descriptionPreview?: string
   parentTitle?: string
   issueTypes?: IssueTypeConfig[]
@@ -86,7 +85,6 @@ export class KanbanColumn {
     for (const card of props.cards) {
       new KanbanCard(cardsEl, {
         task: card.task,
-        priorityColor: card.priorityColor,
         descriptionPreview: card.descriptionPreview,
         parentTitle: card.parentTitle,
         issueTypes: card.issueTypes,

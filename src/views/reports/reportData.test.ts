@@ -146,7 +146,7 @@ describe('buildHandover', () => {
 
     expect(md).toContain('# Shift handover')
     expect(md).toContain('## Open incidents')
-    expect(md).toContain('### SEV1')
+    expect(md).toContain('### Critical') // sev1's label since severity became the urgency dial
     // sev1 policy: response 60m from 11:30 -> 30m left at 12:00
     expect(md).toContain('SOC-1 Beacon triage — in-progress · response target in 30m')
     expect(md).toContain('last: status → in-progress at 2026-07-30T11:40:00.000Z')

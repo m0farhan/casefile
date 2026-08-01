@@ -190,12 +190,15 @@ export interface PriorityListEditorOpts {
   onDeleted?: (deleted: PriorityConfig) => void
 }
 
+// The plain palette editor (no per-row extras). Named for its PriorityConfig row shape;
+// since the priorities palette left the UI its callers are issue types, severities, and
+// verdicts, so the min-one copy is generic.
 export function renderPriorityListEditor(container: HTMLElement, opts: PriorityListEditorOpts): void {
   renderPaletteListEditor<PriorityConfig>(container, {
     app: opts.app,
     items: opts.priorities,
     onChanged: opts.onChanged,
     onDeleted: opts.onDeleted,
-    minOneMessage: 'You must have at least one priority.'
+    minOneMessage: 'You must keep at least one entry in this list.'
   })
 }

@@ -4,7 +4,6 @@ import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { wouldCreateCycle } from '../store/Scheduler'
 import { renderPropRow } from '../ui/FormField'
-import { PRIORITY_CHEVRONS } from '../ui/StatusBadge'
 import { isTerminalStatus, stringToColor } from '../utils'
 import { completionOutcome, relativeDue } from '../dates'
 import { renderCustomFieldInput } from './CustomFieldInputs'
@@ -42,14 +41,14 @@ const REPEAT_OPTIONS: SelectItem[] = [
 ]
 
 /**
- * Renders the compact property grid: core properties (type, status, priority, due, assignees,
+ * Renders the compact property grid: core properties (type, status, severity, due, assignees,
  * tags) always show; rarely-used ones (start, repeat, depends on) hide when empty behind
  * "Add property". Single-selects and dates re-render the form on change; multi-selects mutate
  * the task in place and refresh their own chips.
  */
 export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFieldsContext): void {
   const { task, project, plugin, rerender, shownExtras } = ctx
-  const { statuses, priorities, issueTypes, severities, verdicts } = plugin.store.configFor(project)
+  const { statuses, issueTypes, severities, verdicts } = plugin.store.configFor(project)
   const grid = container.createDiv('pm-prop-grid')
 
   // Type
@@ -109,7 +108,7 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     grid.createDiv()
   }
 
-  // Issue type (spacer holds the right column so Status | Priority stays paired)
+  // Issue type (spacer holds the right column so Status | Severity stays paired)
   renderPropRow(
     grid,
     'Issue type',
@@ -130,7 +129,8 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
   )
   grid.createDiv()
 
-  // Status
+  // Status | Severity — severity is the single urgency dial, optional on every task type.
+  // Only incidents run an SLA clock off it (slaState gates on issueType).
   renderPropRow(
     grid,
     'Status',
@@ -149,55 +149,30 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     },
     'circle-dot'
   )
-
-  // Priority
   renderPropRow(
     grid,
-    'Priority',
+    'Severity',
     () => {
       const cell = createDiv('pm-prop-value')
       renderSelectControl({
         container: cell,
-        value: task.priority,
-        options: priorities.map((p) => ({
-          id: p.id,
-          label: p.label,
-          color: p.color,
-          icon: p.icon || PRIORITY_CHEVRONS[p.id]
-        })),
+        value: task.severity,
+        options: [
+          { id: '', label: 'None' },
+          ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
+        ],
         onChange: (id) => {
-          task.priority = id
+          task.severity = id
           rerender()
         }
       })
       return cell
     },
-    'flag'
+    'shield-alert'
   )
 
-  // Severity | Verdict — incidents only, always a full pair so the grid never de-aligns
+  // Verdict — incidents only; the spacer keeps the two-column grid aligned
   if (task.issueType === 'incident') {
-    renderPropRow(
-      grid,
-      'Severity',
-      () => {
-        const cell = createDiv('pm-prop-value')
-        renderSelectControl({
-          container: cell,
-          value: task.severity,
-          options: [
-            { id: '', label: 'None' },
-            ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
-          ],
-          onChange: (id) => {
-            task.severity = id
-            rerender()
-          }
-        })
-        return cell
-      },
-      'shield-alert'
-    )
     renderPropRow(
       grid,
       'Verdict',
@@ -219,6 +194,7 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       },
       'scale'
     )
+    grid.createDiv()
   }
 
   // Progress | Bucket share a row (milestones have no progress, so Bucket pairs with a spacer)

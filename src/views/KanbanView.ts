@@ -5,7 +5,7 @@ import { flattenTasks, totalLoggedHours } from '../store/TaskTreeOps'
 import { findEpicAncestor, findParentId } from '../store/TaskIndex'
 import { matchesFilter } from '../store/TaskFilter'
 import type { QueryCtx } from '../store/QueryParser'
-import { dueUrgency, isTerminalStatus, getPriorityConfig, safeAsync } from '../utils'
+import { dueUrgency, isTerminalStatus, safeAsync } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
 import { buildTaskContextMenu } from '../ui/TaskContextMenu'
 import { KanbanColumn, type DropNeighbor, type KanbanCardData } from '../ui/composites/KanbanColumn'
@@ -52,7 +52,7 @@ export class KanbanView implements SubView {
 
     const lanes = computeLanes(this.visibleTasks(), groupBy, {
       epicOf: (id) => findEpicAncestor(this.project, id),
-      priorities: this.config.priorities
+      severities: this.config.severities
     })
 
     for (const lane of lanes) {
@@ -156,10 +156,6 @@ export class KanbanView implements SubView {
   }
 
   private buildCardData(task: Task, showEpic: boolean): KanbanCardData {
-    const priorityConfig = getPriorityConfig(this.config.priorities, task.priority)
-    const priorityColor =
-      priorityConfig && task.priority !== 'medium' && task.priority !== 'low' ? priorityConfig.color : undefined
-
     let descriptionPreview: string | undefined
     if (this.config.kanbanShowDescriptionPreview && task.description.trim()) {
       const text = task.description
@@ -198,7 +194,6 @@ export class KanbanView implements SubView {
 
     return {
       task,
-      priorityColor,
       descriptionPreview,
       parentTitle,
       issueTypes: this.config.issueTypes,

@@ -20,7 +20,6 @@ import { renderTimeChip } from './timeChip'
 
 export interface KanbanCardProps {
   task: Task
-  priorityColor?: string
   descriptionPreview?: string
   parentTitle?: string
   /** Resolved issue-type catalog (configFor(project).issueTypes). Defaults apply when absent. */
@@ -65,11 +64,6 @@ export class KanbanCard {
     card.draggable = true
     card.dataset.taskId = task.id
     this.el = card
-
-    if (props.priorityColor) {
-      const priorityBar = card.createDiv('pm-kanban-card-priority-bar')
-      priorityBar.setCssStyles({ background: props.priorityColor })
-    }
 
     const body = card.createDiv('pm-kanban-card-body')
 
@@ -122,11 +116,13 @@ export class KanbanCard {
     }
 
     const soc = body.createDiv('pm-kanban-card-soc')
+    // Severity shows on any task type; the SLA chip stays incident-only
+    // (slaState also gates on issueType, so this is belt and braces).
+    renderSeverityBadge(
+      soc,
+      (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
+    )
     if (task.issueType === 'incident') {
-      renderSeverityBadge(
-        soc,
-        (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
-      )
       renderSlaChip(soc, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
     }
     if (task.iocs.length) {

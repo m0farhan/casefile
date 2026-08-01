@@ -119,10 +119,10 @@ export function renderTaskBar(g: SVGGElement, task: Task, row: number, _depth: n
     barGroup.appendChild(label)
   }
 
-  // Tooltip
+  // Tooltip (status only; priority is UI-retired, and severity already badges elsewhere)
   const ttEl = svgEl('title', {})
   const assigneesStr = task.assignees.length ? `\nAssignees: ${task.assignees.join(', ')}` : ''
-  ttEl.textContent = `${task.title}\n${statusConfig?.label ?? task.status} \u00b7 ${task.priority}\nStart: ${task.start || '\u2014'}  Due: ${task.due || '\u2014'}\nProgress: ${task.progress}%${assigneesStr}`
+  ttEl.textContent = `${task.title}\n${statusConfig?.label ?? task.status}\nStart: ${task.start || '\u2014'}  Due: ${task.due || '\u2014'}\nProgress: ${task.progress}%${assigneesStr}`
   rect.appendChild(ttEl)
 
   // Drag handles

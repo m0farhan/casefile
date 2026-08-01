@@ -33,9 +33,9 @@ export interface CompiledQuery {
 
 export interface QueryCtx {
   statuses: StatusConfig[]
-  /** Ordered catalog; index 0 = highest rank (drives `prio:>=high`). */
+  /** Ordered catalog; index 0 = highest rank (drives the help-hidden `prio:>=high`). */
   priorities: PriorityConfig[]
-  /** Ordered catalog; index 0 = most severe (drives `sev:>=sev2`). */
+  /** Ordered catalog; index 0 = most severe (drives `sev:>=high`). */
   severities: SeverityConfig[]
   /** Resolves `assignee:me`. Empty → 'me' stays a literal name. */
   currentUser: string
@@ -73,13 +73,25 @@ function withNeg(op: Op, hit: boolean): boolean {
   return false
 }
 
-/** Eq/neg plus ordering by catalog index, where index 0 = highest rank (so '>=' means idx <= idx(value)). */
-function rankMatch(catalog: { id: string }[], actual: string, op: Op, value: string): boolean {
-  if (op === '=' || op === '!') return eqNeg(op, actual, value)
-  const ids = catalog.map((c) => c.id.toLowerCase())
-  const ti = ids.indexOf(actual.toLowerCase())
-  const vi = ids.indexOf(value)
-  if (ti < 0 || vi < 0) return false
+/** Resolve a query value against a catalog by id first, then label, case-insensitively. -1 = unknown. */
+function catalogIndex(catalog: { id: string; label: string }[], value: string): number {
+  const byId = catalog.findIndex((c) => c.id.toLowerCase() === value)
+  if (byId >= 0) return byId
+  return catalog.findIndex((c) => c.label.toLowerCase() === value)
+}
+
+/**
+ * Eq/neg plus ordering by catalog index, where index 0 = highest rank (so '>='
+ * means idx <= idx(value)). The query value may be a catalog id or label
+ * (`sev:>=high` and `sev:>=sev2` both work); a value the catalog doesn't know
+ * never matches, on every op.
+ */
+function rankMatch(catalog: { id: string; label: string }[], actual: string, op: Op, value: string): boolean {
+  const vi = catalogIndex(catalog, value)
+  if (vi < 0) return false
+  if (op === '=' || op === '!') return eqNeg(op, actual, catalog[vi].id.toLowerCase())
+  const ti = catalog.findIndex((c) => c.id.toLowerCase() === actual.toLowerCase())
+  if (ti < 0) return false
   if (op === '>') return ti < vi
   if (op === '>=') return ti <= vi
   if (op === '<') return ti > vi
@@ -208,8 +220,14 @@ export const FIELD_MATCHERS: Record<string, FieldMatcher> = {
     return withNeg(op, q !== '' && task.iocs.some((i) => refangIoc(i.value).toLowerCase().includes(q)))
   }
 }
+// ponytail: priority is retired from the UI, but the matcher (and its prio alias) stays
+// functional so saved views and muscle-memory queries written before the retirement keep
+// working — it is deliberately absent from FIELD_HELP.
 FIELD_MATCHERS.prio = FIELD_MATCHERS.priority
 FIELD_MATCHERS.sev = FIELD_MATCHERS.severity
+
+/** Matchers kept working but deliberately hidden from FIELD_HELP (see comment above). */
+export const HELP_HIDDEN_FIELDS = new Set(['priority', 'prio'])
 
 /**
  * One row per query field for the header help popover. Co-located with
@@ -219,8 +237,7 @@ export const FIELD_HELP: { field: string; example: string; hint: string }[] = [
   { field: 'key', example: 'key:soc-12', hint: 'exact key or prefix' },
   { field: 'status', example: 'status:in-progress', hint: 'status id' },
   { field: 'type', example: 'type:incident', hint: 'issue type' },
-  { field: 'prio', example: 'prio:>=high', hint: 'priority rank' },
-  { field: 'sev', example: 'sev:>=sev2', hint: 'severity rank' },
+  { field: 'sev', example: 'sev:>=high', hint: 'severity rank' },
   { field: 'verdict', example: 'verdict:false-positive', hint: 'verdict id' },
   { field: 'assignee', example: 'assignee:me', hint: 'me · name · none' },
   { field: 'tag', example: 'tag:phishing', hint: 'exact tag' },

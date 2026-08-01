@@ -1,5 +1,5 @@
 import { ButtonComponent, ExtraButtonComponent, Menu, Notice } from 'obsidian'
-import type { Task, TaskStatus, TaskPriority } from '../../types'
+import type { Task, TaskStatus } from '../../types'
 import { flattenTasks, collectAllAssignees, collectAllTags } from '../../store'
 import { findTaskById } from '../../store/TaskIndex'
 import { formatBadgeText } from '../../utils'
@@ -11,7 +11,6 @@ import { updateSelectAllCheckbox } from './TableRow'
 
 export type BulkAction =
   | { type: 'set-status'; status: TaskStatus }
-  | { type: 'set-priority'; priority: TaskPriority }
   | { type: 'set-assignee'; assignee: string }
   | { type: 'set-tag'; tag: string }
   | { type: 'set-due-date'; due: string }
@@ -65,19 +64,6 @@ function updateBarContent(bar: HTMLElement, ctx: TableContext, onAction: (a: Bul
     for (const s of ctx.statuses) {
       menu.addItem((item) =>
         item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => onAction({ type: 'set-status', status: s.id }))
-      )
-    }
-    menu.showAtMouseEvent(e)
-  })
-
-  // Priority button
-  new ButtonComponent(left).setButtonText('Set priority').onClick((e) => {
-    const menu = new Menu()
-    for (const p of ctx.priorities) {
-      menu.addItem((item) =>
-        item
-          .setTitle(formatBadgeText(p.icon, p.label))
-          .onClick(() => onAction({ type: 'set-priority', priority: p.id }))
       )
     }
     menu.showAtMouseEvent(e)

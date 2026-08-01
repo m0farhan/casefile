@@ -1,15 +1,17 @@
-import { BUCKETS, type PriorityConfig, type Task } from '../types'
+import { BUCKETS, type SeverityConfig, type Task } from '../types'
 
-export type KanbanLaneGroup = 'none' | 'epic' | 'assignee' | 'priority' | 'bucket'
+export type KanbanLaneGroup = 'none' | 'epic' | 'assignee' | 'severity' | 'bucket'
 
 export const LANE_GROUPS: { id: KanbanLaneGroup; label: string }[] = [
   { id: 'none', label: 'None' },
   { id: 'epic', label: 'Epic' },
   { id: 'assignee', label: 'Assignee' },
-  { id: 'priority', label: 'Priority' },
+  { id: 'severity', label: 'Severity' },
   { id: 'bucket', label: 'Bucket' }
 ]
 
+// A data.json lane setting persisted before the priority→severity swap (kanbanLane:
+// 'priority') fails this guard and degrades to 'none' — never a crash.
 export function isLaneGroup(value: unknown): value is KanbanLaneGroup {
   return LANE_GROUPS.some((g) => g.id === value)
 }
@@ -28,7 +30,7 @@ export interface KanbanLane {
 export function computeLanes(
   tasks: Task[],
   groupBy: KanbanLaneGroup,
-  opts: { epicOf: (taskId: string) => Task | null; priorities: PriorityConfig[] }
+  opts: { epicOf: (taskId: string) => Task | null; severities: SeverityConfig[] }
 ): KanbanLane[] {
   if (groupBy === 'none') return [{ key: 'all', label: '', tasks }]
 
@@ -60,16 +62,20 @@ export function computeLanes(
       const named = withoutKey(byKey, '').sort((a, b) => a.label.localeCompare(b.label))
       return [...named, ...keptLane(byKey, '')]
     }
-    case 'priority': {
+    case 'severity': {
       for (const t of tasks) {
-        const cfg = opts.priorities.find((p) => p.id === t.priority)
-        add(t.priority, cfg?.label ?? t.priority, t)
+        if (!t.severity) {
+          add('', 'No severity', t)
+          continue
+        }
+        const cfg = opts.severities.find((s) => s.id === t.severity)
+        add(t.severity, cfg?.label ?? t.severity, t)
       }
-      // Catalog order first; priorities outside the catalog trail in first-appearance order.
-      const catalogIds = opts.priorities.map((p) => p.id)
+      // Catalog order first; unknown severities trail in first-appearance order, No severity last.
+      const catalogIds = opts.severities.map((s) => s.id)
       const inCatalog = catalogIds.flatMap((id) => keptLane(byKey, id))
-      const extras = [...byKey.values()].filter((l) => !catalogIds.includes(l.key))
-      return [...inCatalog, ...extras]
+      const extras = [...byKey.values()].filter((l) => l.key !== '' && !catalogIds.includes(l.key))
+      return [...inCatalog, ...extras, ...keptLane(byKey, '')]
     }
     case 'bucket': {
       for (const t of tasks) {

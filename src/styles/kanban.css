@@ -119,11 +119,6 @@
   }
 }
 
-.pm-kanban-card-priority-bar {
-  height: 3px;
-  flex-shrink: 0;
-  opacity: 0.5;
-}
 .pm-kanban-card-body {
   flex: 1;
   padding: 10px 12px;

@@ -1,7 +1,7 @@
 import { ButtonComponent, ItemView, WorkspaceLeaf } from 'obsidian'
 import type PMPlugin from '../../main'
 import type { Task } from '../../types'
-import { DEFAULT_PRIORITIES, DEFAULT_STATUSES, makeTask } from '../../types'
+import { DEFAULT_SEVERITIES, DEFAULT_STATUSES, makeTask } from '../../types'
 import { renderDueChip } from '../../ui/composites/dueChip'
 import { renderTagChip } from '../../ui/composites/tagChip'
 import { renderTimeChip } from '../../ui/composites/timeChip'
@@ -9,8 +9,8 @@ import { ActionsCell } from '../../ui/composites/cells/ActionsCell'
 import { AssigneesCell } from '../../ui/composites/cells/AssigneesCell'
 import { DueDateCell } from '../../ui/composites/cells/DueDateCell'
 import { ExpandCell } from '../../ui/composites/cells/ExpandCell'
-import { PriorityCell } from '../../ui/composites/cells/PriorityCell'
 import { ProgressCell } from '../../ui/composites/cells/ProgressCell'
+import { SeverityCell } from '../../ui/composites/cells/SeverityCell'
 import { SelectCell } from '../../ui/composites/cells/SelectCell'
 import { StatusCell } from '../../ui/composites/cells/StatusCell'
 import { TimeCell } from '../../ui/composites/cells/TimeCell'
@@ -32,7 +32,8 @@ import { Popover } from '../../ui/primitives/Popover'
 import { ProgressBar } from '../../ui/primitives/ProgressBar'
 import { SegmentedControl } from '../../ui/primitives/SegmentedControl'
 import { ViewSwitcher } from '../../ui/primitives/ViewSwitcher'
-import { renderPriorityBadge, renderStatusBadge, renderStatusDot } from '../../ui/StatusBadge'
+import { renderStatusBadge, renderStatusDot } from '../../ui/StatusBadge'
+import { renderSeverityBadge } from '../../soc/slaTicker'
 import { safeAsync } from '../../utils'
 
 export const PM_STYLEGUIDE_VIEW_TYPE = 'casefile-styleguide'
@@ -358,14 +359,14 @@ export class StyleguideView extends ItemView {
   }
 
   private renderBadges(): void {
-    const sec = this.section('Status and priority', 'badges')
+    const sec = this.section('Status and severity', 'badges')
     const statusRow = this.row(sec, 'renderStatusBadge (opens a picker menu)')
     for (const status of DEFAULT_STATUSES) {
       renderStatusBadge(statusRow, makeTask({ status: status.id }), DEFAULT_STATUSES, noop)
     }
-    const prioRow = this.row(sec, 'renderPriorityBadge')
-    for (const priority of DEFAULT_PRIORITIES) {
-      renderPriorityBadge(prioRow, makeTask({ priority: priority.id }), DEFAULT_PRIORITIES, noop)
+    const sevRow = this.row(sec, 'renderSeverityBadge')
+    for (const severity of DEFAULT_SEVERITIES) {
+      renderSeverityBadge(sevRow, severity)
     }
     const dotRow = this.row(sec, 'renderStatusDot')
     for (const status of DEFAULT_STATUSES) {
@@ -436,12 +437,11 @@ export class StyleguideView extends ItemView {
       task: makeTask({
         title: 'Ship the redesign',
         type: 'milestone',
-        priority: 'critical',
+        severity: 'sev1',
         due: '2026-06-20',
         assignees: ['Ada Lovelace', 'Grace Hopper'],
         tags: ['design', 'frontend']
       }),
-      priorityColor: '#c47070',
       descriptionPreview: 'Everything that must land before the announcement goes out.',
       parentTitle: 'Website relaunch',
       subtaskProgress: { done: 2, total: 5 },
@@ -470,7 +470,7 @@ export class StyleguideView extends ItemView {
         task: makeTask({
           title: 'Design the settings screen',
           status: 'in-progress',
-          priority: 'high',
+          severity: 'sev2',
           due: '2026-07-20',
           progress: 60,
           assignees: ['Ada Lovelace', 'Grace Hopper'],
@@ -484,7 +484,7 @@ export class StyleguideView extends ItemView {
         task: makeTask({
           title: 'Fix the overdue banner',
           status: 'blocked',
-          priority: 'critical',
+          severity: 'sev1',
           due: '2026-06-20',
           progress: 20,
           assignees: ['Alan Turing']
@@ -513,7 +513,7 @@ export class StyleguideView extends ItemView {
       new SelectCell(tr.el, { checked: props.isSelected, onClick: noop })
       tr.el.createEl('td', { cls: 'pm-table-cell-title', text: task.title })
       new StatusCell(tr.el, { task, statuses: DEFAULT_STATUSES, onChange: noop })
-      new PriorityCell(tr.el, { task, priorities: DEFAULT_PRIORITIES, onChange: noop })
+      new SeverityCell(tr.el, { task, severities: DEFAULT_SEVERITIES, onChange: noop })
       new DueDateCell(tr.el, { task, urgency, onSave: noopAsync })
       new TimeCell(tr.el, time)
       new ProgressCell(tr.el, { value: task.progress, color: 'var(--interactive-accent)' })

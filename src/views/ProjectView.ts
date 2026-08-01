@@ -221,7 +221,6 @@ export class ProjectView extends ItemView {
     this.header = new ProjectHeader(this.headerEl, {
       project: this.project,
       statuses: config.statuses,
-      priorities: config.priorities,
       severities: config.severities,
       verdicts: config.verdicts,
       queryCtx: {

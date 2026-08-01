@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (severity replaces priority)
+
+- Severity is the single urgency dial: renamed to Critical/High/Medium/Low and available on every task type (SLA clocks still run on incidents only)
+- The query bar accepts severity labels as well as ids (`sev:>=high` and `sev:>=sev2` both work)
+- Priority is gone from the UI (editors, board, table, filters, settings); existing files and saved `prio:` queries keep working unchanged
+
 ### Added
 
 - Priorities can be added, renamed, recolored, and reordered in settings

@@ -72,8 +72,9 @@ export interface Task {
   /** Semantic issue type (epic/story/task/bug/incident/...), orthogonal to the structural `type`. */
   issueType: string
   status: TaskStatus
+  /** Retired from the UI — kept for round-trip with existing files; severity is the urgency dial. */
   priority: TaskPriority
-  /** Incident impact (drives SLA). '' = none. Distinct from priority (the analyst's work order). */
+  /** Impact/urgency on any task type. '' = none. Drives the SLA clock on incidents only. */
   severity: string
   /** Incident resolution: '' | true-positive | false-positive | benign-true-positive | duplicate | pending. */
   verdict: string
@@ -299,6 +300,9 @@ export const DEFAULT_STATUSES: StatusConfig[] = [
   { id: 'cancelled', label: 'Cancelled', color: '#767491', icon: '', complete: true }
 ]
 
+/* Priority is retired from the UI (severity is the single urgency dial) but stays in the
+ * schema: existing task frontmatter, project overrides, and data.json carry priority
+ * values that must keep round-tripping byte-compatible. */
 export const DEFAULT_PRIORITIES: PriorityConfig[] = [
   { id: 'critical', label: 'Critical', color: '#c47070', icon: '' },
   { id: 'high', label: 'High', color: '#b8a06b', icon: '' },
@@ -315,11 +319,14 @@ export const DEFAULT_ISSUE_TYPES: IssueTypeConfig[] = [
   { id: 'incident', label: 'Incident', color: '#f2994a', icon: 'siren' }
 ]
 
+/* Ids sev1..sev4 are stored in task frontmatter and key DEFAULT_SLA_POLICIES — never change
+ * them; only the human-facing labels moved off the SEVn scheme when severity replaced
+ * priority as the single urgency dial. */
 export const DEFAULT_SEVERITIES: SeverityConfig[] = [
-  { id: 'sev1', label: 'SEV1', color: '#eb5757', icon: '' },
-  { id: 'sev2', label: 'SEV2', color: '#f2994a', icon: '' },
-  { id: 'sev3', label: 'SEV3', color: '#f2c94c', icon: '' },
-  { id: 'sev4', label: 'SEV4', color: '#4ea7fc', icon: '' }
+  { id: 'sev1', label: 'Critical', color: '#eb5757', icon: '' },
+  { id: 'sev2', label: 'High', color: '#f2994a', icon: '' },
+  { id: 'sev3', label: 'Medium', color: '#f2c94c', icon: '' },
+  { id: 'sev4', label: 'Low', color: '#4ea7fc', icon: '' }
 ]
 
 export const DEFAULT_VERDICTS: VerdictConfig[] = [

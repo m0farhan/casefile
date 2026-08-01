@@ -1,5 +1,5 @@
 import type PMPlugin from '../../main'
-import type { Project, FilterState, PriorityConfig, StatusConfig } from '../../types'
+import type { Project, FilterState, StatusConfig } from '../../types'
 import { type FlatTask, flattenTasks } from '../../store/TaskTreeOps'
 import { findTaskById } from '../../store/TaskIndex'
 import { applyTaskFilterFlat, isFilterActive } from '../../store/TaskFilter'
@@ -8,7 +8,10 @@ import { renderAddButton } from '../../ui/composites/addButton'
 import { compareTask } from './TableFilters'
 import { renderTaskRow, updateSelectedRow, updateSelectAllCheckbox } from './TableRow'
 
-type SortKey = 'title' | 'status' | 'priority' | 'due' | 'assignees' | 'progress'
+// 'severity' replaced 'priority' when priority was retired from the UI. A saved view
+// persisted with sortKey 'priority' falls through compareTask's default case (stable,
+// unsorted) — graceful, never a crash.
+type SortKey = 'title' | 'status' | 'severity' | 'due' | 'assignees' | 'progress'
 type SortDir = 'asc' | 'desc'
 
 export type { SortKey, SortDir }
@@ -42,8 +45,6 @@ export interface TableContext {
   plugin: PMPlugin
   /** Status definitions in effect for this project, computed once per render pass. */
   statuses: StatusConfig[]
-  /** Priority definitions in effect for this project, computed once per render pass. */
-  priorities: PriorityConfig[]
   state: TableState
   onRefresh: () => Promise<void>
   onSelectionChange: () => void
@@ -92,7 +93,7 @@ export function renderTable(ctx: TableContext): void {
     { key: null, label: '', width: '32px' },
     { key: 'title', label: 'Task', width: 'auto' },
     { key: 'status', label: 'Status', width: '130px' },
-    { key: 'priority', label: 'Priority', width: '110px' },
+    { key: 'severity', label: 'Severity', width: '110px' },
     { key: 'assignees', label: 'Assignees', width: '140px' },
     { key: 'due', label: 'Due', width: '110px' },
     { key: 'progress', label: 'Progress', width: '120px' },
@@ -153,7 +154,7 @@ function fillTableBody(ctx: TableContext): void {
   const hasActiveFilter = isFilterActive(ctx.state.filter)
   const cfg = ctx.plugin.store.configFor(ctx.project)
   flat = applyTaskFilterFlat(flat, ctx.state.filter, ctx.statuses, {
-    priorities: ctx.priorities,
+    priorities: cfg.priorities,
     severities: cfg.severities,
     currentUser: ctx.plugin.settings.currentUser
   })
@@ -180,7 +181,7 @@ function fillTableBody(ctx: TableContext): void {
     list.push(f)
   }
   for (const list of childrenByParent.values()) {
-    list.sort((a, b) => compareTask(a.task, b.task, ctx.state, ctx.statuses, ctx.priorities))
+    list.sort((a, b) => compareTask(a.task, b.task, ctx.state, ctx.statuses, cfg.severities))
   }
 
   const sorted: FlatTask[] = []

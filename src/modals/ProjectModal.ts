@@ -6,7 +6,7 @@ import { safeAsync } from '../utils'
 import { renderAddButton } from '../ui/composites/addButton'
 import { Avatar } from '../ui/primitives/Avatar'
 import { IconButton } from '../ui/primitives/IconButton'
-import { renderPriorityListEditor, renderStatusListEditor } from '../ui/PaletteListEditor'
+import { renderStatusListEditor } from '../ui/PaletteListEditor'
 import { caseFilePath, projectFileName } from '../store/layout'
 
 const PROJECT_COLORS = [
@@ -256,28 +256,9 @@ export class ProjectModal extends Modal {
         })
     })
 
-    // ── Priorities ────────────────────────────────────────────────────────────
-    this.renderPaletteOverride(el, {
-      heading: 'Priorities',
-      hint: 'The priority scale for this project',
-      toggleLabel: 'Use custom priorities instead of the global ones',
-      addLabel: 'Add priority',
-      get: () => this.project.config?.priorities,
-      set: (priorities) => this.patchConfig('priorities', priorities),
-      copyGlobal: () => this.plugin.settings.priorities.map((p) => ({ ...p })),
-      makeEntry: () => ({
-        id: 'priority-' + makeId().slice(0, 6),
-        label: 'New priority',
-        color: '#8a94a0',
-        icon: ''
-      }),
-      renderEditor: (container, priorities) =>
-        renderPriorityListEditor(container, {
-          app: this.app,
-          priorities,
-          onChanged: () => {}
-        })
-    })
+    // No Priorities override section: priority is UI-retired. config.priorities still
+    // hydrates/serializes (YamlHydrator/YamlSerializer) so project files that carry a
+    // priority override keep round-tripping untouched.
 
     // ── View & scheduling overrides ──────────────────────────────────────────
     const behaviorSection = el.createDiv('pm-modal-section')

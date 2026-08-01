@@ -63,8 +63,9 @@ export function matchesFilter(
         task.id.toLowerCase() === q ||
         (task.key !== '' && task.key.toLowerCase().includes(q)) ||
         task.title.toLowerCase().includes(q) ||
+        // priority is deliberately NOT free-text-matched: the field is invisible since the
+        // severity takeover, and 'medium' (the schema default) would match every task.
         task.status.includes(q) ||
-        task.priority.includes(q) ||
         task.assignees.some((a) => a.toLowerCase().includes(q)) ||
         task.tags.some((t) => t.toLowerCase().includes(q)) ||
         task.iocs.some((i) => refangIoc(i.value).toLowerCase().includes(iocQ))

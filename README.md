@@ -13,20 +13,20 @@ trail, hand over cleanly.
 
 - Issue keys (`SOC-12`) — stable, immutable case addresses, with a global
   **Open case…** command (fuzzy search over every key + recently opened cases)
-- Issue types with epic pills; per-project statuses, priorities, custom fields
+- Issue types with epic pills; per-project statuses and custom fields
 - Kanban with swimlanes, WIP limits (editable in settings), collapsible
   columns that still accept drops, and buckets + backlog for planning
 - Table view with sorting, inline editing, and bulk actions — including bulk
   set-severity / set-verdict for alert storms
-- Query bar with a JQL-lite grammar (`sev:>=sev2 sla:breached ioc:evil[.]com`),
+- Query bar with a JQL-lite grammar (`sev:>=high sla:breached ioc:evil[.]com`),
   a built-in syntax popover, live match counts, and saved views
 - Right-leaf task detail panel with debounced autosave; Gantt and dashboard
   views for the bigger picture
 
 **SOC pack**
 
-- Severity (≠ priority) and verdict, with a close-guard so incidents can't be
-  closed without a verdict
+- Severity (the single urgency dial, on any task type) and verdict, with a
+  close-guard so incidents can't be closed without a verdict
 - Per-severity SLA policies with live countdown chips (board, table, detail
   panel and modal) and breach notices
 - IOC table: bulk paste straight from a report (defanged values are refanged,
