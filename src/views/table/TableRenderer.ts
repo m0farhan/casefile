@@ -3,7 +3,7 @@ import type { Project, FilterState, StatusConfig } from '../../types'
 import { type FlatTask, flattenTasks } from '../../store/TaskTreeOps'
 import { findTaskById } from '../../store/TaskIndex'
 import { applyTaskFilterFlat, isFilterActive } from '../../store/TaskFilter'
-import { openTaskModal } from '../../ui/ModalFactory'
+import { confirmDialog, openTaskModal } from '../../ui/ModalFactory'
 import { renderAddButton } from '../../ui/composites/addButton'
 import { compareTask } from './TableFilters'
 import { renderTaskRow, updateSelectedRow, updateSelectAllCheckbox } from './TableRow'
@@ -361,10 +361,16 @@ export function handleTableKeyDown(e: KeyboardEvent, ctx: TableContext): void {
       }
       if (!ctx.state.selectedTaskId) return
       const id = ctx.state.selectedTaskId
-      const currentIdx = rows.indexOf(id)
-      const nextIdx = currentIdx < rows.length - 1 ? currentIdx + 1 : currentIdx - 1
-      ctx.state.selectedTaskId = nextIdx >= 0 ? rows[nextIdx] : null
-      void deleteTask(id, ctx)
+      // Same guard as the bulk and modal delete paths: one keystroke must not
+      // trash a case file (and its subtask files) without a confirm.
+      void (async () => {
+        const title = ctx.project.taskIndex.get(id)?.task.title ?? 'this task'
+        if (!(await confirmDialog(ctx.plugin.app, `Delete "${title}"? This cannot be undone.`))) return
+        const currentIdx = rows.indexOf(id)
+        const nextIdx = currentIdx < rows.length - 1 ? currentIdx + 1 : currentIdx - 1
+        ctx.state.selectedTaskId = nextIdx >= 0 ? rows[nextIdx] : null
+        await deleteTask(id, ctx)
+      })()
       break
     }
   }
