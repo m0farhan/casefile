@@ -76,7 +76,7 @@ export interface Task {
   priority: TaskPriority
   /** Impact/urgency on any task type. '' = none. Drives the SLA clock on incidents only. */
   severity: string
-  /** Incident resolution: '' | true-positive | false-positive | security-testing | anomalous-safe | duplicate | pending. */
+  /** Incident resolution: '' | true-positive | false-positive | security-testing | anomalous-safe | duplicate. */
   verdict: string
   bucket: IssueBucket
   start: string // YYYY-MM-DD, empty string = unset
@@ -334,8 +334,7 @@ export const DEFAULT_VERDICTS: VerdictConfig[] = [
   { id: 'false-positive', label: 'False Positive', color: '#4cb782', icon: '' },
   { id: 'security-testing', label: 'True Positive - Security Testing', color: '#8b72be', icon: '' },
   { id: 'anomalous-safe', label: 'Anomalous Safe', color: '#2fbfa4', icon: '' },
-  { id: 'duplicate', label: 'Duplicate', color: '#8a8f98', icon: '' },
-  { id: 'pending', label: 'Pending', color: '#f2994a', icon: '' }
+  { id: 'duplicate', label: 'Duplicate', color: '#8a8f98', icon: '' }
 ]
 
 export const DEFAULT_SLA_POLICIES: Record<string, SlaPolicy> = {

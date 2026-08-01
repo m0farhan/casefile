@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.3.1] - 2026-08-01
+
+### Changed
+
+- Removed the Pending verdict — an open verdict is simply the empty state
+
 ## [2.3.0] - 2026-08-01
 
 ### Changed
