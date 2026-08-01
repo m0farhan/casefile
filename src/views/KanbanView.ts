@@ -11,7 +11,7 @@ import { buildTaskContextMenu } from '../ui/TaskContextMenu'
 import { KanbanColumn, type DropNeighbor, type KanbanCardData } from '../ui/composites/KanbanColumn'
 import { setKanbanSocConfig } from '../ui/composites/KanbanCard'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
-import { captureRects, motionOK, playFlip } from '../ui/motion'
+import { captureRects, markEnter, motionOK, playFlip } from '../ui/motion'
 import { computeLanes, isLaneGroup, LANE_GROUPS, type KanbanLaneGroup } from './kanbanLanes'
 import type { SubView } from './SubView'
 
@@ -26,6 +26,8 @@ const ARCHIVE_COLUMN_ID = '__archive__'
 
 export class KanbanView implements SubView {
   private dragTask: Task | null = null
+  /** True while handleDrop is persisting, so dragend's snap-back render skips. */
+  private dropInFlight = false
   /** Configuration in effect for this project, computed once per board render. */
   private config!: ResolvedProjectConfig
 
@@ -52,6 +54,13 @@ export class KanbanView implements SubView {
     // keying — the rebuilt DOM enumerates in the same order) and restore after.
     const cardScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-cards')].map((el) => el.scrollTop)
     const rowScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-board')].map((el) => el.scrollLeft)
+    // Card ids present before the rebuild: anything absent from this set is
+    // genuinely new and gets the enter fade (inert under reduced motion via
+    // the CSS-side guards). First render is covered by the column stagger.
+    const beforeIds = new Set<string>()
+    for (const el of this.container.querySelectorAll<HTMLElement>('.pm-kanban-card[data-task-id]')) {
+      if (el.dataset.taskId) beforeIds.add(el.dataset.taskId)
+    }
     this.container.empty()
     this.container.addClass('pm-kanban-view')
 
@@ -92,6 +101,11 @@ export class KanbanView implements SubView {
           },
           onCardDragEnd: () => {
             this.dragTask = null
+            // An aborted drag leaves the live-moved ghost wherever dragover
+            // parked it — snap the board back to data. Skipped mid-drop: the
+            // drop's own refresh re-renders, and the ghost already sitting at
+            // the destination is exactly the gs-landed no-jump contract.
+            if (!this.dropInFlight) this.renderBoard()
           },
           onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before)
         })
@@ -111,6 +125,7 @@ export class KanbanView implements SubView {
     rowScrolls.forEach((left, i) => {
       if (rows[i]) rows[i].scrollLeft = left
     })
+    if (beforeIds.size) markEnter(this.container, '.pm-kanban-card[data-task-id]', beforeIds)
   }
 
   private renderLanesBar(groupBy: KanbanLaneGroup): void {
@@ -190,6 +205,8 @@ export class KanbanView implements SubView {
       },
       onCardDragEnd: () => {
         this.dragTask = null
+        // Same aborted-drag snap-back as the status columns.
+        if (!this.dropInFlight) this.renderBoard()
       },
       onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before)
     })
@@ -283,48 +300,54 @@ export class KanbanView implements SubView {
     if (!this.dragTask || this.dragTask.id !== taskId) return
     // Capture now — dragend nulls this.dragTask before the guard's modal settles.
     const task = this.dragTask
-    if (newStatus === ARCHIVE_COLUMN_ID) {
-      if (!task.archived) {
-        // Same semantics as the modal/context-menu Archive action: the store
-        // moves the file into the project's Tasks/Archive folder (created on
-        // demand). No verdict guard — archiving is not a status change.
-        // ponytail: drop order inside the Archive column isn't persisted;
-        // archive order is tree order, reordering archived files is noise.
-        await this.plugin.store.archiveTask(this.project, taskId)
-        new Notice('Task archived')
-        await this.refreshWithFlip(taskId)
-      } else {
-        this.renderBoard() // already archived: snap the live-moved card back
-      }
-      return
-    }
-    if (newStatus !== task.status) {
-      const extra = await guardVerdictOnClose(this.plugin, this.project, task, newStatus)
-      if (extra === null) {
-        this.renderBoard() // cancelled: snap the live-moved card back
+    // drop fires before dragend, so the flag is up before the snap-back check.
+    this.dropInFlight = true
+    try {
+      if (newStatus === ARCHIVE_COLUMN_ID) {
+        if (!task.archived) {
+          // Same semantics as the modal/context-menu Archive action: the store
+          // moves the file into the project's Tasks/Archive folder (created on
+          // demand). No verdict guard — archiving is not a status change.
+          // ponytail: drop order inside the Archive column isn't persisted;
+          // archive order is tree order, reordering archived files is noise.
+          await this.plugin.store.archiveTask(this.project, taskId)
+          new Notice('Task archived')
+          await this.refreshWithFlip(taskId)
+        } else {
+          this.renderBoard() // already archived: snap the live-moved card back
+        }
         return
       }
-      // Drop out of Archive: unarchive first (the guard already passed), then
-      // apply the target status through the normal path.
-      if (task.archived) {
+      if (newStatus !== task.status) {
+        const extra = await guardVerdictOnClose(this.plugin, this.project, task, newStatus)
+        if (extra === null) {
+          this.renderBoard() // cancelled: snap the live-moved card back
+          return
+        }
+        // Drop out of Archive: unarchive first (the guard already passed), then
+        // apply the target status through the normal path.
+        if (task.archived) {
+          await this.plugin.store.unarchiveTask(this.project, taskId)
+          new Notice('Task unarchived')
+        }
+        await this.plugin.store.updateTask(this.project, taskId, { status: newStatus, ...extra })
+      } else if (task.archived) {
+        // Drop out of Archive onto the column matching the stored status: no
+        // status write, no verdict guard (status unchanged) — just unarchive.
         await this.plugin.store.unarchiveTask(this.project, taskId)
         new Notice('Task unarchived')
       }
-      await this.plugin.store.updateTask(this.project, taskId, { status: newStatus, ...extra })
-    } else if (task.archived) {
-      // Drop out of Archive onto the column matching the stored status: no
-      // status write, no verdict guard (status unchanged) — just unarchive.
-      await this.plugin.store.unarchiveTask(this.project, taskId)
-      new Notice('Task unarchived')
+      // reorderTask persists sibling order through the shared parent's list, so a
+      // neighbor under a different parent (possible when subtask cards are shown)
+      // can't be persisted — skip the reorder silently, keeping the status change.
+      // With subtasks hidden both cards are top-level, so the parents match (null).
+      if (before && findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
+        await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
+      }
+      await this.refreshWithFlip(taskId)
+    } finally {
+      this.dropInFlight = false
     }
-    // reorderTask persists sibling order through the shared parent's list, so a
-    // neighbor under a different parent (possible when subtask cards are shown)
-    // can't be persisted — skip the reorder silently, keeping the status change.
-    // With subtasks hidden both cards are top-level, so the parents match (null).
-    if (before && findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
-      await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
-    }
-    await this.refreshWithFlip(taskId)
   }
 
   /** Refresh after a drop, FLIP-animating card moves when motion is allowed. */

@@ -240,18 +240,6 @@ export class ProjectView extends ItemView {
     })
   }
 
-  /**
-   * Programmatic query-bar entry point (e.g. the IOC pivot from the detail
-   * panel/modal). Routes through the normal filter-mutation path so the query
-   * persists and the subview repaints, then re-renders the header so the
-   * search input shows the new text.
-   */
-  setSearchQuery(query: string): void {
-    this.filter.text = query
-    this.handleFilterMutation()
-    this.header?.refresh()
-  }
-
   private handleFilterMutation(): void {
     if (this.activeSavedViewId !== null) {
       this.activeSavedViewId = null

@@ -7,6 +7,8 @@ import { ProjectModal } from '../modals/ProjectModal'
 import { ProjectPickerModal, TaskPickerModal } from '../modals/PickerModals'
 import { ImportModal } from '../modals/ImportModal'
 import { flattenTasks } from '../store/TaskTreeOps'
+import { defangIoc, refangIoc } from '../soc/ioc'
+import type { Ioc } from '../types'
 import { findTaskById } from '../store/TaskIndex'
 import { pushRecent } from './recents'
 
@@ -392,4 +394,67 @@ export function openImportModal(
     })
   }
   modal.open()
+}
+
+interface IndicatorHit {
+  project: Project
+  task: Task
+  ioc: Ioc
+}
+
+/**
+ * Cross-case indicator search: every task in every project whose IOC list
+ * contains the value (defang-insensitive substring). Empty query = matches for
+ * the indicator that opened the search; typing searches any indicator.
+ */
+class IndicatorSearchModal extends SuggestModal<IndicatorHit> {
+  private hits: IndicatorHit[]
+  private initial: string
+
+  constructor(
+    private plugin: PMPlugin,
+    projects: Project[],
+    initialValue: string
+  ) {
+    super(plugin.app)
+    this.initial = refangIoc(initialValue).toLowerCase()
+    this.setPlaceholder(`Indicator: ${defangIoc(initialValue, 'domain')}`)
+    this.hits = projects.flatMap((project) =>
+      flattenTasks(project.tasks).flatMap(({ task }) => task.iocs.map((ioc) => ({ project, task, ioc })))
+    )
+  }
+
+  getSuggestions(query: string): IndicatorHit[] {
+    const q = (refangIoc(query).toLowerCase() || this.initial).trim()
+    if (!q) return []
+    return this.hits.filter((h) => refangIoc(h.ioc.value).toLowerCase().includes(q))
+  }
+
+  renderSuggestion(hit: IndicatorHit, el: HTMLElement): void {
+    el.addClass('mod-complex')
+    const content = el.createDiv({ cls: 'suggestion-content' })
+    content.createDiv({ cls: 'suggestion-title', text: defangIoc(hit.ioc.value, hit.ioc.type) })
+    const config = this.plugin.store.configFor(hit.project)
+    const status = config.statuses.find((st) => st.id === hit.task.status)?.label ?? hit.task.status
+    const note = hit.ioc.note ? ` · ${hit.ioc.note}` : ''
+    content.createDiv({
+      cls: 'suggestion-note',
+      text: `${hit.project.title} · ${hit.task.title} · ${status}${note}`
+    })
+  }
+
+  onChooseSuggestion(hit: IndicatorHit): void {
+    openTaskModal(this.plugin, hit.project, {
+      task: hit.task,
+      onSave: () => {
+        this.plugin.refreshProjectViews()
+      }
+    })
+  }
+}
+
+/** Open the cross-case indicator search seeded with `value` (real or defanged). */
+export async function openIndicatorSearch(plugin: PMPlugin, value: string): Promise<void> {
+  const projects = await plugin.store.loadAllProjects(plugin.settings.projectsFolder)
+  new IndicatorSearchModal(plugin, projects, value).open()
 }

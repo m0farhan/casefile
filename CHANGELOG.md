@@ -42,6 +42,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.4.0] - 2026-08-01
+
+### Added
+
+- **Cross-case indicator search.** The find-this-indicator button on an IOC row
+  now opens a search over every case in every project (defang-insensitive),
+  showing case, task, status and note per hit — choosing one opens that case.
+  Type in it to hunt any other indicator.
+- Done columns render settled: cards muted like Archive with crossed-off titles
+- Kanban board polish: cards fade in when new, hover lift, a dashed insertion
+  slot that follows the drag across columns, instant drop-target highlighting
+  on the whole column, quiet empty-column drop hints — all honoring reduced
+  motion
+
+### Fixed
+
+- Cross-column drops now land exactly where the insertion slot showed instead
+  of appending at the end
+- Releasing a drag outside any column snaps the card back cleanly
+
 ## [2.3.1] - 2026-08-01
 
 ### Changed

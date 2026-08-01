@@ -4,7 +4,7 @@ import { type Project, type Task, makeTask } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
-import { confirmDialog, openTaskModal } from '../ui/ModalFactory'
+import { confirmDialog, openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { findTaskById } from '../store/TaskIndex'
 import { renderKeyChip } from '../ui/composites/issueMeta'
 import { renderTaskFormFields } from './TaskFormFields'
@@ -12,7 +12,7 @@ import { renderLifecyclePanel } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
-import { pivotToProjectQuery, renderActivitySection } from '../views/TaskDetailView'
+import { renderActivitySection } from '../views/TaskDetailView'
 import { renderTimeTrackingPanel } from './TimeTrackingPanel'
 import { renderSubtasksPanel } from './SubtasksPanel'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from './DescriptionEditor'
@@ -328,12 +328,12 @@ export class TaskModal extends Modal {
       renderLifecyclePanel(body, this.task, { onChange: () => {} })
       renderIocSection(body, this.task, {
         onChange: () => {},
-        onPivot: (query) => {
+        onPivot: (value) => {
           // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
           this.saved = false
           this.cancelled = false
           this.close()
-          void pivotToProjectQuery(this.plugin, this.project.filePath, query)
+          void openIndicatorSearch(this.plugin, value)
         }
       })
     }

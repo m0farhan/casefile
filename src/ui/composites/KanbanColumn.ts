@@ -11,6 +11,8 @@ export interface KanbanColumnStatus {
   icon: string
   /** Soft WIP limit; count renders 'n / limit' in amber when exceeded. */
   wipLimit?: number
+  /** Terminal status (Done) — the column gets the settled/crossed-off card look. */
+  complete?: boolean
 }
 
 export interface KanbanCardData {
@@ -49,6 +51,8 @@ export class KanbanColumn {
   constructor(parentEl: HTMLElement, props: KanbanColumnProps) {
     const col = parentEl.createDiv('pm-kanban-col')
     col.dataset.status = props.status.id
+    // Terminal-status columns (Done) share the Archive column's settled look.
+    if (props.status.complete) col.addClass('pm-kanban-col--complete')
     this.el = col
 
     if (props.collapsed) {
@@ -82,6 +86,10 @@ export class KanbanColumn {
     const cardsEl = col.createDiv('pm-kanban-cards')
     cardsEl.dataset.status = props.status.id
 
+    if (!props.cards.length) {
+      cardsEl.createDiv({ cls: 'pm-kanban-empty', text: 'No items' })
+    }
+
     for (const card of props.cards) {
       new KanbanCard(cardsEl, {
         task: card.task,
@@ -104,8 +112,12 @@ export class KanbanColumn {
       e.preventDefault()
       cardsEl.addClass('pm-kanban-drop-target')
       const afterEl = getDragAfterElement(cardsEl, e.clientY)
-      const dragging = cardsEl.querySelector('.pm-kanban-card--dragging')
-      if (dragging) {
+      // Document-wide lookup: pulls the dragged card in from its origin column,
+      // so the ghost slot previews placement across columns, not just within
+      // the one the drag started in. Same-view check keeps a drag over another
+      // pane's board (whose drop handler would refuse it) from stealing the card.
+      const dragging = cardsEl.ownerDocument.querySelector('.pm-kanban-card--dragging')
+      if (dragging && dragging.closest('.pm-kanban-view') === cardsEl.closest('.pm-kanban-view')) {
         if (afterEl) {
           cardsEl.insertBefore(dragging, afterEl)
         } else {
@@ -114,7 +126,10 @@ export class KanbanColumn {
       }
     })
 
-    cardsEl.addEventListener('dragleave', () => {
+    cardsEl.addEventListener('dragleave', (e) => {
+      // Entering a child card fires dragleave on the container; only clear the
+      // target tint when the pointer actually left the card area (no flicker).
+      if (cardsEl.contains(e.relatedTarget as Node | null)) return
       cardsEl.removeClass('pm-kanban-drop-target')
     })
 
@@ -157,7 +172,8 @@ export class KanbanColumn {
       e.preventDefault()
       col.addClass('pm-kanban-drop-target')
     })
-    col.addEventListener('dragleave', () => {
+    col.addEventListener('dragleave', (e) => {
+      if (col.contains(e.relatedTarget as Node | null)) return
       col.removeClass('pm-kanban-drop-target')
     })
     col.addEventListener(

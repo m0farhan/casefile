@@ -10,7 +10,7 @@ import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderSubtasksPanel } from '../modals/SubtasksPanel'
 import { findTaskById } from '../store/TaskIndex'
-import { openTaskModal } from '../ui/ModalFactory'
+import { openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
 import { CollapseToggle } from '../ui/primitives/CollapseToggle'
@@ -53,36 +53,6 @@ export function renderActivitySection(container: HTMLElement, task: Task): void 
     change.createSpan({ cls: 'pm-activity-field', text: `${e.field}:` })
     change.appendText(` ${e.from || '—'} → ${e.to || '—'}`)
   }
-}
-
-/**
- * IOC pivot shared by the detail panel and the task modal: push `query` into
- * the project view's query bar (through its normal filter path, so it
- * persists and repaints) and surface that leaf. When no view for the project
- * is open, open one via the router — openProject awaits setState, so the view
- * has loaded before the query is set.
- */
-export async function pivotToProjectQuery(plugin: PMPlugin, projectPath: string, query: string): Promise<void> {
-  const find = (): ProjectView | null => {
-    for (const leaf of plugin.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
-      if (leaf.view instanceof ProjectView && leaf.view.filePath === projectPath) return leaf.view
-    }
-    return null
-  }
-  let view = find()
-  if (!view) {
-    await plugin.router.openProjectByPath(projectPath)
-    view = find()
-  }
-  if (view) {
-    view.setSearchQuery(query)
-    await plugin.app.workspace.revealLeaf(view.leaf)
-    return
-  }
-  // ponytail: honest fallback — the project file is gone or unopenable, so hand
-  // the analyst the query instead of failing silently.
-  await navigator.clipboard.writeText(query)
-  new Notice('No project view available — search query copied to clipboard')
 }
 
 interface TaskDetailState {
@@ -356,7 +326,7 @@ export class TaskDetailView extends ItemView {
       renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave() })
       renderIocSection(body, task, {
         onChange: () => this.scheduleSave(),
-        onPivot: (query) => void pivotToProjectQuery(this.plugin, project.filePath, query)
+        onPivot: (value) => void openIndicatorSearch(this.plugin, value)
       })
     }
     this.commentsSection?.destroy()

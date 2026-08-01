@@ -17,13 +17,13 @@ function renderTypeSelect(parent: HTMLElement, value: IocType): HTMLSelectElemen
  * note, find-across-cases + copy-real-value + remove) and an add-row form.
  * Display always defangs via defangIoc; only the copy button touches the real
  * value. Mutates task.iocs in place and reports every commit through
- * opts.onChange. `onPivot` (when the host provides it) receives a ready
- * `ioc:` query-bar string for the row's refanged value.
+ * opts.onChange. `onPivot` (when the host provides it) receives the row's
+ * refanged real value, for the cross-case indicator search.
  */
 export function renderIocSection(
   container: HTMLElement,
   task: Task,
-  opts: { onChange: () => void; onPivot?: (query: string) => void }
+  opts: { onChange: () => void; onPivot?: (value: string) => void }
 ): void {
   const section = container.createDiv('pm-modal-section pm-ioc-section')
   const header = section.createDiv('pm-modal-section-header')
@@ -72,10 +72,7 @@ export function renderIocSection(
         new IconButton(row)
           .setIcon('search')
           .setTooltip('Find this indicator across cases')
-          .onClick(() => {
-            const q = refangIoc(ioc.value)
-            onPivot(/\s/.test(q) ? `ioc:"${q}"` : `ioc:${q}`)
-          })
+          .onClick(() => onPivot(refangIoc(ioc.value)))
       }
       const copyBtn = new IconButton(row).setIcon('copy').setTooltip('Copy real value')
       copyBtn.onClick(

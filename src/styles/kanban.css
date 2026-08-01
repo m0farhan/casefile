@@ -34,6 +34,7 @@
   border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-m);
   overflow: hidden;
+  transition: border-color 150ms ease-out;
 }
 
 .pm-kanban-col-header {
@@ -89,6 +90,26 @@
   /* inset ring, not border: no layout shift while dragging */
   box-shadow: inset 0 0 0 1px var(--gs-accent);
 }
+/* The whole column's border joins the ring, so the target column also reads
+   in peripheral vision, not just the card area under the cursor. */
+.pm-kanban-col:has(> .pm-kanban-cards.pm-kanban-drop-target) {
+  border-color: var(--gs-accent);
+}
+
+/* Empty column: quiet dashed slot naming the state and inviting the drop.
+   Hidden while the column is a drop target — the live-moved ghost replaces it. */
+.pm-kanban-empty {
+  margin: 4px 2px;
+  padding: 16px 10px;
+  border: 1px dashed var(--gs-hairline-strong);
+  border-radius: var(--radius-s);
+  text-align: center;
+  font-size: 12px;
+  color: var(--gs-ink-tertiary);
+}
+.pm-kanban-drop-target .pm-kanban-empty {
+  display: none;
+}
 
 .pm-kanban-card {
   flex-shrink: 0;
@@ -113,9 +134,33 @@
   border-color: var(--gs-accent);
   z-index: 100;
 }
+/* In-list ghost (`pm-dragging` lands one tick after the drag image is
+   snapshotted): dashed slot marking the insertion point, not a card.
+   Half-opacity comes from the shared .pm-dragging utility. */
+.pm-kanban-card--dragging.pm-dragging {
+  background: var(--gs-surface-1);
+  border-style: dashed;
+}
 @media (prefers-reduced-motion: no-preference) {
-  .pm-kanban-card--dragging {
+  body:not(.gs-reduce-motion) .pm-kanban-card {
+    transition:
+      background 150ms ease-out,
+      border-color 150ms ease-out,
+      transform 150ms ease-out;
+  }
+  /* Hover: the surface step plus 1px of rise. */
+  body:not(.gs-reduce-motion) .pm-kanban-card:hover:not(.pm-kanban-card--dragging) {
+    transform: translateY(-1px);
+  }
+  /* Instant scale (transition off) so the dragstart snapshot — the image
+     under the cursor — is captured at grabbed size. */
+  body:not(.gs-reduce-motion) .pm-kanban-card--dragging {
+    transition: none;
     transform: scale(1.02);
+  }
+  /* The in-list ghost itself stays flat; only the cursor image is scaled. */
+  body:not(.gs-reduce-motion) .pm-kanban-card--dragging.pm-dragging {
+    transform: none;
   }
 }
 
@@ -264,12 +309,20 @@
 .pm-kanban-col--collapsed.pm-kanban-drop-target,
 .pm-kanban-col--collapsed.pm-kanban-drop-target:hover {
   background: var(--gs-accent-tint);
+  border-color: var(--gs-accent);
 }
 
 /* Archive column: cards render normally but muted */
-.pm-kanban-col[data-status='__archive__'] .pm-kanban-card {
+.pm-kanban-col[data-status='__archive__'] .pm-kanban-card,
+.pm-kanban-col--complete .pm-kanban-card {
   opacity: 0.7;
   filter: saturate(0.5);
+}
+
+/* Done: settled work reads as crossed off. */
+.pm-kanban-col--complete .pm-kanban-card-title {
+  text-decoration: line-through;
+  text-decoration-color: var(--gs-ink-subtle);
 }
 
 /* ─ Casefile SOC ambient ─ */
