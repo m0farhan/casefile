@@ -14,7 +14,6 @@ import { openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
 import { CollapseToggle } from '../ui/primitives/CollapseToggle'
-import { ProjectView, PM_PROJECT_VIEW_TYPE } from './ProjectView'
 
 export const CASEFILE_TASK_DETAIL_VIEW_TYPE = 'casefile-task-detail'
 
