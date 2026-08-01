@@ -11,7 +11,7 @@ trail, hand over cleanly.
 
 **Case tracking**
 
-- Issue keys (`ARGUS-12`) — stable, immutable case addresses, with a global
+- Issue keys (`SOC-12`) — stable, immutable case addresses, with a global
   **Open case…** command (fuzzy search over every key + recently opened cases)
 - Issue types with epic pills; per-project statuses, priorities, custom fields
 - Kanban with swimlanes, WIP limits (editable in settings), collapsible

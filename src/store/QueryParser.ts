@@ -142,7 +142,7 @@ function dueTarget(value: string, todayDate: Temporal.PlainDate): Temporal.Plain
  * Aliases are just extra entries pointing at the same matcher.
  */
 export const FIELD_MATCHERS: Record<string, FieldMatcher> = {
-  // Exact key, or key-prefix: key:ARGUS matches ARGUS-3 but key:ARGUS-1 never matches ARGUS-12.
+  // Exact key, or key-prefix: key:SOC matches SOC-3 but key:SOC-1 never matches SOC-12.
   key: (task, op, value) => {
     const k = task.key.toLowerCase()
     return withNeg(op, k !== '' && (k === value || k.startsWith(value + '-')))

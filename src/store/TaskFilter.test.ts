@@ -305,7 +305,7 @@ describe('query bar (JQL-lite) end to end', () => {
 
   it('key prefix search works through the query bar', () => {
     expect(match('key:soc', incident)).toBe(true)
-    expect(match('key:argus', incident)).toBe(false)
+    expect(match('key:zzz', incident)).toBe(false)
   })
 
   it('archived:true still requires showArchived (the early gate wins)', () => {

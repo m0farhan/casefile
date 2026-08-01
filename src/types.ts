@@ -64,7 +64,7 @@ export interface CustomFieldDef {
 
 export interface Task {
   id: string
-  /** Immutable human-facing issue key ("ARGUS-12"). '' until assigned by the store on save. */
+  /** Immutable human-facing issue key ("SOC-12"). '' until assigned by the store on save. */
   key: string
   title: string
   description: string
@@ -119,7 +119,7 @@ export interface Project {
   tasks: Task[]
   customFields: CustomFieldDef[]
   teamMembers: string[]
-  /** Issue-key prefix ("ARGUS"). '' = keys disabled for this project. */
+  /** Issue-key prefix ("SOC"). '' = keys disabled for this project. */
   keyPrefix: string
   /** Next sequence number for key assignment. Persisted so keys are never reused. */
   nextKeySeq: number

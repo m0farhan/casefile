@@ -626,7 +626,7 @@ export default class PMPlugin extends Plugin {
       void (async () => {
         const ok = await confirmDialog(
           this.app,
-          'Adopt issue keys: keys embedded in titles ("ARGUS-4: …") move to a real key field and the prefix is stripped from the title, which renames those task files. Links to them from notes outside this project’s task files will NOT auto-update. Keyless tasks get fresh keys.',
+          'Adopt issue keys: keys embedded in titles ("SOC-4: …") move to a real key field and the prefix is stripped from the title, which renames those task files. Links to them from notes outside this project’s task files will NOT auto-update. Keyless tasks get fresh keys.',
           'Adopt keys'
         )
         if (!ok) return

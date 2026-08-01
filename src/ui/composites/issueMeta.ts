@@ -12,7 +12,7 @@ export function renderIssueTypeIcon(el: HTMLElement, cfg: IssueTypeConfig | unde
   setTooltip(icon, cfg.label)
 }
 
-/** Monospace issue-key chip ("ARGUS-12"). With `copy`, clicking copies the key and flashes a tick. */
+/** Monospace issue-key chip ("SOC-12"). With `copy`, clicking copies the key and flashes a tick. */
 export function renderKeyChip(el: HTMLElement, key: string, opts?: { copy?: boolean }): void {
   const chip = el.createSpan({ cls: 'pm-key-chip', text: key })
   if (!opts?.copy) return

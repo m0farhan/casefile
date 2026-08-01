@@ -366,10 +366,10 @@ describe('Casefile field round-trips', () => {
     expect(fmOff).not.toHaveProperty('nextKeySeq')
 
     const on = makeProject('Keyed', 'Projects/Keyed.md')
-    on.keyPrefix = 'ARGUS'
+    on.keyPrefix = 'SOC'
     on.nextKeySeq = 7
     const { project } = roundTripProject(on)
-    expect(project.keyPrefix).toBe('ARGUS')
+    expect(project.keyPrefix).toBe('SOC')
     expect(project.nextKeySeq).toBe(7)
   })
 })

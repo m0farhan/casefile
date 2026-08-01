@@ -1181,7 +1181,7 @@ export class ProjectStore implements TaskSource {
 
   /**
    * One-time issue-key adoption for a project. Titles carrying an embedded key
-   * ("ARGUS-4: Fix things") donate it: the key moves to `task.key`, the prefix
+   * ("SOC-4: Fix things") donate it: the key moves to `task.key`, the prefix
    * is stripped from the title (which renames the file — vault-wide backlinks
    * outside PM-managed files do NOT auto-update; the caller must warn).
    * Keyless tasks get fresh sequential keys in createdAt order. Idempotent:

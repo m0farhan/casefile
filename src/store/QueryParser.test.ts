@@ -83,12 +83,12 @@ describe('parseQuery', () => {
 
 describe('field matchers', () => {
   it('key: exact and prefix match, case-insensitive', () => {
-    expect(matches('key:argus-3', { key: 'ARGUS-3' })).toBe(true)
-    expect(matches('key:ARGUS', { key: 'ARGUS-3' })).toBe(true)
-    expect(matches('key:ARGUS-1', { key: 'ARGUS-12' })).toBe(false)
-    expect(matches('key:SOC', { key: 'ARGUS-3' })).toBe(false)
-    expect(matches('key:!ARGUS', { key: 'ARGUS-3' })).toBe(false)
-    expect(matches('key:ARGUS', { key: '' })).toBe(false)
+    expect(matches('key:soc-3', { key: 'SOC-3' })).toBe(true)
+    expect(matches('key:SOC', { key: 'SOC-3' })).toBe(true)
+    expect(matches('key:SOC-1', { key: 'SOC-12' })).toBe(false)
+    expect(matches('key:IR', { key: 'SOC-3' })).toBe(false)
+    expect(matches('key:!SOC', { key: 'SOC-3' })).toBe(false)
+    expect(matches('key:SOC', { key: '' })).toBe(false)
   })
 
   it('status: equality and negation on the id', () => {

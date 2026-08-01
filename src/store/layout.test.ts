@@ -11,9 +11,9 @@ describe('v3 self-contained project folders', () => {
   it('recognizes a project file inside its own same-named folder', () => {
     expect(isProjectFolderLayout('Cases/Cases.md')).toBe(true)
     expect(isProjectFolderLayout('Work/PM/Cases/Cases.md')).toBe(true)
-    expect(isProjectFolderLayout('Projects/Cases/Argus.md')).toBe(false)
-    expect(isProjectFolderLayout('Projects/Argus.md')).toBe(false)
-    expect(isProjectFolderLayout('Argus.md')).toBe(false)
+    expect(isProjectFolderLayout('Projects/Cases/Acme.md')).toBe(false)
+    expect(isProjectFolderLayout('Projects/Acme.md')).toBe(false)
+    expect(isProjectFolderLayout('Acme.md')).toBe(false)
   })
 
   it('derives the Tasks folder inside the project folder', () => {
@@ -24,8 +24,8 @@ describe('v3 self-contained project folders', () => {
   it('exposes the project folder for v3 paths only', () => {
     expect(projectFolderForProjectPath('Cases/Cases.md')).toBe('Cases')
     expect(projectFolderForProjectPath('Base/Cases/Cases.md')).toBe('Base/Cases')
-    expect(projectFolderForProjectPath('Projects/Cases/Argus.md')).toBeNull()
-    expect(projectFolderForProjectPath('Projects/Argus.md')).toBeNull()
+    expect(projectFolderForProjectPath('Projects/Cases/Acme.md')).toBeNull()
+    expect(projectFolderForProjectPath('Projects/Acme.md')).toBeNull()
   })
 
   it('caseFilePath places new projects in their own folder, empty base = vault root', () => {
@@ -41,13 +41,13 @@ describe('v3 self-contained project folders', () => {
 
 describe('older recognized layouts', () => {
   it('derives the Tasks folder for a case in Cases/ (v2)', () => {
-    expect(taskFolderForProjectPath('Projects/Cases/Argus.md')).toBe('Projects/Tasks/Argus')
-    expect(isCasesLayout('Projects/Cases/Argus.md')).toBe(true)
+    expect(taskFolderForProjectPath('Projects/Cases/Acme.md')).toBe('Projects/Tasks/Acme')
+    expect(isCasesLayout('Projects/Cases/Acme.md')).toBe(true)
   })
 
   it('keeps the legacy sibling _tasks derivation for old-layout vaults', () => {
-    expect(taskFolderForProjectPath('Projects/Argus.md')).toBe('Projects/Argus_tasks')
-    expect(isCasesLayout('Projects/Argus.md')).toBe(false)
+    expect(taskFolderForProjectPath('Projects/Acme.md')).toBe('Projects/Acme_tasks')
+    expect(isCasesLayout('Projects/Acme.md')).toBe(false)
   })
 
   it('nested roots and names with dots survive (v2)', () => {

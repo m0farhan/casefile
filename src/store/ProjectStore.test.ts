@@ -1165,10 +1165,10 @@ describe('issue keys', () => {
 
   it('adoptIssueKeys adopts embedded keys, strips titles, keys the rest by age, and is idempotent', async () => {
     const { store, vault, app } = newStore()
-    const project = await store.createProject('Argus', 'Projects')
+    const project = await store.createProject('Acme', 'Projects')
 
-    const epic1 = makeTask({ title: 'ARGUS-1: Data Collection', createdAt: '2026-07-01T00:00:00Z' })
-    const epic2 = makeTask({ title: 'ARGUS-2: Correlation', createdAt: '2026-07-02T00:00:00Z' })
+    const epic1 = makeTask({ title: 'SOC-1: Data Collection', createdAt: '2026-07-01T00:00:00Z' })
+    const epic2 = makeTask({ title: 'SOC-2: Correlation', createdAt: '2026-07-02T00:00:00Z' })
     const plain = makeTask({ title: 'Loose story', createdAt: '2026-07-03T00:00:00Z' })
     await store.insertTask(project, epic1, null)
     await store.insertTask(project, epic2, null)
@@ -1177,18 +1177,18 @@ describe('issue keys', () => {
     await store.insertTask(project, child, epic1.id)
 
     const result = expectDefined(await store.adoptIssueKeys(project))
-    expect(result.prefix).toBe('ARGUS')
+    expect(result.prefix).toBe('SOC')
     expect(result.adopted).toBe(2)
     expect(result.assigned).toBe(2) // plain + child
     expect(result.renamedBasenames.length).toBe(2)
 
     const reloaded = await reloadProject(app, vault, project.filePath)
     const byTitle = new Map(flattenTasks(reloaded.tasks).map((f) => [f.task.title, f.task]))
-    expect(expectDefined(byTitle.get('Data Collection')).key).toBe('ARGUS-1')
-    expect(expectDefined(byTitle.get('Correlation')).key).toBe('ARGUS-2')
-    expect(expectDefined(byTitle.get('Loose story')).key).toBe('ARGUS-3')
-    expect(expectDefined(byTitle.get('Child of one')).key).toBe('ARGUS-4')
-    expect(reloaded.keyPrefix).toBe('ARGUS')
+    expect(expectDefined(byTitle.get('Data Collection')).key).toBe('SOC-1')
+    expect(expectDefined(byTitle.get('Correlation')).key).toBe('SOC-2')
+    expect(expectDefined(byTitle.get('Loose story')).key).toBe('SOC-3')
+    expect(expectDefined(byTitle.get('Child of one')).key).toBe('SOC-4')
+    expect(reloaded.keyPrefix).toBe('SOC')
     expect(reloaded.nextKeySeq).toBe(5)
 
     // Second run: nothing left to do.
@@ -1389,11 +1389,11 @@ describe('activity log + incident lifecycle stamps', () => {
 describe('v3 self-contained project folders', () => {
   it('createProject produces <base>/<Name>/<Name>.md with Tasks inside', async () => {
     const { store, vault } = newStore()
-    const project = await store.createProject('Argus', 'Projects')
-    expect(project.filePath).toBe('Projects/Argus/Argus.md')
+    const project = await store.createProject('Acme', 'Projects')
+    expect(project.filePath).toBe('Projects/Acme/Acme.md')
     const task = await addNamed(store, project, 'Recon')
-    expect(task.filePath).toBe('Projects/Argus/Tasks/recon.md')
-    expect(vault.getAbstractFileByPath('Projects/Argus/Argus.md')).toBeInstanceOf(TFile)
+    expect(task.filePath).toBe('Projects/Acme/Tasks/recon.md')
+    expect(vault.getAbstractFileByPath('Projects/Acme/Acme.md')).toBeInstanceOf(TFile)
   })
 
   it('empty base = vault root: project "Cases" creates a top-level Cases/ folder', async () => {
