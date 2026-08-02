@@ -37,6 +37,11 @@ export function renderDescriptionEditor(
   const descToolbar = descSection.createDiv('pm-desc-toolbar')
   const descPreview = descSection.createDiv('pm-modal-desc-preview')
   const descArea = descSection.createEl('textarea', { cls: 'pm-modal-description' })
+  // Live preview while editing: the textarea stays raw markdown (honest source),
+  // the formatted result renders right below it as you type.
+  const liveWrap = descSection.createDiv('pm-desc-live')
+  liveWrap.createDiv({ cls: 'pm-desc-live-label', text: 'Preview' })
+  const liveEl = liveWrap.createDiv('pm-desc-live-body')
   descArea.placeholder = 'Add a description…'
   descArea.value = task.description
 
@@ -47,6 +52,7 @@ export function renderDescriptionEditor(
     task.description = r.value
     descArea.setSelectionRange(r.selStart, r.selEnd)
     descArea.focus()
+    scheduleLive()
   }
   const formatButtons: [string, string, string][] = [
     ['bold', 'Bold (Cmd+B)', '**'],
@@ -101,6 +107,26 @@ export function renderDescriptionEditor(
   let descComp = new Component()
   descComp.load()
 
+  let liveComp = new Component()
+  liveComp.load()
+  let liveTimer: number | null = null
+  const renderLive = async () => {
+    if (!hasContent()) {
+      liveWrap.classList.add('pm-hidden')
+      return
+    }
+    liveWrap.classList.remove('pm-hidden')
+    liveComp.unload()
+    liveComp = new Component()
+    liveComp.load()
+    liveEl.empty()
+    await MarkdownRenderer.render(app, task.description, liveEl, sourcePath, liveComp)
+  }
+  const scheduleLive = () => {
+    if (liveTimer !== null) window.clearTimeout(liveTimer)
+    liveTimer = window.setTimeout(() => void renderLive(), 250)
+  }
+
   const toggleCheckbox = (index: number) => {
     let count = 0
     task.description = task.description.replace(/^([ \t]*[-*+] \[)([ x])(\])/gm, (match, pre, state, post) => {
@@ -148,6 +174,7 @@ export function renderDescriptionEditor(
     descPreview.classList.add('pm-hidden')
     descToolbar.classList.remove('pm-hidden')
     descArea.classList.remove('pm-hidden')
+    void renderLive()
     descArea.value = task.description
     window.setTimeout(() => {
       autoResize()
@@ -161,12 +188,14 @@ export function renderDescriptionEditor(
     void renderPreview()
     descArea.classList.add('pm-hidden')
     descToolbar.classList.add('pm-hidden')
+    liveWrap.classList.add('pm-hidden')
     descPreview.classList.remove('pm-hidden')
   }
 
   descArea.addEventListener('input', () => {
     task.description = descArea.value
     autoResize()
+    scheduleLive()
   })
   descArea.addEventListener('blur', () => showPreview())
 
@@ -278,15 +307,19 @@ export function renderDescriptionEditor(
   if (hasContent()) {
     descArea.classList.add('pm-hidden')
     descToolbar.classList.add('pm-hidden')
+    liveWrap.classList.add('pm-hidden')
     void renderPreview()
   } else {
     descPreview.classList.add('pm-hidden')
+    liveWrap.classList.add('pm-hidden')
     window.setTimeout(autoResize, 0)
   }
 
   return {
     destroy(): void {
+      if (liveTimer !== null) window.clearTimeout(liveTimer)
       descComp.unload()
+      liveComp.unload()
       noteSuggest.destroy()
     }
   }

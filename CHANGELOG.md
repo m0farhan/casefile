@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.5.1] - 2026-08-02
+
+### Added
+
+- Live preview while editing a description: the formatted result (bold,
+  italic, code, headings, checklists) renders beneath the textarea as you
+  type, updating in real time
+
 ## [2.5.0] - 2026-08-01
 
 ### Added

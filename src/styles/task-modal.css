@@ -147,6 +147,23 @@
   margin-bottom: 2px;
 }
 
+/* Live formatted preview under the textarea while editing */
+.pm-desc-live {
+  margin-top: 6px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-s);
+  background: var(--gs-surface-1);
+  padding: 6px 10px 8px;
+}
+.pm-desc-live-label {
+  font-size: 11px;
+  color: var(--gs-ink-tertiary);
+  margin-bottom: 2px;
+}
+.pm-desc-live-body {
+  font-size: 13px;
+}
+
 .pm-modal-description {
   width: 100%;
   min-height: 80px;
