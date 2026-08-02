@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.6.4] - 2026-08-02
+
+### Changed
+
+- Default status colours retuned for SOC / incident-response reading: To Do
+  is amber (open, waiting for triage), In Progress is blue (active
+  investigation), In Review takes purple; Blocked stays red, Done stays
+  green, Cancelled stays grey. Custom status colours are untouched.
+
 ## [2.6.3] - 2026-08-02
 
 ### Fixed

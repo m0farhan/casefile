@@ -292,10 +292,12 @@ export interface PMSettings {
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 export const DEFAULT_STATUSES: StatusConfig[] = [
-  { id: 'todo', label: 'To Do', color: '#8a94a0', icon: '', complete: false },
-  { id: 'in-progress', label: 'In Progress', color: '#8b72be', icon: '', complete: false },
+  // SOC/IR reading: open work queues amber, active response runs blue,
+  // escalation red, closure review purple, resolved green.
+  { id: 'todo', label: 'To Do', color: '#b8a06b', icon: '', complete: false },
+  { id: 'in-progress', label: 'In Progress', color: '#6ba3d6', icon: '', complete: false },
   { id: 'blocked', label: 'Blocked', color: '#c47070', icon: '', complete: false },
-  { id: 'review', label: 'In Review', color: '#b8a06b', icon: '', complete: false },
+  { id: 'review', label: 'In Review', color: '#8b72be', icon: '', complete: false },
   { id: 'done', label: 'Done', color: '#79b58d', icon: '', complete: true },
   { id: 'cancelled', label: 'Cancelled', color: '#767491', icon: '', complete: true }
 ]
