@@ -1,9 +1,21 @@
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import type { Range } from '@codemirror/state'
+import {
+  Decoration,
+  EditorView,
+  keymap,
+  placeholder,
+  ViewPlugin,
+  type DecorationSet,
+  type ViewUpdate
+} from '@codemirror/view'
 import { Component, MarkdownRenderer, Notice, type App } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
-import { NoteLinkSuggest } from './NoteLinkSuggest'
 import { IconButton } from '../ui/primitives/IconButton'
 import { toggleInlineMarker } from './inlineFormat'
+import { computeInlineMarks, fenceMap } from './livePreviewMarks'
+import { NoteLinkSuggest } from './NoteLinkSuggest'
 
 export interface DescriptionEditorContext {
   app: App
@@ -13,17 +25,81 @@ export interface DescriptionEditorContext {
   task: Task
   /** Called before following an internal link (the modal closes itself here; a leaf view does nothing). */
   onNavigateAway?: () => void
+  /** Called on every doc change (the detail panel schedules its autosave here). */
+  onChange?: () => void
 }
 
 export interface DescriptionEditorHandle {
   destroy(): void
 }
 
+// ── Live-preview decorations ──────────────────────────────────────────────
+// Inline **bold** / *em* / `code` render styled with their markers hidden,
+// except where the main selection touches the formatted range — there the
+// raw markers reveal (Obsidian Live Preview behavior). All other markdown
+// (headings, lists, links) stays raw; the debounced preview panel below
+// covers full rendering.
+
+const inlineDeco = {
+  strong: Decoration.mark({ class: 'cm-cf-strong' }),
+  em: Decoration.mark({ class: 'cm-cf-em' }),
+  code: Decoration.mark({ class: 'cm-cf-code' })
+} as const
+const hideMarker = Decoration.replace({})
+
+function buildLivePreviewDecorations(view: EditorView): DecorationSet {
+  const ranges: Range<Decoration>[] = []
+  const doc = view.state.doc
+  // ponytail: whole-doc fence scan on every rebuild — descriptions are small;
+  // cache the fence map against the doc if profiles ever say otherwise.
+  const fenced = fenceMap(doc.toString())
+  const sel = view.state.selection.main
+  for (const { from, to } of view.visibleRanges) {
+    let pos = from
+    while (pos <= to) {
+      const line = doc.lineAt(pos)
+      if (!fenced[line.number - 1]) {
+        for (const mark of computeInlineMarks(line.text)) {
+          const f = line.from + mark.from
+          const t = line.from + mark.to
+          ranges.push(inlineDeco[mark.cls].range(f, t))
+          const revealed = sel.from <= t && sel.to >= f
+          if (!revealed) {
+            for (const [ms, me] of mark.markers) {
+              ranges.push(hideMarker.range(line.from + ms, line.from + me))
+            }
+          }
+        }
+      }
+      pos = line.to + 1
+    }
+  }
+  return Decoration.set(ranges, true)
+}
+
+const livePreviewPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet
+
+    constructor(view: EditorView) {
+      this.decorations = buildLivePreviewDecorations(view)
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged || update.selectionSet || update.viewportChanged) {
+        this.decorations = buildLivePreviewDecorations(update.view)
+      }
+    }
+  },
+  { decorations: (v) => v.decorations }
+)
+
 /**
  * The description preview/edit section extracted from TaskModal.render() as a
  * behavior-identical free function, so the detail side panel can reuse it.
- * Owns the MarkdownRenderer Component and the [[ note-link suggest; callers
- * MUST call destroy() before re-rendering or closing.
+ * Owns the CodeMirror EditorView, the MarkdownRenderer Components and the
+ * [[ note-link suggest; callers MUST call destroy() before re-rendering or
+ * closing.
  */
 export function renderDescriptionEditor(
   container: HTMLElement,
@@ -36,70 +112,12 @@ export function renderDescriptionEditor(
 
   const descToolbar = descSection.createDiv('pm-desc-toolbar')
   const descPreview = descSection.createDiv('pm-modal-desc-preview')
-  const descArea = descSection.createEl('textarea', { cls: 'pm-modal-description' })
-  // Live preview while editing: the textarea stays raw markdown (honest source),
-  // the formatted result renders right below it as you type.
+  const editorWrap = descSection.createDiv('pm-modal-description')
+  // Live preview while editing: the editor stays raw markdown (honest source,
+  // inline marks aside), the formatted result renders right below as you type.
   const liveWrap = descSection.createDiv('pm-desc-live')
   liveWrap.createDiv({ cls: 'pm-desc-live-label', text: 'Preview' })
   const liveEl = liveWrap.createDiv('pm-desc-live-body')
-  descArea.placeholder = 'Add a description…'
-  descArea.value = task.description
-
-  // Inline formatting: toolbar buttons + editor hotkeys wrap/unwrap the selection.
-  const applyMarker = (marker: string) => {
-    const r = toggleInlineMarker(descArea.value, descArea.selectionStart, descArea.selectionEnd, marker)
-    descArea.value = r.value
-    task.description = r.value
-    descArea.setSelectionRange(r.selStart, r.selEnd)
-    descArea.focus()
-    scheduleLive()
-  }
-  const formatButtons: [string, string, string][] = [
-    ['bold', 'Bold (Cmd+B)', '**'],
-    ['italic', 'Italic (Cmd+I)', '*'],
-    ['code', 'Inline code (Cmd+E)', '`']
-  ]
-  for (const [icon, tip, marker] of formatButtons) {
-    const btn = new IconButton(descToolbar).setIcon(icon).setTooltip(tip)
-    // mousedown would steal focus (and the selection) from the textarea.
-    btn.el.addEventListener('mousedown', (e) => e.preventDefault())
-    btn.onClick(() => applyMarker(marker))
-  }
-  descArea.addEventListener('keydown', (e) => {
-    if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
-    const marker = e.key === 'b' ? '**' : e.key === 'i' ? '*' : e.key === 'e' ? '`' : null
-    if (!marker) return
-    e.preventDefault()
-    applyMarker(marker)
-  })
-
-  const autoResize = () => {
-    const saved: [HTMLElement, number][] = []
-    let ancestor = descArea.parentElement
-    while (ancestor) {
-      if (ancestor.scrollTop > 0) saved.push([ancestor, ancestor.scrollTop])
-      ancestor = ancestor.parentElement
-    }
-    descArea.setCssProps({ '--desc-height': 'auto' })
-    descArea.setCssProps({ '--desc-height': descArea.scrollHeight + 'px' })
-    for (const [el, top] of saved) el.scrollTop = top
-  }
-
-  const insertAttachments = async (items: { blob: Blob; name: string }[]): Promise<void> => {
-    for (const { blob, name } of items) {
-      try {
-        const buffer = await blob.arrayBuffer()
-        const file = await plugin.store.saveTaskAttachment(project, task, name, buffer)
-        const snippet = `![[${file.name}]]`
-        descArea.setRangeText(snippet, descArea.selectionStart, descArea.selectionEnd, 'end')
-        task.description = descArea.value
-        autoResize()
-      } catch (err) {
-        console.error('Failed to save attachment', err)
-        new Notice('Failed to save attachment')
-      }
-    }
-  }
 
   const hasContent = () => task.description.trim().length > 0
   const sourcePath = task.filePath || project.filePath || ''
@@ -127,13 +145,148 @@ export function renderDescriptionEditor(
     liveTimer = window.setTimeout(() => void renderLive(), 250)
   }
 
+  // Note link suggest (inline [[ autocomplete)
+  const noteSuggest = new NoteLinkSuggest(app)
+  noteSuggest.attach(descSection)
+
+  const insertAttachments = async (items: { blob: Blob; name: string }[]): Promise<void> => {
+    for (const { blob, name } of items) {
+      try {
+        const buffer = await blob.arrayBuffer()
+        const file = await plugin.store.saveTaskAttachment(project, task, name, buffer)
+        const snippet = `![[${file.name}]]`
+        const { from, to } = view.state.selection.main
+        view.dispatch({
+          changes: { from, to, insert: snippet },
+          selection: { anchor: from + snippet.length }
+        })
+      } catch (err) {
+        console.error('Failed to save attachment', err)
+        new Notice('Failed to save attachment')
+      }
+    }
+  }
+
+  const showPreview = () => {
+    if (!hasContent()) return
+    void renderPreview()
+    editorWrap.classList.add('pm-hidden')
+    descToolbar.classList.add('pm-hidden')
+    liveWrap.classList.add('pm-hidden')
+    descPreview.classList.remove('pm-hidden')
+  }
+
+  const view = new EditorView({
+    parent: editorWrap,
+    doc: task.description,
+    extensions: [
+      noteSuggest.extension(),
+      history(),
+      placeholder('Add a description…'),
+      EditorView.lineWrapping,
+      // The old textarea spellchecked (browser default); keep that.
+      EditorView.contentAttributes.of({ spellcheck: 'true' }),
+      livePreviewPlugin,
+      keymap.of([
+        // Format hotkeys first so they win over any default binding.
+        {
+          key: 'Mod-b',
+          run: () => {
+            applyMarker('**')
+            return true
+          }
+        },
+        {
+          key: 'Mod-i',
+          run: () => {
+            applyMarker('*')
+            return true
+          }
+        },
+        {
+          key: 'Mod-e',
+          run: () => {
+            applyMarker('`')
+            return true
+          }
+        },
+        ...historyKeymap,
+        ...defaultKeymap
+      ]),
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged) return
+        task.description = update.state.doc.toString()
+        ctx.onChange?.()
+        scheduleLive()
+        noteSuggest.onDocChanged(update.view)
+      }),
+      EditorView.domEventHandlers({
+        paste: (e) => {
+          const items = e.clipboardData?.items
+          if (!items) return false
+          const attachments: { blob: Blob; name: string }[] = []
+          for (const item of Array.from(items)) {
+            if (item.kind === 'file' && item.type.startsWith('image/')) {
+              const file = item.getAsFile()
+              if (file) {
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+                const sub = (item.type.split('/')[1] || 'png').split('+')[0]
+                const ext = sub === 'jpeg' ? 'jpg' : sub
+                attachments.push({ blob: file, name: `Pasted-${stamp}.${ext}` })
+              }
+            }
+          }
+          if (attachments.length === 0) return false
+          e.preventDefault()
+          void insertAttachments(attachments)
+          return true
+        },
+        // File drops are the section listener's job (it also covers drops on
+        // the toolbar/preview); returning true stops CodeMirror from reading
+        // the files as text while the event bubbles on to that listener.
+        drop: (e) => Boolean(e.dataTransfer?.files.length),
+        blur: (e) => {
+          const rel = e.relatedTarget as Node | null
+          if (rel && noteSuggest.contains(rel)) return false
+          noteSuggest.hide()
+          showPreview()
+          return false
+        }
+      })
+    ]
+  })
+
+  // Inline formatting: toolbar buttons + editor hotkeys wrap/unwrap the selection.
+  const applyMarker = (marker: string) => {
+    const { state } = view
+    const sel = state.selection.main
+    const r = toggleInlineMarker(state.doc.toString(), sel.from, sel.to, marker)
+    // ponytail: whole-doc replace — toggleInlineMarker returns full text and
+    // descriptions are small; selection restored explicitly so nothing jumps.
+    view.dispatch({
+      changes: { from: 0, to: state.doc.length, insert: r.value },
+      selection: { anchor: r.selStart, head: r.selEnd }
+    })
+    view.focus()
+  }
+  const formatButtons: [string, string, string][] = [
+    ['bold', 'Bold (Cmd+B)', '**'],
+    ['italic', 'Italic (Cmd+I)', '*'],
+    ['code', 'Inline code (Cmd+E)', '`']
+  ]
+  for (const [icon, tip, marker] of formatButtons) {
+    const btn = new IconButton(descToolbar).setIcon(icon).setTooltip(tip)
+    // mousedown would steal focus (and the selection) from the editor.
+    btn.el.addEventListener('mousedown', (e) => e.preventDefault())
+    btn.onClick(() => applyMarker(marker))
+  }
+
   const toggleCheckbox = (index: number) => {
     let count = 0
     task.description = task.description.replace(/^([ \t]*[-*+] \[)([ x])(\])/gm, (match, pre, state, post) => {
       if (count++ === index) return pre + (state === ' ' ? 'x' : ' ') + post
       return match
     })
-    descArea.value = task.description
     void renderPreview()
   }
 
@@ -173,51 +326,19 @@ export function renderDescriptionEditor(
   const showEdit = (caret?: number) => {
     descPreview.classList.add('pm-hidden')
     descToolbar.classList.remove('pm-hidden')
-    descArea.classList.remove('pm-hidden')
+    editorWrap.classList.remove('pm-hidden')
     void renderLive()
-    descArea.value = task.description
-    window.setTimeout(() => {
-      autoResize()
-      descArea.focus()
-      if (caret !== undefined) descArea.setSelectionRange(caret, caret)
-    }, 0)
-  }
-
-  const showPreview = () => {
-    if (!hasContent()) return
-    void renderPreview()
-    descArea.classList.add('pm-hidden')
-    descToolbar.classList.add('pm-hidden')
-    liveWrap.classList.add('pm-hidden')
-    descPreview.classList.remove('pm-hidden')
-  }
-
-  descArea.addEventListener('input', () => {
-    task.description = descArea.value
-    autoResize()
-    scheduleLive()
-  })
-  descArea.addEventListener('blur', () => showPreview())
-
-  descArea.addEventListener('paste', (e) => {
-    const items = e.clipboardData?.items
-    if (!items) return
-    const attachments: { blob: Blob; name: string }[] = []
-    for (const item of Array.from(items)) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const file = item.getAsFile()
-        if (file) {
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-          const sub = (item.type.split('/')[1] || 'png').split('+')[0]
-          const ext = sub === 'jpeg' ? 'jpg' : sub
-          attachments.push({ blob: file, name: `Pasted-${stamp}.${ext}` })
-        }
-      }
+    // Preview-side edits (checkbox toggles) land on task.description only —
+    // sync the doc before the editor becomes the source of truth again.
+    if (view.state.doc.toString() !== task.description) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: task.description } })
     }
-    if (attachments.length === 0) return
-    e.preventDefault()
-    void insertAttachments(attachments)
-  })
+    if (caret !== undefined) {
+      const pos = Math.min(caret, view.state.doc.length)
+      view.dispatch({ selection: { anchor: pos } })
+    }
+    window.setTimeout(() => view.focus(), 0)
+  }
 
   descSection.addEventListener('dragover', (e) => {
     if (!e.dataTransfer) return
@@ -229,20 +350,12 @@ export function renderDescriptionEditor(
     const files = e.dataTransfer?.files
     if (!files || files.length === 0) return
     e.preventDefault()
-    if (descArea.classList.contains('pm-hidden')) {
-      showEdit()
-      descArea.selectionStart = descArea.selectionEnd = descArea.value.length
+    if (editorWrap.classList.contains('pm-hidden')) {
+      showEdit(task.description.length)
     }
     const attachments = Array.from(files).map((f) => ({ blob: f, name: f.name }))
     void insertAttachments(attachments)
   })
-
-  // Note link suggest (inline [[ autocomplete)
-  const noteSuggest = new NoteLinkSuggest(app, descArea, (newValue) => {
-    task.description = newValue
-    autoResize()
-  })
-  noteSuggest.attach(descSection)
 
   // Walk the rendered text and the markdown source in step, skipping the source
   // characters that produced no output, so a caret in the preview lands on the
@@ -305,14 +418,13 @@ export function renderDescriptionEditor(
   })
 
   if (hasContent()) {
-    descArea.classList.add('pm-hidden')
+    editorWrap.classList.add('pm-hidden')
     descToolbar.classList.add('pm-hidden')
     liveWrap.classList.add('pm-hidden')
     void renderPreview()
   } else {
     descPreview.classList.add('pm-hidden')
     liveWrap.classList.add('pm-hidden')
-    window.setTimeout(autoResize, 0)
   }
 
   return {
@@ -321,6 +433,7 @@ export function renderDescriptionEditor(
       descComp.unload()
       liveComp.unload()
       noteSuggest.destroy()
+      view.destroy()
     }
   }
 }

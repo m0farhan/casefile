@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.6.0] - 2026-08-02
+
+### Changed
+
+- **Live formatting in the description editor.** Editing now uses a real
+  editor (CodeMirror): `**bold**`, `*italic*` and `` `code` `` render styled
+  with their markers hidden — the raw markers reveal only where your cursor
+  is, like editing a normal note. Undo/redo history included. Image paste,
+  file drop, `[[` autocomplete, the formatting toolbar and Cmd+B/I/E,
+  click-to-position and autosave all carry over; headings and checklists
+  still render fully in the preview panel below and in read mode.
+
 ## [2.5.2] - 2026-08-02
 
 ### Added

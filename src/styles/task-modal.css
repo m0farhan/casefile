@@ -164,11 +164,18 @@
   font-size: 13px;
 }
 
+/* The description edits in place in a CodeMirror view styled to read exactly
+   like the old textarea: transparent until hover/focus paints a subtle
+   background and border; focus deepens the border. Auto height, wrapped lines
+   (EditorView.lineWrapping); the default cm-focused dotted outline is
+   suppressed in favor of the shared focus ring. */
 .pm-modal-description {
   width: 100%;
+  box-sizing: border-box;
+}
+.pm-modal-description .cm-editor {
+  box-sizing: border-box;
   min-height: 80px;
-  /* Add the CSS variable for Obsidian bot compliance: */
-  height: var(--desc-height, auto);
   padding: 6px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-s);
@@ -176,23 +183,46 @@
   color: var(--text-normal);
   font-size: 13px;
   line-height: 1.6;
-  resize: none;
-  overflow: hidden;
-  box-sizing: border-box;
 }
-/* The description edits in place. Hover and focus paint a subtle background and border so
-   the field reads as editable; focus deepens the border. The box-shadow ring core app.css
-   adds on textarea:hover/:focus is suppressed. */
-textarea.pm-modal-description:hover,
-textarea.pm-modal-description:focus {
+.pm-modal-description .cm-editor:hover,
+.pm-modal-description .cm-editor.cm-focused {
   background: var(--background-modifier-hover);
   border-color: var(--background-modifier-border);
   box-shadow: none;
   outline: none;
 }
-textarea.pm-modal-description:focus {
+.pm-modal-description .cm-editor.cm-focused {
   border-color: var(--gs-hairline-strong);
   box-shadow: var(--gs-focus-ring);
+}
+.pm-modal-description .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+  overflow: visible;
+}
+.pm-modal-description .cm-content {
+  padding: 0;
+  caret-color: var(--text-normal);
+}
+.pm-modal-description .cm-line {
+  padding: 0;
+}
+.pm-modal-description .cm-placeholder {
+  color: var(--text-faint);
+}
+
+/* Live-preview inline marks (markers hidden unless the selection is inside) */
+.cm-cf-strong {
+  font-weight: 600;
+}
+.cm-cf-em {
+  font-style: italic;
+}
+.cm-cf-code {
+  font-family: var(--gs-font-mono);
+  background: color-mix(in srgb, var(--gs-teal) 12%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
 }
 
 /* Subtasks */

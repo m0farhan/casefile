@@ -228,15 +228,6 @@
 .pm-note-suggest--visible {
   display: block;
 }
-.pm-note-suggest-mirror {
-  position: fixed;
-  top: -9999px;
-  left: -9999px;
-  visibility: hidden;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  overflow: hidden;
-}
 .pm-note-suggest-item {
   display: flex;
   flex-direction: column;

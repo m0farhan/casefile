@@ -1,6 +1,6 @@
 {
   "name": "casefile",
-  "version": "2.5.2",
+  "version": "2.6.0",
   "description": "Casefile - Jira-style case and SOC incident tracking for Obsidian (based on obsidian-pm)",
   "main": "main.js",
   "type": "module",
@@ -27,6 +27,9 @@
   "devDependencies": {
     "@2bad/axiom": "2.0.0",
     "@2bad/tsconfig": "4.0.0",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "6.38.6",
     "@types/node": "26.1.1",
     "@typescript-eslint/parser": "8.65.0",
     "@vitest/coverage-v8": "4.1.10",

@@ -1,3 +1,5 @@
+import { Prec, type Extension } from '@codemirror/state'
+import { keymap, type EditorView } from '@codemirror/view'
 import { App, prepareFuzzySearch, TFile } from 'obsidian'
 
 /** File-type metadata for suggest dropdown. */
@@ -7,33 +9,22 @@ const FILE_TYPE_LABELS: Record<string, string> = {
 }
 
 /**
- * Inline note-link suggest dropdown for textareas.
+ * Inline note-link suggest dropdown for the CodeMirror description editor.
  * Triggers on `[[` and shows matching vault files (notes, canvases, databases).
+ * The host wires `extension()` into the EditorView and calls `onDocChanged`
+ * from its update listener; the dropdown positions itself via coordsAtPos.
  */
 export class NoteLinkSuggest {
   private container: HTMLDivElement
-  private mirror: HTMLDivElement
+  private view: EditorView | null = null
   private items: TFile[] = []
   private activeIndex = 0
   private open = false
   private query = ''
   private triggerStart = -1 // position of the first `[`
 
-  constructor(
-    private app: App,
-    private textarea: HTMLTextAreaElement,
-    private onInsert: (newValue: string) => void
-  ) {
+  constructor(private app: App) {
     this.container = createDiv('pm-note-suggest')
-
-    this.mirror = createDiv('pm-note-suggest-mirror')
-
-    activeDocument.body.appendChild(this.mirror)
-
-    this.textarea.addEventListener('input', this.onInput)
-    this.textarea.addEventListener('keydown', this.onKeydown)
-    this.textarea.addEventListener('blur', this.onBlur)
-    this.textarea.addEventListener('scroll', this.onScroll)
   }
 
   /** Must be called to attach the dropdown to the DOM. */
@@ -42,19 +33,46 @@ export class NoteLinkSuggest {
   }
 
   destroy(): void {
-    this.textarea.removeEventListener('input', this.onInput)
-    this.textarea.removeEventListener('keydown', this.onKeydown)
-    this.textarea.removeEventListener('blur', this.onBlur)
-    this.textarea.removeEventListener('scroll', this.onScroll)
+    this.view = null
     this.container.remove()
-    this.mirror.remove()
   }
 
-  // ── Event handlers ──────────────────────────────────────────────────────
+  /** True while the dropdown is showing (host gates blur/preview on it). */
+  get isOpen(): boolean {
+    return this.open
+  }
 
-  private onInput = (): void => {
-    const pos = this.textarea.selectionStart
-    const text = this.textarea.value.slice(0, pos)
+  /** Is this node inside the dropdown? (blur relatedTarget containment) */
+  contains(node: Node): boolean {
+    return this.container.contains(node)
+  }
+
+  /**
+   * Navigation keymap. Prec.highest so arrows/enter/escape beat the editor
+   * keymaps while the dropdown is open; every binding is a no-op when closed.
+   */
+  extension(): Extension {
+    const when = (run: () => void) => () => {
+      if (!this.open) return false
+      run()
+      return true
+    }
+    return Prec.highest(
+      keymap.of([
+        { key: 'ArrowDown', run: when(() => this.move(1)) },
+        { key: 'ArrowUp', run: when(() => this.move(-1)) },
+        { key: 'Enter', run: when(() => this.accept(this.items[this.activeIndex])) },
+        { key: 'Tab', run: when(() => this.accept(this.items[this.activeIndex])) },
+        { key: 'Escape', run: when(() => this.hide()) }
+      ])
+    )
+  }
+
+  /** Call on every doc change: detects/updates the `[[` trigger at the cursor. */
+  onDocChanged(view: EditorView): void {
+    this.view = view
+    const pos = view.state.selection.main.head
+    const text = view.state.doc.sliceString(Math.max(0, pos - 82), pos)
     const match = text.match(/\[\[([^\]]{0,80})$/)
 
     if (match) {
@@ -71,46 +89,19 @@ export class NoteLinkSuggest {
     }
   }
 
-  private onKeydown = (e: KeyboardEvent): void => {
+  hide(): void {
     if (!this.open) return
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        e.stopPropagation()
-        this.activeIndex = (this.activeIndex + 1) % this.items.length
-        this.renderItems()
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        e.stopPropagation()
-        this.activeIndex = (this.activeIndex - 1 + this.items.length) % this.items.length
-        this.renderItems()
-        break
-      case 'Enter':
-      case 'Tab':
-        e.preventDefault()
-        e.stopPropagation()
-        this.accept(this.items[this.activeIndex])
-        break
-      case 'Escape':
-        e.preventDefault()
-        e.stopPropagation()
-        this.hide()
-        break
-    }
-  }
-
-  private onBlur = (): void => {
-    // Delay to allow click on suggestion item
-    window.setTimeout(() => this.hide(), 150)
-  }
-
-  private onScroll = (): void => {
-    if (this.open) this.position()
+    this.open = false
+    this.container.removeClass('pm-note-suggest--visible')
+    this.triggerStart = -1
   }
 
   // ── Core logic ──────────────────────────────────────────────────────────
+
+  private move(delta: number): void {
+    this.activeIndex = (this.activeIndex + delta + this.items.length) % this.items.length
+    this.renderItems()
+  }
 
   private updateItems(): void {
     const files = this.app.vault
@@ -142,97 +133,50 @@ export class NoteLinkSuggest {
   }
 
   private accept(file: TFile): void {
-    if (!file) return
-    const before = this.textarea.value.slice(0, this.triggerStart)
-    const after = this.textarea.value.slice(this.textarea.selectionStart)
+    const view = this.view
+    if (!view || !file || this.triggerStart < 0) return
     const linkName = file.extension === 'md' ? file.basename : `${file.basename}.${file.extension}`
     const insertion = `[[${linkName}]]`
-    const newValue = before + insertion + after
-    this.textarea.value = newValue
-    const cursorPos = before.length + insertion.length
-    this.textarea.setSelectionRange(cursorPos, cursorPos)
-    this.onInsert(newValue)
+    const from = this.triggerStart
+    const to = view.state.selection.main.head
     this.hide()
-    this.textarea.focus()
+    view.dispatch({
+      changes: { from, to, insert: insertion },
+      selection: { anchor: from + insertion.length }
+    })
+    view.focus()
   }
 
   private show(): void {
     this.open = true
     this.container.addClass('pm-note-suggest--visible')
     this.position()
+    // onDocChanged runs mid-dispatch, before CodeMirror's measure phase —
+    // re-position next frame so coordsAtPos reflects the just-typed text.
+    window.requestAnimationFrame(() => {
+      if (this.open) this.position()
+    })
     this.renderItems()
-  }
-
-  private hide(): void {
-    if (!this.open) return
-    this.open = false
-    this.container.removeClass('pm-note-suggest--visible')
-    this.triggerStart = -1
   }
 
   // ── Positioning ─────────────────────────────────────────────────────────
 
   private position(): void {
-    // Sync mirror styles with textarea
-    const style = activeWindow.getComputedStyle(this.textarea)
-    const props = [
-      'fontFamily',
-      'fontSize',
-      'fontWeight',
-      'lineHeight',
-      'letterSpacing',
-      'paddingTop',
-      'paddingRight',
-      'paddingBottom',
-      'paddingLeft',
-      'borderTopWidth',
-      'borderRightWidth',
-      'borderBottomWidth',
-      'borderLeftWidth',
-      'boxSizing',
-      'wordWrap',
-      'whiteSpace',
-      'overflowWrap'
-    ] as const
-    for (const p of props) {
-      this.mirror.style.setProperty(
-        p.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()),
-        style.getPropertyValue(p.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()))
-      )
-    }
-    this.mirror.style.width = this.textarea.clientWidth + 'px'
+    const view = this.view
+    if (!view) return
+    const coords = view.coordsAtPos(view.state.selection.main.head)
+    if (!coords) return
 
-    // Copy text up to cursor, add a marker span
-    const textToCursor = this.textarea.value.slice(0, this.textarea.selectionStart)
-    this.mirror.textContent = ''
-    const textNode = activeDocument.createTextNode(textToCursor)
-    this.mirror.appendChild(textNode)
-    const marker = activeDocument.createSpan()
-    marker.textContent = '\u200b' // zero-width space
-    this.mirror.appendChild(marker)
+    const parent = this.container.offsetParent instanceof HTMLElement ? this.container.offsetParent : null
+    const parentRect = parent?.getBoundingClientRect()
+    const top = coords.bottom - (parentRect?.top ?? 0) + 4
+    let left = coords.left - (parentRect?.left ?? 0)
 
-    const markerTop = marker.offsetTop
-    const markerLeft = marker.offsetLeft
-    const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4
+    // Clamp to not overflow the right side of the host
+    const maxLeft = (parent?.clientWidth ?? 600) - 280
+    if (left > maxLeft) left = Math.max(0, maxLeft)
 
-    // Position relative to textarea
-    const taRect = this.textarea.getBoundingClientRect()
-    const parentRect = this.container.offsetParent
-      ? (this.container.offsetParent as HTMLElement).getBoundingClientRect()
-      : taRect
-
-    const top = taRect.top - parentRect.top + markerTop - this.textarea.scrollTop + lineHeight + 4
-    const left = taRect.left - parentRect.left + markerLeft
-
-    this.container.style.top = top + 'px'
-    this.container.style.left = left + 'px'
-
-    // Clamp to not overflow right side of modal
-    const parentWidth = (this.container.offsetParent as HTMLElement)?.clientWidth ?? 600
-    const maxLeft = parentWidth - 280
-    if (left > maxLeft) {
-      this.container.style.left = Math.max(0, maxLeft) + 'px'
-    }
+    this.container.setCssStyles({ top: `${top}px`, left: `${left}px` })
   }
 
   // ── Rendering ───────────────────────────────────────────────────────────

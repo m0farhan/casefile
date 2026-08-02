@@ -319,7 +319,10 @@ export class TaskDetailView extends ItemView {
       app: this.app,
       plugin: this.plugin,
       project,
-      task
+      task,
+      // The CodeMirror editor dispatches transactions instead of firing the
+      // 'input' events the body-level delegation below relies on.
+      onChange: () => this.scheduleSave()
     })
     if (task.issueType === 'incident') {
       renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave() })
@@ -352,9 +355,10 @@ export class TaskDetailView extends ItemView {
     })
     renderTimeTrackingPanel(body, task)
 
-    // Any input inside the body (description textarea, subtask titles, time
-    // logs) marks the clone dirty; the field controls above already do it via
-    // rerender(). Event delegation keeps this one listener instead of N hooks.
+    // Any input inside the body (subtask titles, time logs) marks the clone
+    // dirty; the field controls above already do it via rerender(), and the
+    // description editor via its onChange. Event delegation keeps this one
+    // listener instead of N hooks.
     body.addEventListener('input', () => this.scheduleSave())
   }
 }
