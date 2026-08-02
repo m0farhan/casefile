@@ -327,10 +327,12 @@
 
 /* Adjustable in-card progress: the same thin track, as a live range input.
    Thumb appears on hover/focus only so the resting card stays minimal. */
-.pm-kanban-progress {
+.pm-kanban-card-body .pm-kanban-progress {
   appearance: none;
   -webkit-appearance: none;
+  display: block;
   width: 100%;
+  min-width: 100%;
   height: 3px;
   margin: 2px 0;
   border-radius: 99px;
@@ -342,7 +344,7 @@
   cursor: pointer;
   outline: none;
 }
-.pm-kanban-progress::-webkit-slider-thumb {
+.pm-kanban-card-body .pm-kanban-progress::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
   width: 10px;
@@ -352,11 +354,11 @@
   opacity: 0;
   transition: opacity 150ms ease-out;
 }
-.pm-kanban-progress:hover::-webkit-slider-thumb,
-.pm-kanban-progress:focus-visible::-webkit-slider-thumb {
+.pm-kanban-card-body .pm-kanban-progress:hover::-webkit-slider-thumb,
+.pm-kanban-card-body .pm-kanban-progress:focus-visible::-webkit-slider-thumb {
   opacity: 1;
 }
-.pm-kanban-progress:focus-visible {
+.pm-kanban-card-body .pm-kanban-progress:focus-visible {
   box-shadow: var(--gs-focus-ring);
 }
 

@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.6.2] - 2026-08-02
+
+### Fixed
+
+- The board card's progress slider was stuck at the browser default width
+  (~150px): Obsidian's built-in range-input styling outranked the plugin's
+  class. The slider now truly spans the card.
+
 ## [2.6.1] - 2026-08-02
 
 ### Changed
