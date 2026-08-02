@@ -59,20 +59,35 @@
   gap: 10px;
   width: 100%;
 }
-.pm-progress-slider {
+/* Scoped to (0,2,0) + Obsidian's --slider-thumb-* vars: app.css styles
+   input[type='range'] and its thumb states at up to (0,2,1), so a bare class
+   loses and the slider renders Obsidian-default (18px white thumb, top: -6px). */
+.pm-prop-progress-wrap .pm-progress-slider {
+  --slider-thumb-width: 14px;
+  --slider-thumb-height: 14px;
+  --slider-thumb-width-active: 16px;
+  --slider-thumb-height-active: 16px;
+  --slider-thumb-background: var(--interactive-accent);
+  --slider-thumb-background-hover: var(--interactive-accent-hover);
+  --slider-thumb-border-width: 0;
+  --slider-thumb-y: 0px;
+  --slider-thumb-y-active: 0px;
+  --slider-thumb-opacity-active: 1;
   flex: 1;
   appearance: none;
+  -webkit-appearance: none;
   height: 6px;
   border-radius: 99px;
   background: var(--background-modifier-hover);
   cursor: pointer;
 }
-.pm-progress-slider::-webkit-slider-thumb {
+.pm-prop-progress-wrap .pm-progress-slider::-webkit-slider-thumb {
   appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--interactive-accent);
+  -webkit-appearance: none;
+  width: var(--slider-thumb-width);
+  height: var(--slider-thumb-height);
+  border-radius: 99px;
+  background: var(--slider-thumb-background);
   cursor: pointer;
 }
 .pm-progress-slider-label {

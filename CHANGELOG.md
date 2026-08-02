@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.6.3] - 2026-08-02
+
+### Fixed
+
+- Dragging a board card's progress slider showed Obsidian's default thumb (a
+  large white oval floating above the track): Obsidian styles the thumb's
+  hover and drag states with higher specificity than a plain class. The thumb
+  is now a small accent dot in every state, growing slightly while dragging.
+- The task editor's progress slider rendered with Obsidian's default track
+  and thumb instead of the plugin's styling, for the same reason.
+
 ## [2.6.2] - 2026-08-02
 
 ### Fixed

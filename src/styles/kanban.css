@@ -326,8 +326,22 @@
 }
 
 /* Adjustable in-card progress: the same thin track, as a live range input.
-   Thumb appears on hover/focus only so the resting card stays minimal. */
+   Thumb appears on hover/focus only so the resting card stays minimal.
+   Thumb geometry/color go through Obsidian's --slider-thumb-* theming vars:
+   app.css styles the thumb's :hover/:active at (0,2,1), which outranks any
+   plain class chain — overriding the vars restyles every state at once
+   (otherwise mid-drag you get its default 18px white thumb at top: -6px). */
 .pm-kanban-card-body .pm-kanban-progress {
+  --slider-thumb-width: 10px;
+  --slider-thumb-height: 10px;
+  --slider-thumb-width-active: 12px;
+  --slider-thumb-height-active: 12px;
+  --slider-thumb-background: var(--gs-accent-hover);
+  --slider-thumb-background-hover: var(--gs-accent-hover);
+  --slider-thumb-border-width: 0;
+  --slider-thumb-y: 0px;
+  --slider-thumb-y-active: 0px;
+  --slider-thumb-opacity-active: 1;
   appearance: none;
   -webkit-appearance: none;
   display: block;
@@ -347,10 +361,11 @@
 .pm-kanban-card-body .pm-kanban-progress::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--gs-accent-hover);
+  width: var(--slider-thumb-width);
+  height: var(--slider-thumb-height);
+  border-radius: 99px;
+  background: var(--slider-thumb-background);
+  cursor: pointer;
   opacity: 0;
   transition: opacity 150ms ease-out;
 }
