@@ -42,6 +42,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.6.1] - 2026-08-02
+
+### Changed
+
+- Removed the Duplicate verdict; the list is now True Positive / False
+  Positive / True Positive - Security Testing / Anomalous Safe
+
+### Fixed
+
+- Retired verdicts (Pending, Duplicate) are pruned when settings load, so an
+  older running build re-saving its stale settings can no longer resurrect
+  them
+- The board card's progress slider track is now visible all the way to the
+  card edge (the unfilled portion was too faint to see)
+
 ## [2.6.0] - 2026-08-02
 
 ### Changed

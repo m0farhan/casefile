@@ -257,6 +257,10 @@ export default class PMPlugin extends Plugin {
     if (!saved?.issueTypes?.length) this.settings.issueTypes = DEFAULT_SETTINGS.issueTypes
     if (!saved?.severities?.length) this.settings.severities = DEFAULT_SETTINGS.severities
     if (!saved?.verdicts?.length) this.settings.verdicts = DEFAULT_SETTINGS.verdicts
+    // Retired verdicts: an older running build can re-save a stale data.json
+    // after an upgrade edits it, resurrecting removed entries — prune on load.
+    this.settings.verdicts = this.settings.verdicts.filter((v) => v.id !== 'pending' && v.id !== 'duplicate')
+    if (!this.settings.verdicts.length) this.settings.verdicts = DEFAULT_SETTINGS.verdicts
     if (!saved?.slaPolicies || !Object.keys(saved.slaPolicies).length) {
       this.settings.slaPolicies = DEFAULT_SETTINGS.slaPolicies
     }

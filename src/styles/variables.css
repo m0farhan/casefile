@@ -75,7 +75,6 @@
   --gs-verdict-false-positive: var(--gs-green);
   --gs-verdict-security-testing: var(--gs-purple);
   --gs-verdict-anomalous-safe: var(--gs-teal);
-  --gs-verdict-duplicate: var(--gs-ink-subtle);
   --gs-ioc-ip: var(--gs-blue);
   --gs-ioc-domain: var(--gs-teal);
   --gs-ioc-hash: var(--gs-purple);

@@ -109,7 +109,7 @@ describe('issueTypes / severities / verdicts resolution', () => {
     const resolved = resolveProjectConfig(makeOverrideProject(), DEFAULT_SETTINGS)
     expect(resolved.issueTypes.map((t) => t.id)).toEqual(['epic', 'story', 'task', 'tuning', 'incident'])
     expect(resolved.severities.map((s) => s.id)).toEqual(['sev1', 'sev2', 'sev3', 'sev4'])
-    expect(resolved.verdicts.length).toBe(5)
+    expect(resolved.verdicts.length).toBe(4)
   })
 
   it('uses project-defined issue types and appends in-use unknown ones with a fallback', () => {
