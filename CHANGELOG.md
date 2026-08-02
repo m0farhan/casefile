@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Priorities can be added, renamed, recolored, and reordered in settings
 - Status and priority icons accept emoji or any icon available in Obsidian, including Lucide icons and icons added by other plugins, with suggestions while typing in settings
-- TaskNotes tasks can be imported with their dates, dependencies, subtasks, tags, and archive state ([#16](https://github.com/StepanKropachev/obsidian-pm/issues/16))
-- Statuses and priorities can be imported from TaskNotes in settings ([#16](https://github.com/StepanKropachev/obsidian-pm/issues/16))
-- Projects can define their own statuses and priorities in the project settings, replacing the global ones ([#57](https://github.com/StepanKropachev/obsidian-pm/issues/57))
+- TaskNotes tasks can be imported with their dates, dependencies, subtasks, tags, and archive state
+- Statuses and priorities can be imported from TaskNotes in settings
+- Projects can define their own statuses and priorities in the project settings, replacing the global ones
 - Projects can override the default view, auto-scheduling, and the board display options in the project settings
 - The completed date shows whether a task finished on time or how many days late it was
 
@@ -34,12 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Start and completed dates were labelled overdue in the task editor ([#156](https://github.com/StepanKropachev/obsidian-pm/issues/156))
-- The due date of a done task was labelled overdue in the task editor ([#156](https://github.com/StepanKropachev/obsidian-pm/issues/156))
+- Start and completed dates were labelled overdue in the task editor
+- The due date of a done task was labelled overdue in the task editor
 - The due date of a done task was highlighted as urgent in the table
-- Text and images in a task description could not be selected or copied ([#169](https://github.com/StepanKropachev/obsidian-pm/issues/169))
+- Text and images in a task description could not be selected or copied
 - A task description rewrapped its text when clicked for editing
-- Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
+- Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
 ## [2.6.3] - 2026-08-02
@@ -221,7 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Renamed to Casefile.** Plugin id `greysurface-pm` → `casefile` (new install
   folder — see INSTALL.md for the one-time switchover incl. `data.json`),
   display name, view types, and all user-facing text. Data format unchanged.
-- README rewritten for Casefile; the appended upstream README (whose links,
+- README rewritten for Casefile; the appended legacy README (whose links,
   badges and feature claims no longer matched this plugin) was removed.
 
 ### Added
@@ -258,9 +258,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] - 2026-07-31 — GreySurface PM
 
-Fork of Project Manager 1.8.0 as GreySurface PM: Jira-style project and SOC
-incident tracking, restyled with the GreySurface Linear design system. Data
-stays 100% compatible with upstream's pm-project/pm-task markdown format.
+GreySurface PM: Jira-style project and SOC incident tracking, restyled with
+the GreySurface Linear design system. Data stays 100% compatible with the
+pre-existing pm-project/pm-task markdown format.
 
 ### Added
 
@@ -334,7 +334,7 @@ stays 100% compatible with upstream's pm-project/pm-task markdown format.
 
 ### Fixed
 
-- The project view was empty when Pane Relief or Hover Editor was enabled ([#80](https://github.com/StepanKropachev/obsidian-pm/issues/80))
+- The project view was empty when Pane Relief or Hover Editor was enabled
 
 ## [1.6.2] - 2026-06-17
 
@@ -344,9 +344,9 @@ stays 100% compatible with upstream's pm-project/pm-task markdown format.
 
 ### Fixed
 
-- Subtasks added in the task editor were lost on reload ([#90](https://github.com/StepanKropachev/obsidian-pm/issues/90))
+- Subtasks added in the task editor were lost on reload
 - The app froze when duplicating a task with a long title
-- The project list showed stale task counts until the view was reopened ([#121](https://github.com/StepanKropachev/obsidian-pm/issues/121))
+- The project list showed stale task counts until the view was reopened
 
 ## [1.6.1] - 2026-06-15
 
@@ -360,15 +360,15 @@ stays 100% compatible with upstream's pm-project/pm-task markdown format.
 
 ### Fixed
 
-- Subtasks created from the subtasks list or the add-subtask buttons were not set to the subtask type ([#82](https://github.com/StepanKropachev/obsidian-pm/issues/82))
-- An assignee written as a note link (`[[People/Jane Doe]]`) showed the link path on its avatar instead of the person's name ([#64](https://github.com/StepanKropachev/obsidian-pm/issues/64))
+- Subtasks created from the subtasks list or the add-subtask buttons were not set to the subtask type
+- An assignee written as a note link (`[[People/Jane Doe]]`) showed the link path on its avatar instead of the person's name
 
 ## [1.6.0] - 2026-06-12
 
 ### Added
 
-- Completing a task records a completion date that can be edited in the task modal ([#93](https://github.com/StepanKropachev/obsidian-pm/issues/93))
-- Setting "Show description preview on board" (default off) shows the first three lines of each task's description on its kanban card ([#59](https://github.com/StepanKropachev/obsidian-pm/issues/59))
+- Completing a task records a completion date that can be edited in the task modal
+- Setting "Show description preview on board" (default off) shows the first three lines of each task's description on its kanban card
 
 ### Changed
 
@@ -379,13 +379,13 @@ stays 100% compatible with upstream's pm-project/pm-task markdown format.
 - Select all in the table selects every task matching the current filter, not just the visible rows
 - Collapsing or expanding a subtree no longer changes any task notes
 - The expand/collapse subtasks toggle looks the same in the table and Gantt views
-- Gantt task bars show stronger contrast between completed and remaining work ([#87](https://github.com/StepanKropachev/obsidian-pm/issues/87))
+- Gantt task bars show stronger contrast between completed and remaining work
 - Gantt task bars no longer show a stripe on tasks that have subtasks
 
 ### Fixed
 
 - Images pasted or dropped onto a task were saved to the vault root instead of the task's own folder. The folder follows the task when it is renamed or archived, and is removed with the task
-- Duplicating a task with its subtasks failed with a "note already exists" error and dropped the subtasks ([#90](https://github.com/StepanKropachev/obsidian-pm/issues/90))
+- Duplicating a task with its subtasks failed with a "note already exists" error and dropped the subtasks
 - Progress bar labels showed 0% instead of the actual value in some views
 - The subtasks toggle did not respond in the Gantt view
 
@@ -393,14 +393,14 @@ stays 100% compatible with upstream's pm-project/pm-task markdown format.
 
 ### Added
 
-- Setting "Save tasks on close" (default on). When off, closing the task modal by X or click-outside discards edits, so only the Save button keeps them ([#62](https://github.com/StepanKropachev/obsidian-pm/issues/62))
+- Setting "Save tasks on close" (default on). When off, closing the task modal by X or click-outside discards edits, so only the Save button keeps them
 - "Open as note" button in the task modal header opens the task's note in a new tab
 - Pasting a screenshot or dragging a file onto the task description saves it to the vault attachments folder and embeds it at the cursor
 - Search box, filters (status, priority, assignee, tag, due date, archived), and saved views appear above every view, not just the table
 - Filter state persists per project across plugin reloads
 - Saved views remember the view mode they were created in, and selecting one switches the project to that mode
 - Gantt lifts a matching task to the top level when its parent is filtered out, so search reveals deeply nested matches
-- Release artifacts carry GitHub build provenance attestations; `gh attestation verify <file> --owner StepanKropachev` confirms a download was built from this repo
+- Release artifacts carry GitHub build provenance attestations; `gh attestation verify <file> --owner m0farhan` confirms a download was built from this repo
 
 ### Changed
 
@@ -432,7 +432,7 @@ stays 100% compatible with upstream's pm-project/pm-task markdown format.
 - Kanban cards dropped the fourth and later assignees
 - Duplicate task entries appeared when creating a task
 - A saved-view pill stayed highlighted after its filter was changed
-- An assignee stored as a wiki link (`[[Wiki Link]]`) showed garbled avatar initials ([#64](https://github.com/StepanKropachev/obsidian-pm/issues/64))
+- An assignee stored as a wiki link (`[[Wiki Link]]`) showed garbled avatar initials
 - Renaming a task to a title already used by another note shows an inline error instead of failing silently
 
 ## [1.4.0] - 2026-04-29
@@ -525,7 +525,7 @@ stays 100% compatible with upstream's pm-project/pm-task markdown format.
 
 ## [1.1.1] - 2026-04-11
 
-No release notes. See the [1.1.0...1.1.1 diff](https://github.com/StepanKropachev/obsidian-pm/compare/1.1.0...1.1.1).
+No release notes.
 
 ## [1.1.0] - 2026-04-08
 

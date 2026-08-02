@@ -15,7 +15,7 @@
  * the plugin settings tab (should match Obsidian's settings UI).
  *
  * New CSS should use --gs-* names directly; the Obsidian-name remaps exist
- * only so the inherited upstream styles pick up the skin without churn.
+ * only so the inherited stylesheets pick up the skin without churn.
  */
 .pm-root,
 .pm-modal,
@@ -144,7 +144,7 @@
   overflow: hidden;
 }
 
-/* Modal chrome sits outside the upstream selectors — pin it to the ladder. */
+/* Modal chrome sits outside the inherited selectors — pin it to the ladder. */
 .pm-modal.modal,
 .pm-prompt-modal.modal,
 .pm-confirm-modal.modal,

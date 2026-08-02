@@ -268,7 +268,7 @@ export default class PMPlugin extends Plugin {
     if (!this.settings.projectFilters) this.settings.projectFilters = {}
     if (!this.settings.collapsedTasks) this.settings.collapsedTasks = {}
     if (!this.settings.collapsedKanbanColumns) this.settings.collapsedKanbanColumns = {}
-    // Old-plugin data.json (or older fork versions) lack the new filter arrays.
+    // A data.json written by older versions lacks the new filter arrays.
     for (const entry of Object.values(this.settings.projectFilters)) {
       entry.filter.severities ??= []
       entry.filter.verdicts ??= []

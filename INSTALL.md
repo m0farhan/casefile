@@ -47,6 +47,6 @@ them and reopen from Casefile's commands.
 
 ## Never run two writers
 
-If the original "Project Manager" community plugin is installed in the same
-vault, keep it **disabled** while Casefile is enabled. Both read and write the
-same `pm-project`/`pm-task` files; running both invites double writes.
+If any other plugin that reads and writes the same `pm-project`/`pm-task`
+files is installed in the same vault, keep it **disabled** while Casefile is
+enabled. Running two writers over the same files invites double writes.

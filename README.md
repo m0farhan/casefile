@@ -45,10 +45,9 @@ trail, hand over cleanly.
 ## Data format
 
 One case/task = one markdown file (`pm-project` / `pm-task` frontmatter),
-stored under `Cases/` and `Tasks/<case>/`. The format is compatible with the
-Project Manager plugin lineage this tool grew from — if that community plugin
-is ever installed in the same vault, keep it disabled while Casefile is
-enabled: both would write the same files.
+stored under `Cases/` and `Tasks/<case>/`. If any other plugin that reads the
+same `pm-project`/`pm-task` frontmatter is ever installed in the same vault,
+keep it disabled while Casefile is enabled: both would write the same files.
 
 Works alongside SOC Toolkit: descriptions are plain notes, so its defang and
 IP-reputation commands work inside them.
@@ -58,8 +57,6 @@ IP-reputation commands work inside them.
 See [INSTALL.md](INSTALL.md) — `corepack pnpm package` builds a portable
 offline bundle for any vault on any machine.
 
-## Credits
+## License
 
-Casefile is based on [Project Manager](https://github.com/StepanKropachev/obsidian-pm)
-by Stepan Kropachev (MIT — upstream license retained in [LICENSE](LICENSE)),
-heavily extended and restyled. See [CHANGELOG.md](CHANGELOG.md).
+MIT — see [LICENSE](LICENSE). Release history in [CHANGELOG.md](CHANGELOG.md).
