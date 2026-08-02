@@ -42,6 +42,8 @@ export interface KanbanColumnProps {
   onCardContextMenu: (task: Task, e: MouseEvent) => void
   onCardDragStart: (task: Task) => void
   onCardDragEnd: () => void
+  /** Present = cards render an adjustable progress slider. */
+  onCardProgressChange?: (task: Task, value: number) => void
   onDrop: (taskId: string, newStatus: string, before: DropNeighbor | null) => Promise<void>
 }
 
@@ -102,6 +104,9 @@ export class KanbanColumn {
         overdue: card.overdue,
         showTagColors: card.showTagColors,
         onClick: () => props.onCardClick(card.task),
+        onProgressChange: props.onCardProgressChange
+          ? (value) => props.onCardProgressChange?.(card.task, value)
+          : undefined,
         onContextMenu: (e) => props.onCardContextMenu(card.task, e),
         onDragStart: () => props.onCardDragStart(card.task),
         onDragEnd: () => props.onCardDragEnd()

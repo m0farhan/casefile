@@ -32,6 +32,8 @@ export interface KanbanCardProps {
   overdue: boolean
   showTagColors: boolean
   onClick: () => void
+  /** Present = the card shows an adjustable progress slider (absent = read-only bar). */
+  onProgressChange?: (value: number) => void
   onContextMenu: (e: MouseEvent) => void
   onDragStart: () => void
   onDragEnd: () => void
@@ -146,7 +148,31 @@ export class KanbanCard {
       }
     }
 
-    if (task.progress > 0) {
+    if (props.onProgressChange) {
+      // Minimal in-card progress: the same thin track, but adjustable. The
+      // slider must never start a card drag or bubble into click-to-open.
+      const onProgressChange = props.onProgressChange
+      const slider = body.createEl('input', { type: 'range', cls: 'pm-kanban-progress' })
+      slider.min = '0'
+      slider.max = '100'
+      slider.step = '25'
+      slider.value = String(task.progress)
+      const paint = () => slider.setCssProps({ '--pm-progress-pct': `${slider.value}%` })
+      paint()
+      slider.setAttribute('aria-label', 'Progress')
+      slider.addEventListener('pointerdown', (e) => {
+        e.stopPropagation()
+        card.draggable = false
+      })
+      const restoreDrag = () => {
+        card.draggable = true
+      }
+      slider.addEventListener('pointerup', restoreDrag)
+      slider.addEventListener('pointercancel', restoreDrag)
+      slider.addEventListener('click', (e) => e.stopPropagation())
+      slider.addEventListener('input', paint)
+      slider.addEventListener('change', () => onProgressChange(Number(slider.value)))
+    } else if (task.progress > 0) {
       new ProgressBar(body).setSize('sm').setValue(task.progress)
     }
 

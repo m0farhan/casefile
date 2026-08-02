@@ -95,6 +95,10 @@ export class KanbanView implements SubView {
             this.renderBoard()
           }),
           onCardClick: (task) => this.openTask(task),
+          onCardProgressChange: safeAsync(async (task: Task, value: number) => {
+            await this.plugin.store.updateTask(this.project, task.id, { progress: value })
+            await this.onRefresh()
+          }),
           onCardContextMenu: (task, e) => this.openContextMenu(task, e),
           onCardDragStart: (task) => {
             this.dragTask = task

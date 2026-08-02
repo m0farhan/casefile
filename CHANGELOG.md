@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing ([#167](https://github.com/StepanKropachev/obsidian-pm/issues/167))
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.5.2] - 2026-08-02
+
+### Added
+
+- Adjustable progress on board cards: the thin progress track is now a slider
+  (25% steps) you can drag right on the card — no need to open the case. The
+  thumb appears on hover; card dragging and click-to-open are unaffected.
+  Archive cards stay read-only.
+
 ## [2.5.1] - 2026-08-02
 
 ### Added
