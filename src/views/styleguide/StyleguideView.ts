@@ -141,6 +141,7 @@ export class StyleguideView extends ItemView {
       '--gs-sev2',
       '--gs-sev3',
       '--gs-sev4',
+      '--gs-sev5',
       '--gs-sla-ok',
       '--gs-sla-warn',
       '--gs-sla-breach',
@@ -172,6 +173,7 @@ export class StyleguideView extends ItemView {
       ['--gs-sev2', '--gs-surface-1', 4.5],
       ['--gs-sev3', '--gs-surface-1', 4.5],
       ['--gs-sev4', '--gs-surface-1', 4.5],
+      ['--gs-sev5', '--gs-surface-1', 4.5],
       ['--gs-accent', '--gs-surface-1', 3] // non-text (borders/fills) target
     ]
     const table = sec.createDiv('pm-sg-contrast')

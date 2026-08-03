@@ -51,6 +51,7 @@
   --gs-green: #4cb782;
   --gs-green-solid: #27a644; /* DS success, solid fills only */
   --gs-blue: #4ea7fc;
+  --gs-sky: #56ccf2;
   --gs-purple: #b59aff;
   --gs-teal: #2fbfa4;
   /* 15% tints precomposited on surface-1 for chip backgrounds */
@@ -64,10 +65,10 @@
 
   /* --- Semantic aliases (features consume these, never raw hues) --- */
   --gs-sev1: var(--gs-red);
-  --gs-sev2: var(--gs-amber);
-  --gs-sev3: var(--gs-yellow);
-  --gs-sev4: var(--gs-blue);
-  --gs-sev-info: var(--gs-ink-subtle);
+  --gs-sev2: var(--gs-yellow);
+  --gs-sev3: var(--gs-blue);
+  --gs-sev4: var(--gs-sky);
+  --gs-sev5: var(--gs-ink-subtle); /* Informational */
   --gs-sla-ok: var(--gs-green);
   --gs-sla-warn: var(--gs-amber);
   --gs-sla-breach: var(--gs-red);

@@ -42,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.7.0] - 2026-08-03
+
+### Added
+
+- **Informational severity** (gray), below Low — the standard five-level SOC
+  scale. It ships with no SLA policy, so informational findings run no
+  response/resolution clocks; targets can be set in settings like any other
+  severity. `sev:` queries rank it lowest automatically.
+
+### Changed
+
+- Severity colours: Critical stays red, High is now yellow, Medium blue,
+  Low sky blue. Custom severity colours are untouched.
+
 ## [2.6.4] - 2026-08-02
 
 ### Changed

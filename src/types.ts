@@ -321,14 +321,16 @@ export const DEFAULT_ISSUE_TYPES: IssueTypeConfig[] = [
   { id: 'incident', label: 'Incident', color: '#f2994a', icon: 'siren' }
 ]
 
-/* Ids sev1..sev4 are stored in task frontmatter and key DEFAULT_SLA_POLICIES — never change
+/* Ids sev1..sev5 are stored in task frontmatter and key DEFAULT_SLA_POLICIES — never change
  * them; only the human-facing labels moved off the SEVn scheme when severity replaced
- * priority as the single urgency dial. */
+ * priority as the single urgency dial. Order = rank (first is most severe); sev5
+ * (Informational) ships without an SLA policy — informational findings carry no clock. */
 export const DEFAULT_SEVERITIES: SeverityConfig[] = [
   { id: 'sev1', label: 'Critical', color: '#eb5757', icon: '' },
-  { id: 'sev2', label: 'High', color: '#f2994a', icon: '' },
-  { id: 'sev3', label: 'Medium', color: '#f2c94c', icon: '' },
-  { id: 'sev4', label: 'Low', color: '#4ea7fc', icon: '' }
+  { id: 'sev2', label: 'High', color: '#f2c94c', icon: '' },
+  { id: 'sev3', label: 'Medium', color: '#4ea7fc', icon: '' },
+  { id: 'sev4', label: 'Low', color: '#56ccf2', icon: '' },
+  { id: 'sev5', label: 'Informational', color: '#8a8f98', icon: '' }
 ]
 
 export const DEFAULT_VERDICTS: VerdictConfig[] = [
