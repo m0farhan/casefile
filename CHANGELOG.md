@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.8.0] - 2026-08-03
+
+### Changed
+
+- Kanban columns now resize with the window: To Do / In Progress / Done /
+  Archive share the available width instead of sitting at a fixed 280px.
+  On narrow windows they shrink to a readable minimum, then the board
+  scrolls horizontally as before. Collapsed columns stay a fixed strip.
+
 ## [2.7.0] - 2026-08-03
 
 ### Added

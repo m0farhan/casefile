@@ -1,7 +1,7 @@
 {
 	"id": "casefile",
 	"name": "Casefile",
-	"version": "2.7.0",
+	"version": "2.8.0",
 	"minAppVersion": "1.7.2",
 	"description": "Jira-style case and SOC incident tracking: issue keys, epics, kanban swimlanes, SLA timers, IOC handling, reports and shift handover.",
 	"author": "Mohammed Farhan Aslam",
