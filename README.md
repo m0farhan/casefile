@@ -33,6 +33,11 @@ trail, hand over cleanly.
   typed, and deduplicated automatically), rendered defanged everywhere,
   one-click defanged block export, and an `ioc:` pivot to find an indicator
   across cases
+- Optional live reputation checks on indicator rows — VirusTotal (IP, domain,
+  hash, URL; an email is checked by its domain) and AbuseIPDB (IP). Off until
+  you add your own API keys in settings; the indicator value is sent to the
+  provider only when you click the check button, never automatically. This is
+  the plugin's only network use.
 - Incident lifecycle stamps (detected / responded / contained / resolved) with
   an append-only, per-task activity timeline — nothing edits history
 - Comments, kept structurally separate from factual fields

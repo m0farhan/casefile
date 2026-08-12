@@ -42,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.10.0] - 2026-08-12
+
+### Added
+
+- **Live reputation checks on indicator rows.** A check button on each
+  indicator queries VirusTotal (IP, domain, hash, URL — an email is checked
+  by its domain, shown on the chip) and AbuseIPDB (IP), rendering verdict
+  chips (malicious / suspicious / clean / unknown) with vendor counts; each
+  chip links to the vendor's page. Defanged values are refanged before
+  querying. Off until you add your own API keys in settings — keys stay in
+  this vault, are never logged, and the indicator value is sent to the
+  provider only when you click the button, never automatically. Errors
+  degrade honestly (rate limited, not found, key rejected).
+
 ## [2.9.0] - 2026-08-04
 
 ### Changed

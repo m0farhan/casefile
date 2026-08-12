@@ -695,6 +695,51 @@ input.pm-pop-field:focus {
   align-items: center;
   gap: 8px;
 }
+/* Live reputation results: a chip strip tucked under its indicator row */
+.pm-ioc-rep:empty {
+  display: none;
+}
+.pm-ioc-rep {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 4px 100px; /* aligns under the value, past the type select */
+}
+.pm-ioc-rep-loading {
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+a.pm-ioc-rep-chip {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--gs-hairline-strong);
+  color: var(--gs-ink);
+  background: var(--gs-surface-2);
+  text-decoration: none;
+}
+a.pm-ioc-rep-chip:hover {
+  border-color: var(--gs-ink-subtle);
+}
+a.pm-ioc-rep--malicious {
+  color: var(--gs-red);
+  border-color: color-mix(in srgb, var(--gs-red) 45%, transparent);
+  background: var(--gs-red-tint);
+}
+a.pm-ioc-rep--suspicious {
+  color: var(--gs-amber);
+  border-color: color-mix(in srgb, var(--gs-amber) 45%, transparent);
+  background: var(--gs-amber-tint);
+}
+a.pm-ioc-rep--clean {
+  color: var(--gs-green);
+  border-color: color-mix(in srgb, var(--gs-green) 45%, transparent);
+  background: var(--gs-green-tint);
+}
+a.pm-ioc-rep--unknown {
+  color: var(--gs-ink-subtle);
+}
 .pm-ioc-type {
   flex: 0 0 92px;
   width: 92px;

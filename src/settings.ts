@@ -348,6 +348,44 @@ export class PMSettingTab extends PluginSettingTab {
     this.slaContainer = containerEl.createDiv('pm-settings-sla')
     this.renderSlaRows()
 
+    // ── Live reputation checks ────────────────────────────────────────────────
+    new Setting(containerEl).setName('Live reputation checks').setHeading()
+
+    const repDesc = new Setting(containerEl)
+      .setName('VirusTotal key')
+      .setDesc(
+        'Enables the reputation button on indicator rows (IP, domain, hash, URL; ' +
+          'for an email its domain is checked). The key stays in this vault; the ' +
+          'indicator value is sent to VirusTotal only when you click the button.'
+      )
+    repDesc.addText((text) => {
+      text.inputEl.type = 'password'
+      text
+        .setPlaceholder('None — checks disabled')
+        .setValue(this.plugin.settings.virusTotalApiKey)
+        .onChange(async (v) => {
+          this.plugin.settings.virusTotalApiKey = v.trim()
+          await this.plugin.saveSettings()
+        })
+    })
+
+    const abDesc = new Setting(containerEl)
+      .setName('AbuseIPDB key')
+      .setDesc(
+        'Adds a second opinion for IP indicators (AbuseIPDB checks IP addresses ' +
+          'only). Same rules: local key, sent only on click.'
+      )
+    abDesc.addText((text) => {
+      text.inputEl.type = 'password'
+      text
+        .setPlaceholder('None — checks disabled')
+        .setValue(this.plugin.settings.abuseIpdbApiKey)
+        .onChange(async (v) => {
+          this.plugin.settings.abuseIpdbApiKey = v.trim()
+          await this.plugin.saveSettings()
+        })
+    })
+
     // ── Shift handover ────────────────────────────────────────────────────────
     new Setting(containerEl).setName('Shift handover').setHeading()
 

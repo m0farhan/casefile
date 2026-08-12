@@ -10,7 +10,8 @@ import {
 } from './ioc'
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
-import { Notice } from 'obsidian'
+import { Notice, requestUrl } from 'obsidian'
+import { PROVIDER_LABELS, buildRequests, parseReputation, type RepProvider, type RepVerdict } from './reputation'
 
 const IOC_TYPES = Object.keys(IOC_TYPE_LABELS) as IocType[]
 
@@ -29,10 +30,23 @@ function renderTypeSelect(parent: HTMLElement, value: IocType): HTMLSelectElemen
  * opts.onChange. `onPivot` (when the host provides it) receives the row's
  * refanged real value, for the cross-case indicator search.
  */
+interface RepChip {
+  provider: RepProvider
+  verdict: RepVerdict
+  summary: string
+  link: string
+  queried: string
+}
+
 export function renderIocSection(
   container: HTMLElement,
   task: Task,
-  opts: { onChange: () => void; onPivot?: (value: string) => void }
+  opts: {
+    onChange: () => void
+    onPivot?: (value: string) => void
+    /** Provider API keys for the live reputation button; absent/empty = provider off. */
+    reputationKeys?: { virustotal?: string; abuseipdb?: string }
+  }
 ): void {
   const section = container.createDiv('pm-modal-section pm-ioc-section')
   const header = section.createDiv('pm-modal-section-header')
@@ -66,6 +80,68 @@ export function renderIocSection(
   )
   const rowsEl = section.createDiv('pm-ioc-rows')
 
+  // Reputation results are ephemeral session state: keyed by type:value (a
+  // result belongs to the type it was queried as) so they survive row
+  // re-renders, dropped when the section re-mounts. Async completions patch
+  // ONLY the row's own strip — never a full renderRows(), which would wipe an
+  // uncommitted note draft being typed on another row and steal its focus.
+  const repCache = new Map<string, RepChip[] | 'loading'>()
+  const repKey = (ioc: Ioc) => `${ioc.type}:${ioc.value}`
+  const repStrips = new Map<Ioc, HTMLElement>()
+
+  const fillRepStrip = (ioc: Ioc) => {
+    const strip = repStrips.get(ioc)
+    if (!strip || !strip.isConnected) return
+    strip.empty()
+    // Reads the CURRENT key: after a mid-flight type change the old result
+    // stays cached under the old type and honestly shows nothing here
+    // (flipping the type back shows it again).
+    const state = repCache.get(repKey(ioc))
+    if (!state) return
+    if (state === 'loading') {
+      strip.createSpan({ cls: 'pm-ioc-rep-loading', text: 'Checking…' })
+      return
+    }
+    for (const chip of state) {
+      const label =
+        chip.queried !== refangIoc(ioc.value)
+          ? `${PROVIDER_LABELS[chip.provider]} (${defangIoc(chip.queried, 'domain')})`
+          : PROVIDER_LABELS[chip.provider]
+      const a = strip.createEl('a', {
+        cls: `pm-ioc-rep-chip pm-ioc-rep--${chip.verdict}`,
+        text: `${label} · ${chip.summary}`,
+        href: chip.link,
+        attr: { 'aria-label': `Open on ${PROVIDER_LABELS[chip.provider]}` }
+      })
+      a.setAttribute('rel', 'noopener')
+    }
+  }
+
+  const checkReputation = async (ioc: Ioc) => {
+    const reqs = buildRequests(ioc.type, ioc.value, opts.reputationKeys ?? {})
+    if (!reqs.length) {
+      new Notice('No reputation provider covers this indicator — add keys in the plugin settings')
+      return
+    }
+    const key = repKey(ioc)
+    if (repCache.get(key) === 'loading') return // in-flight; a re-click must not double-spend quota
+    repCache.set(key, 'loading')
+    fillRepStrip(ioc)
+    const chips = await Promise.all(
+      reqs.map(async (req): Promise<RepChip> => {
+        const base = { provider: req.provider, link: req.link, queried: req.queried }
+        try {
+          const res = await requestUrl({ url: req.url, headers: req.headers, throw: false })
+          return { ...base, ...parseReputation(req.provider, res.status, res.text) }
+        } catch {
+          return { ...base, verdict: 'unknown', summary: 'network error' }
+        }
+      })
+    )
+    repCache.set(key, chips)
+    fillRepStrip(ioc)
+  }
+
   const renderRows = () => {
     title.setText(`Indicators (${task.iocs.length})`)
     rowsEl.empty()
@@ -94,6 +170,10 @@ export function renderIocSection(
         else delete ioc.note
         opts.onChange()
       })
+      new IconButton(row)
+        .setIcon('radar')
+        .setTooltip('Check reputation')
+        .onClick(() => void checkReputation(ioc))
       const onPivot = opts.onPivot
       if (onPivot) {
         new IconButton(row)
@@ -117,6 +197,8 @@ export function renderIocSection(
           renderRows()
           opts.onChange()
         })
+      repStrips.set(ioc, rowsEl.createDiv('pm-ioc-rep'))
+      fillRepStrip(ioc)
     }
   }
 

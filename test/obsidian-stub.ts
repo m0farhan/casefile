@@ -37,3 +37,7 @@ export class TFolder extends TAbstractFile {
     return this.parent === null
   }
 }
+
+export function requestUrl(): Promise<never> {
+  return Promise.reject(new Error('requestUrl is not available in tests'))
+}

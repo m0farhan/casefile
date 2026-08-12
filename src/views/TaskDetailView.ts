@@ -328,7 +328,11 @@ export class TaskDetailView extends ItemView {
       renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave() })
       renderIocSection(body, task, {
         onChange: () => this.scheduleSave(),
-        onPivot: (value) => void openIndicatorSearch(this.plugin, value)
+        onPivot: (value) => void openIndicatorSearch(this.plugin, value),
+        reputationKeys: {
+          virustotal: this.plugin.settings.virusTotalApiKey,
+          abuseipdb: this.plugin.settings.abuseIpdbApiKey
+        }
       })
     }
     this.commentsSection?.destroy()

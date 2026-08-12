@@ -268,6 +268,9 @@ export interface PMSettings {
   /** Vault path of the generated shift-handover note. */
   handoverPath: string
   handoverWindowHours: number
+  /** Live IOC reputation checks — keys stay local in this vault's data.json; '' disables the provider. */
+  virusTotalApiKey: string
+  abuseIpdbApiKey: string
   globalTeamMembers: string[]
   /** Matches `assignee:me` in the query bar. */
   currentUser: string
@@ -421,6 +424,8 @@ export const DEFAULT_SETTINGS: PMSettings = {
   incidentTemplates: DEFAULT_INCIDENT_TEMPLATES,
   handoverPath: 'SOC/Handover.md',
   handoverWindowHours: 12,
+  virusTotalApiKey: '',
+  abuseIpdbApiKey: '',
   globalTeamMembers: [],
   currentUser: '',
   openTaskIn: 'modal',

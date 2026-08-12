@@ -335,6 +335,10 @@ export class TaskModal extends Modal {
       renderLifecyclePanel(body, this.task, { onChange: () => {} })
       renderIocSection(body, this.task, {
         onChange: () => {},
+        reputationKeys: {
+          virustotal: this.plugin.settings.virusTotalApiKey,
+          abuseipdb: this.plugin.settings.abuseIpdbApiKey
+        },
         onPivot: (value) => {
           // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
           this.saved = false
