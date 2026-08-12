@@ -695,6 +695,18 @@ input.pm-pop-field:focus {
   align-items: center;
   gap: 8px;
 }
+/* The defanged value: selectable (Obsidian disables selection app-wide) and
+   click-to-copy, flashing green on a successful copy */
+.pm-ioc-value-text {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: copy;
+  transition: color 150ms ease-out;
+}
+.pm-ioc-value-text.pm-ioc-copied {
+  color: var(--gs-green);
+}
+
 /* Live reputation results: a chip strip tucked under its indicator row */
 .pm-ioc-rep:empty {
   display: none;

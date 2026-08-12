@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.10.1] - 2026-08-12
+
+### Fixed
+
+- Indicator values can now be copied as displayed: clicking the defanged
+  value copies it defanged (green flash confirms), and the text is
+  selectable again — the app-wide selection block had made it ungrabbable.
+  The row's copy button still copies the real value.
+
 ## [2.10.0] - 2026-08-12
 
 ### Added

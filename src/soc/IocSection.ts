@@ -156,7 +156,25 @@ export function renderIocSection(
       const valueEl = row.createDiv('pm-ioc-value')
       const dot = valueEl.createSpan({ cls: 'pm-ioc-dot' })
       dot.setCssProps({ '--pm-ioc-color': `var(--gs-ioc-${ioc.type})` })
-      valueEl.createSpan({ text: defangIoc(ioc.value, ioc.type) })
+      // The defanged text is itself the copy affordance (Obsidian disables
+      // text selection app-wide, so without this the value can't be grabbed
+      // at all). Click = copy defanged; drag-select is re-enabled via CSS and
+      // must not trigger the copy. The row button still copies the real value.
+      const textSpan = valueEl.createSpan({
+        text: defangIoc(ioc.value, ioc.type),
+        cls: 'pm-ioc-value-text',
+        attr: { title: 'Copy defanged' }
+      })
+      textSpan.addEventListener(
+        'click',
+        safeAsync(async () => {
+          const sel = activeWindow.getSelection()
+          if (sel && !sel.isCollapsed && textSpan.contains(sel.anchorNode)) return
+          await navigator.clipboard.writeText(defangIoc(ioc.value, ioc.type))
+          textSpan.classList.add('pm-ioc-copied')
+          window.setTimeout(() => textSpan.classList.remove('pm-ioc-copied'), 600)
+        })
+      )
       const noteInput = row.createEl('input', {
         type: 'text',
         cls: 'pm-prop-text pm-ioc-note',
