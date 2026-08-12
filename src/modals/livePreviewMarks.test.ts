@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeInlineMarks, fenceMap } from './livePreviewMarks'
+import { classifyLine, computeInlineMarks, fenceMap } from './livePreviewMarks'
 
 describe('computeInlineMarks', () => {
   it('marks **bold** with both marker runs hidden', () => {
@@ -166,5 +166,60 @@ describe('fenceMap', () => {
 
   it('flags nothing without fences', () => {
     expect(fenceMap('a\nb')).toEqual([false, false])
+  })
+})
+
+describe('classifyLine', () => {
+  it('classifies headings h1-h6 with the marker (and trailing space) length', () => {
+    expect(classifyLine('# Alert')).toEqual({ kind: 'heading', level: 1, markerLen: 2 })
+    expect(classifyLine('###### deep')).toEqual({ kind: 'heading', level: 6, markerLen: 7 })
+  })
+
+  it('rejects hash lines that are not headings', () => {
+    expect(classifyLine('#nospace')).toBeNull()
+    expect(classifyLine('####### seven')).toBeNull()
+    expect(classifyLine('#')).toBeNull()
+  })
+
+  it('classifies quotes with and without the space', () => {
+    expect(classifyLine('> quoted')).toEqual({ kind: 'quote', markerLen: 2 })
+    expect(classifyLine('>tight')).toEqual({ kind: 'quote', markerLen: 1 })
+  })
+
+  it('classifies tasks before bullets, with state offset and checked flag', () => {
+    expect(classifyLine('- [ ] triage')).toEqual({
+      kind: 'task',
+      indent: 0,
+      markerLen: 5,
+      stateOffset: 3,
+      checked: false
+    })
+    expect(classifyLine('  - [x] contained')).toEqual({
+      kind: 'task',
+      indent: 2,
+      markerLen: 5,
+      stateOffset: 5,
+      checked: true
+    })
+    expect(classifyLine('- [X] upper')).toMatchObject({ kind: 'task', checked: true })
+    expect(classifyLine('- [x]')).toMatchObject({ kind: 'task', checked: true })
+  })
+
+  it('classifies bullet items for -, * and + with indent', () => {
+    expect(classifyLine('- item')).toEqual({ kind: 'bullet', indent: 0 })
+    expect(classifyLine('   * item')).toEqual({ kind: 'bullet', indent: 3 })
+    expect(classifyLine('+ item')).toEqual({ kind: 'bullet', indent: 0 })
+  })
+
+  it('classifies ordered items with the number marker length', () => {
+    expect(classifyLine('1. first')).toEqual({ kind: 'ordered', indent: 0, markerLen: 2 })
+    expect(classifyLine('  12) later')).toEqual({ kind: 'ordered', indent: 2, markerLen: 3 })
+  })
+
+  it('leaves plain prose, bare dashes, and rules alone', () => {
+    expect(classifyLine('Enriched sender SMTP address')).toBeNull()
+    expect(classifyLine('---')).toBeNull()
+    expect(classifyLine('a - b')).toBeNull()
+    expect(classifyLine('')).toBeNull()
   })
 })

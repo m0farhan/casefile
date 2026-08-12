@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.9.0] - 2026-08-04
+
+### Changed
+
+- **One view while editing a description.** The separate "Preview" panel under
+  the editor is gone — the editor itself now renders like a note tab:
+  headings, quotes, bullet and numbered lists, clickable checkboxes, and
+  monospaced code fences, on top of the existing bold/italic/code. Markers
+  reveal as raw markdown only on the line you're editing, exactly like
+  Obsidian's Live Preview. Links and image embeds render in read mode as
+  before.
+
 ## [2.8.0] - 2026-08-03
 
 ### Changed

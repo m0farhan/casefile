@@ -6,6 +6,7 @@ import {
   keymap,
   placeholder,
   ViewPlugin,
+  WidgetType,
   type DecorationSet,
   type ViewUpdate
 } from '@codemirror/view'
@@ -14,7 +15,7 @@ import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { IconButton } from '../ui/primitives/IconButton'
 import { toggleInlineMarker } from './inlineFormat'
-import { computeInlineMarks, fenceMap } from './livePreviewMarks'
+import { classifyLine, computeInlineMarks, fenceMap } from './livePreviewMarks'
 import { NoteLinkSuggest } from './NoteLinkSuggest'
 
 export interface DescriptionEditorContext {
@@ -34,11 +35,12 @@ export interface DescriptionEditorHandle {
 }
 
 // ── Live-preview decorations ──────────────────────────────────────────────
-// Inline **bold** / *em* / `code` render styled with their markers hidden,
-// except where the main selection touches the formatted range — there the
-// raw markers reveal (Obsidian Live Preview behavior). All other markdown
-// (headings, lists, links) stays raw; the debounced preview panel below
-// covers full rendering.
+// The editor renders markdown in place, like an Obsidian note tab: inline
+// **bold** / *em* / `code`, headings, quotes, bullet/ordered lists, clickable
+// task checkboxes, and monospaced fenced blocks. Markers hide except where
+// the main selection touches the line/range — there the raw markdown reveals
+// (Obsidian Live Preview behavior). Links and embeds stay raw while editing;
+// the read-mode preview renders them fully.
 
 const inlineDeco = {
   strong: Decoration.mark({ class: 'cm-cf-strong' }),
@@ -46,6 +48,53 @@ const inlineDeco = {
   code: Decoration.mark({ class: 'cm-cf-code' })
 } as const
 const hideMarker = Decoration.replace({})
+const headingLine = [1, 2, 3, 4, 5, 6].map((n) => Decoration.line({ class: `cm-cf-h${n}` }))
+const quoteLine = Decoration.line({ class: 'cm-cf-quote' })
+const taskDoneLine = Decoration.line({ class: 'cm-cf-task-done' })
+const fenceLine = Decoration.line({ class: 'cm-cf-fenceline' })
+const listNumMark = Decoration.mark({ class: 'cm-cf-listmark' })
+
+class BulletWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    return createSpan({ cls: 'cm-cf-bullet', text: '•' })
+  }
+
+  eq(): boolean {
+    return true
+  }
+}
+
+class CheckWidget extends WidgetType {
+  constructor(
+    private readonly checked: boolean,
+    private readonly statePos: number
+  ) {
+    super()
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const input = createEl('input', { type: 'checkbox', cls: 'cm-cf-checkbox' })
+    input.checked = this.checked
+    // mousedown would move the caret onto the line and reveal the raw markers
+    // mid-click; the click itself flips the state char in the source.
+    input.addEventListener('mousedown', (e) => e.preventDefault())
+    input.addEventListener('click', (e) => {
+      e.preventDefault()
+      view.dispatch({
+        changes: { from: this.statePos, to: this.statePos + 1, insert: this.checked ? ' ' : 'x' }
+      })
+    })
+    return input
+  }
+
+  eq(other: CheckWidget): boolean {
+    return other.checked === this.checked && other.statePos === this.statePos
+  }
+
+  ignoreEvent(): boolean {
+    return true
+  }
+}
 
 function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = []
@@ -58,16 +107,56 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
     let pos = from
     while (pos <= to) {
       const line = doc.lineAt(pos)
-      if (!fenced[line.number - 1]) {
-        for (const mark of computeInlineMarks(line.text)) {
-          const f = line.from + mark.from
-          const t = line.from + mark.to
-          ranges.push(inlineDeco[mark.cls].range(f, t))
-          const revealed = sel.from <= t && sel.to >= f
-          if (!revealed) {
-            for (const [ms, me] of mark.markers) {
-              ranges.push(hideMarker.range(line.from + ms, line.from + me))
+      if (fenced[line.number - 1]) {
+        ranges.push(fenceLine.range(line.from))
+        pos = line.to + 1
+        continue
+      }
+      const touched = sel.from <= line.to && sel.to >= line.from
+      const lm = classifyLine(line.text)
+      if (lm) {
+        switch (lm.kind) {
+          case 'heading':
+            ranges.push(headingLine[lm.level - 1].range(line.from))
+            if (!touched) ranges.push(hideMarker.range(line.from, line.from + lm.markerLen))
+            break
+          case 'quote':
+            ranges.push(quoteLine.range(line.from))
+            if (!touched) ranges.push(hideMarker.range(line.from, line.from + lm.markerLen))
+            break
+          case 'task': {
+            if (lm.checked) ranges.push(taskDoneLine.range(line.from))
+            if (!touched) {
+              const f = line.from + lm.indent
+              ranges.push(
+                Decoration.replace({
+                  widget: new CheckWidget(lm.checked, line.from + lm.stateOffset)
+                }).range(f, f + lm.markerLen)
+              )
             }
+            break
+          }
+          case 'bullet':
+            if (!touched) {
+              const f = line.from + lm.indent
+              ranges.push(Decoration.replace({ widget: new BulletWidget() }).range(f, f + 1))
+            }
+            break
+          case 'ordered': {
+            const f = line.from + lm.indent
+            ranges.push(listNumMark.range(f, f + lm.markerLen))
+            break
+          }
+        }
+      }
+      for (const mark of computeInlineMarks(line.text)) {
+        const f = line.from + mark.from
+        const t = line.from + mark.to
+        ranges.push(inlineDeco[mark.cls].range(f, t))
+        const revealed = sel.from <= t && sel.to >= f
+        if (!revealed) {
+          for (const [ms, me] of mark.markers) {
+            ranges.push(hideMarker.range(line.from + ms, line.from + me))
           }
         }
       }
@@ -113,37 +202,12 @@ export function renderDescriptionEditor(
   const descToolbar = descSection.createDiv('pm-desc-toolbar')
   const descPreview = descSection.createDiv('pm-modal-desc-preview')
   const editorWrap = descSection.createDiv('pm-modal-description')
-  // Live preview while editing: the editor stays raw markdown (honest source,
-  // inline marks aside), the formatted result renders right below as you type.
-  const liveWrap = descSection.createDiv('pm-desc-live')
-  liveWrap.createDiv({ cls: 'pm-desc-live-label', text: 'Preview' })
-  const liveEl = liveWrap.createDiv('pm-desc-live-body')
 
   const hasContent = () => task.description.trim().length > 0
   const sourcePath = task.filePath || project.filePath || ''
 
   let descComp = new Component()
   descComp.load()
-
-  let liveComp = new Component()
-  liveComp.load()
-  let liveTimer: number | null = null
-  const renderLive = async () => {
-    if (!hasContent()) {
-      liveWrap.classList.add('pm-hidden')
-      return
-    }
-    liveWrap.classList.remove('pm-hidden')
-    liveComp.unload()
-    liveComp = new Component()
-    liveComp.load()
-    liveEl.empty()
-    await MarkdownRenderer.render(app, task.description, liveEl, sourcePath, liveComp)
-  }
-  const scheduleLive = () => {
-    if (liveTimer !== null) window.clearTimeout(liveTimer)
-    liveTimer = window.setTimeout(() => void renderLive(), 250)
-  }
 
   // Note link suggest (inline [[ autocomplete)
   const noteSuggest = new NoteLinkSuggest(app)
@@ -172,7 +236,6 @@ export function renderDescriptionEditor(
     void renderPreview()
     editorWrap.classList.add('pm-hidden')
     descToolbar.classList.add('pm-hidden')
-    liveWrap.classList.add('pm-hidden')
     descPreview.classList.remove('pm-hidden')
   }
 
@@ -217,7 +280,6 @@ export function renderDescriptionEditor(
         if (!update.docChanged) return
         task.description = update.state.doc.toString()
         ctx.onChange?.()
-        scheduleLive()
         noteSuggest.onDocChanged(update.view)
       }),
       EditorView.domEventHandlers({
@@ -327,7 +389,6 @@ export function renderDescriptionEditor(
     descPreview.classList.add('pm-hidden')
     descToolbar.classList.remove('pm-hidden')
     editorWrap.classList.remove('pm-hidden')
-    void renderLive()
     // Preview-side edits (checkbox toggles) land on task.description only —
     // sync the doc before the editor becomes the source of truth again.
     if (view.state.doc.toString() !== task.description) {
@@ -420,18 +481,14 @@ export function renderDescriptionEditor(
   if (hasContent()) {
     editorWrap.classList.add('pm-hidden')
     descToolbar.classList.add('pm-hidden')
-    liveWrap.classList.add('pm-hidden')
     void renderPreview()
   } else {
     descPreview.classList.add('pm-hidden')
-    liveWrap.classList.add('pm-hidden')
   }
 
   return {
     destroy(): void {
-      if (liveTimer !== null) window.clearTimeout(liveTimer)
       descComp.unload()
-      liveComp.unload()
       noteSuggest.destroy()
       view.destroy()
     }

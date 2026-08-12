@@ -157,6 +157,49 @@ export function computeInlineMarks(line: string): InlineMark[] {
 }
 
 /**
+ * Line-level markdown classification for the editor's live preview: headings,
+ * quotes, task checkboxes, bullet and ordered list items. Offsets are within
+ * the line. The decoration layer hides/replaces markers only while the
+ * selection is off the line (Obsidian Live Preview behavior); fenced lines
+ * are the caller's job to skip via fenceMap.
+ */
+export type LineMark =
+  | { kind: 'heading'; level: number; markerLen: number }
+  | { kind: 'quote'; markerLen: number }
+  | { kind: 'task'; indent: number; markerLen: number; stateOffset: number; checked: boolean }
+  | { kind: 'bullet'; indent: number }
+  | { kind: 'ordered'; indent: number; markerLen: number }
+
+export function classifyLine(text: string): LineMark | null {
+  const heading = text.match(/^(#{1,6}) /)
+  if (heading) return { kind: 'heading', level: heading[1].length, markerLen: heading[1].length + 1 }
+
+  const quote = text.match(/^(>\s?)/)
+  if (quote) return { kind: 'quote', markerLen: quote[1].length }
+
+  // Task before bullet: "- [x] " would otherwise match the bullet rule.
+  const task = text.match(/^(\s*)([-*+]) \[( |x|X)\](?= |$)/)
+  if (task) {
+    const indent = task[1].length
+    return {
+      kind: 'task',
+      indent,
+      markerLen: 5, // "- [x]"
+      stateOffset: indent + 3, // past "- ["
+      checked: task[3] !== ' '
+    }
+  }
+
+  const bullet = text.match(/^(\s*)([-*+]) /)
+  if (bullet) return { kind: 'bullet', indent: bullet[1].length }
+
+  const ordered = text.match(/^(\s*)(\d{1,9}[.)]) /)
+  if (ordered) return { kind: 'ordered', indent: ordered[1].length, markerLen: ordered[2].length }
+
+  return null
+}
+
+/**
  * Per-line "skip inline parsing" map for a whole document: true for fenced
  * code block delimiters and every line inside a fence.
  * ponytail: closing fence only matches by char, not run length — nested
