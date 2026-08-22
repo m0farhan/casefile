@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.13.1] - 2026-08-22
+
+### Fixed
+
+- Reports fill the window instead of stopping at a 720px column; the weekly
+  chart scales up with the page (capped so it stays readable).
+- The lifecycle section explains itself when empty: durations are measured
+  from the detected time, so a case with responded/resolved but no detected
+  time no longer produces a bare "no data" that reads as a broken report.
+
 ## [2.13.0] - 2026-08-22
 
 ### Added

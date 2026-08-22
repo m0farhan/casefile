@@ -428,11 +428,10 @@ button.pm-comment-add:hover {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 720px;
 }
 .pm-report-svg {
-  width: var(--report-w, 100%);
-  max-width: 100%;
+  width: 100%;
+  max-width: 720px;
 }
 .pm-report-bar--opened {
   fill: var(--gs-blue);

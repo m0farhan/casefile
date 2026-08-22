@@ -72,7 +72,6 @@ export class ReportsView implements SubView {
     const labelH = 30
     const w = buckets.length * groupW + 8
     const svg = svgEl('svg', { viewBox: `0 0 ${w} ${h + labelH}`, class: 'pm-report-svg' })
-    svg.setCssProps({ '--report-w': `${w}px` })
     buckets.forEach((b, i) => {
       const x = 4 + i * groupW
       const openedH = Math.round((b.opened / max) * (h - 16))
@@ -196,7 +195,12 @@ export class ReportsView implements SubView {
     const s = this.section(root, 'Time to respond / contain / resolve')
     const { overall, bySeverity } = lifecycleDurations(incidents)
     if (!overall.respond && !overall.contain && !overall.resolve) {
-      s.createDiv({ cls: 'pm-report-empty', text: 'No lifecycle data yet.' })
+      // Durations anchor on the detected timestamp — say so, or a case with
+      // responded/resolved set but no detected time reads as a broken report.
+      s.createDiv({
+        cls: 'pm-report-empty',
+        text: 'No measurable durations yet — these are measured from the detected time, so set it (alongside responded / contained / resolved) on an incident.'
+      })
       return
     }
     const cfg = this.plugin.store.configFor(this.project)
