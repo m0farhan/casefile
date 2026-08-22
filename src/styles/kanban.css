@@ -52,16 +52,23 @@
   justify-content: space-between;
   padding: 10px 12px 8px;
 }
+/* Flat Jira-style column header: quiet uppercase label; the status color
+   survives only as the small dot. */
 .pm-kanban-col-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 13px;
+  gap: 6px;
+  font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gs-ink-subtle);
 }
-.pm-kanban-col-badge-icon {
-  display: inline-flex;
-  --icon-size: 14px;
+.pm-kanban-col-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .pm-kanban-col-header-right {
   display: flex;
@@ -117,7 +124,6 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  min-height: 112px;
   background: var(--gs-surface-2);
   border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-m);
@@ -131,6 +137,10 @@
 .pm-kanban-card:hover {
   background: var(--gs-surface-3);
   border-color: var(--gs-hairline-strong);
+}
+.pm-kanban-card:focus-visible {
+  outline: none;
+  box-shadow: var(--gs-focus-ring);
 }
 .pm-kanban-card--dragging {
   border-color: var(--gs-accent);
@@ -206,6 +216,13 @@
   gap: 8px;
   margin-top: auto;
   padding-top: 2px;
+}
+.pm-kanban-card-footer-left,
+.pm-kanban-card-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .pm-kanban-card-subtasks {
@@ -355,8 +372,8 @@
   filter: saturate(0.5);
 }
 
-/* Done: settled work reads as crossed off. */
-.pm-kanban-col--complete .pm-kanban-card-title {
+/* Done: settled work reads as crossed off — the key, not the title (Jira). */
+.pm-kanban-col--complete .pm-kanban-card .pm-key-chip {
   text-decoration: line-through;
   text-decoration-color: var(--gs-ink-subtle);
 }
@@ -410,6 +427,54 @@
   opacity: 1;
 }
 .pm-kanban-card-body .pm-kanban-progress:focus-visible {
+  box-shadow: var(--gs-focus-ring);
+}
+
+/* Inline '+ Create' at the column foot (Jira rapid entry): quiet button that
+   swaps for a borderless input. */
+.pm-kanban-col-create {
+  flex-shrink: 0;
+  padding: 4px 10px 8px;
+}
+.pm-kanban-create-btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gs-ink-subtle);
+  cursor: pointer;
+  transition:
+    background 150ms ease-out,
+    color 150ms ease-out;
+}
+.pm-kanban-create-btn:hover {
+  background: var(--gs-surface-2);
+  color: var(--gs-ink-muted);
+}
+.pm-kanban-create-icon {
+  display: inline-flex;
+  --icon-size: 13px;
+}
+.pm-kanban-create-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  background: var(--gs-surface-2);
+  border: none;
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  color: var(--gs-ink);
+}
+.pm-kanban-create-input:focus {
+  outline: none;
   box-shadow: var(--gs-focus-ring);
 }
 

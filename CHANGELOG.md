@@ -42,6 +42,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.12.0] - 2026-08-22
+
+### Changed (Jira parity wave — from a full four-lens audit)
+
+- **Boards look like Jira.** Column headers are quiet uppercase labels with a
+  small status dot and count — the colored bars and borders are gone; color
+  lives on cards and lozenges now. Cards restructured: title first, then a
+  footer with the issue-type icon, a plain monospace key, and the severity
+  badge; the M/Sub/R letter chips are gone and cards hug their content. In a
+  Done column the key is struck through, not the title.
+- **Issue-type icons are solid colored rounded squares** (Jira's idiom),
+  everywhere at once.
+- **Status is one click from anywhere**: a clickable status lozenge in the
+  issue header (dialog and side panel), a "Move to status" submenu in the
+  right-click menu, and a clickable status lozenge in the backlog — all
+  through the same verdict guard as the board drop.
+- **Inline "+ Create" at the bottom of every column**: type a title, Enter
+  creates the card in that column's status and reopens the input for the
+  next one. Escape cancels.
+- **Table sorts by time to SLA breach** (service-desk queue order): closest
+  to breach first, no-clock after, resolved last. Sortable headers gained
+  keyboard access and correct sort indicators.
+
+### Fixed
+
+- Creating a task with an empty title is blocked with a visible message —
+  no more accidental "New Task" files.
+- Changing any property no longer snaps the issue view's scroll to the top,
+  and a half-typed comment now survives property changes.
+- Board cards are keyboard-focusable (Enter/Space opens).
+
 ## [2.11.1] - 2026-08-22
 
 ### Fixed

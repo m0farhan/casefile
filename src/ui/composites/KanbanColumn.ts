@@ -1,6 +1,6 @@
 import { setIcon } from 'obsidian'
 import type { IssueTypeConfig, Task } from '../../types'
-import { formatBadgeText, isIconName, safeAsync } from '../../utils'
+import { safeAsync } from '../../utils'
 import { IconButton } from '../primitives/IconButton'
 import { KanbanCard } from './KanbanCard'
 
@@ -48,6 +48,8 @@ export interface KanbanColumnProps {
   /** Present = cards render an adjustable progress slider. */
   onCardProgressChange?: (task: Task, value: number) => void
   onDrop: (taskId: string, newStatus: string, before: DropNeighbor | null) => Promise<void>
+  /** Present = the column foot shows the inline '+ Create' affordance (absent on Archive). */
+  onInlineCreate?: (title: string) => Promise<void>
 }
 
 export class KanbanColumn {
@@ -66,20 +68,13 @@ export class KanbanColumn {
     }
 
     const header = col.createDiv('pm-kanban-col-header')
-    header.style.setProperty('--col-color', props.status.color)
 
-    const topBar = header.createDiv('pm-kanban-col-topbar')
-    topBar.setCssStyles({ background: props.status.color })
-
+    // Flat Jira-style header: quiet uppercase label, the status color reduced
+    // to a small dot. The collapsed strip keeps its colored bar + label.
     const titleRow = header.createDiv('pm-kanban-col-title-row')
     const badge = titleRow.createSpan({ cls: 'pm-kanban-col-badge' })
-    if (props.status.icon && isIconName(props.status.icon)) {
-      setIcon(badge.createSpan({ cls: 'pm-kanban-col-badge-icon' }), props.status.icon)
-      badge.appendText(props.status.label)
-    } else {
-      badge.setText(formatBadgeText(props.status.icon, props.status.label))
-    }
-    badge.style.color = props.status.color
+    badge.createSpan({ cls: 'pm-kanban-col-dot' }).setCssStyles({ background: props.status.color })
+    badge.appendText(props.status.label)
 
     const headerRight = titleRow.createDiv('pm-kanban-col-header-right')
     renderCount(headerRight, props.cards.length, props.status.wipLimit)
@@ -153,6 +148,47 @@ export class KanbanColumn {
         await props.onDrop(taskId, props.status.id, getDropNeighbor(cardsEl))
       })
     )
+
+    if (props.onInlineCreate) this.renderInlineCreate(col, props.onInlineCreate)
+  }
+
+  /** Quiet '+ Create' at the column foot; click swaps it for a borderless input (Jira rapid entry). */
+  private renderInlineCreate(col: HTMLElement, onCreate: (title: string) => Promise<void>): void {
+    const wrap = col.createDiv('pm-kanban-col-create')
+    const showButton = (): void => {
+      wrap.empty()
+      const btn = wrap.createEl('button', { cls: 'pm-kanban-create-btn' })
+      setIcon(btn.createSpan({ cls: 'pm-kanban-create-icon' }), 'plus')
+      btn.appendText('Create')
+      btn.addEventListener('click', () => showInput())
+    }
+    const showInput = (): void => {
+      wrap.empty()
+      const input = wrap.createEl('input', {
+        type: 'text',
+        cls: 'pm-kanban-create-input',
+        attr: { placeholder: 'What needs doing?', 'aria-label': 'New task title' }
+      })
+      input.addEventListener(
+        'keydown',
+        safeAsync(async (e: KeyboardEvent) => {
+          if (e.key === 'Escape') {
+            showButton()
+          } else if (e.key === 'Enter') {
+            const title = input.value.trim()
+            if (!title) return
+            // The create refreshes the board; KanbanView reopens a fresh input
+            // in this column afterwards, keeping the rapid-entry loop going.
+            await onCreate(title)
+          }
+        })
+      )
+      input.addEventListener('blur', () => {
+        if (!input.value.trim()) showButton()
+      })
+      input.focus()
+    }
+    showButton()
   }
 
   /** Narrow vertical strip: rotated label + count; clicking anywhere expands. */

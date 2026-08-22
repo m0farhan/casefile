@@ -11,7 +11,7 @@ import { renderTaskRow, updateSelectedRow, updateSelectAllCheckbox } from './Tab
 // 'severity' replaced 'priority' when priority was retired from the UI. A saved view
 // persisted with sortKey 'priority' falls through compareTask's default case (stable,
 // unsorted) — graceful, never a crash.
-type SortKey = 'title' | 'status' | 'severity' | 'due' | 'assignees' | 'progress'
+type SortKey = 'title' | 'status' | 'severity' | 'due' | 'assignees' | 'progress' | 'sla'
 type SortDir = 'asc' | 'desc'
 
 export type { SortKey, SortDir }
@@ -99,33 +99,68 @@ export function renderTable(ctx: TableContext): void {
     { key: 'progress', label: 'Progress', width: '120px' },
     { key: null, label: 'Time', width: '90px' }
   ]
+  const applySort = (key: SortKey) => {
+    if (ctx.state.sortKey === key) {
+      ctx.state.sortDir = ctx.state.sortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      ctx.state.sortKey = key
+      ctx.state.sortDir = 'asc'
+    }
+    syncHeaderSort()
+    refreshTableBody(ctx)
+  }
+  const sortControls: { el: HTMLElement; th: HTMLElement; key: SortKey }[] = []
+  const wireSortControl = (el: HTMLElement, th: HTMLElement, key: SortKey, label: string) => {
+    el.addClass('pm-table-th-sortable')
+    el.setAttribute('role', 'button')
+    el.setAttribute('tabindex', '0')
+    el.setAttribute('aria-label', `Sort by ${label}`)
+    el.addEventListener('click', (e) => {
+      e.stopPropagation()
+      applySort(key)
+    })
+    el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
+      e.stopPropagation()
+      applySort(key)
+    })
+    sortControls.push({ el, th, key })
+  }
+  /** Repaint aria-sort + the arrow indicator to match state; sorting only refreshes the body. */
+  const syncHeaderSort = () => {
+    for (const c of sortControls) {
+      c.el.querySelector('.pm-sort-indicator')?.remove()
+      c.th.setAttribute('aria-sort', 'none')
+    }
+    const active = sortControls.find((c) => c.key === ctx.state.sortKey)
+    if (!active) return
+    active.th.setAttribute('aria-sort', ctx.state.sortDir === 'asc' ? 'ascending' : 'descending')
+    active.el.createSpan({
+      text: ctx.state.sortDir === 'asc' ? ' \u2191' : ' \u2193',
+      cls: 'pm-sort-indicator'
+    })
+  }
+
   for (const col of cols) {
     const th = hrow.createEl('th')
     if (col.width) th.setCssStyles({ width: col.width })
-    if (col.key) {
-      th.addClass('pm-table-th-sortable')
-      th.setAttribute('role', 'button')
-      th.setAttribute('aria-label', `Sort by ${col.label}`)
+    if (col.key === 'severity') {
+      // The severity cell also carries the SLA countdown chip, so this header
+      // hosts two sort targets: severity rank and SLA time-to-breach.
+      // "Breach", not "SLA": UI literals are sentence case (lint) and the
+      // settings screen already avoids the acronym.
+      wireSortControl(th.createSpan({ text: col.label }), th, col.key, col.label)
+      th.appendText(' / ')
+      wireSortControl(th.createSpan({ text: 'Breach' }), th, 'sla', 'time to breach')
+    } else if (col.key) {
       th.createSpan({ text: col.label })
-      if (ctx.state.sortKey === col.key) {
-        th.createSpan({
-          text: ctx.state.sortDir === 'asc' ? ' \u2191' : ' \u2193',
-          cls: 'pm-sort-indicator'
-        })
-      }
-      th.addEventListener('click', () => {
-        if (ctx.state.sortKey === col.key) {
-          ctx.state.sortDir = ctx.state.sortDir === 'asc' ? 'desc' : 'asc'
-        } else {
-          ctx.state.sortKey = col.key as SortKey
-          ctx.state.sortDir = 'asc'
-        }
-        refreshTableBody(ctx)
-      })
+      wireSortControl(th, th, col.key, col.label)
     } else {
       th.setText(col.label)
     }
   }
+  syncHeaderSort()
 
   for (const cf of ctx.project.customFields) {
     const th = hrow.createEl('th', { text: cf.name })
@@ -180,8 +215,12 @@ function fillTableBody(ctx: TableContext): void {
     }
     list.push(f)
   }
+  // One timestamp per sort pass so the comparator is consistent across rows.
+  const now = Date.now()
   for (const list of childrenByParent.values()) {
-    list.sort((a, b) => compareTask(a.task, b.task, ctx.state, ctx.statuses, cfg.severities))
+    list.sort((a, b) =>
+      compareTask(a.task, b.task, ctx.state, ctx.statuses, cfg.severities, ctx.plugin.settings.slaPolicies, now)
+    )
   }
 
   const sorted: FlatTask[] = []

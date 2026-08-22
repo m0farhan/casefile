@@ -1,11 +1,12 @@
 import { Menu, Notice } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task, TaskStatus, FilterState, ResolvedProjectConfig } from '../types'
+import { makeTask } from '../types'
 import { flattenTasks, totalLoggedHours } from '../store/TaskTreeOps'
 import { findEpicAncestor, findParentId } from '../store/TaskIndex'
 import { matchesFilter } from '../store/TaskFilter'
 import type { QueryCtx } from '../store/QueryParser'
-import { dueUrgency, isTerminalStatus, safeAsync } from '../utils'
+import { dueUrgency, getDefaultPriorityId, isTerminalStatus, safeAsync } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
 import { buildTaskContextMenu } from '../ui/TaskContextMenu'
 import { KanbanColumn, type DropNeighbor, type KanbanCardData } from '../ui/composites/KanbanColumn'
@@ -54,6 +55,11 @@ export class KanbanView implements SubView {
     // keying — the rebuilt DOM enumerates in the same order) and restore after.
     const cardScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-cards')].map((el) => el.scrollTop)
     const rowScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-board')].map((el) => el.scrollLeft)
+    // An open inline-create input must survive the rebuild (Enter-create
+    // refreshes the board mid-loop). Positional keying, same as the scrolls.
+    const openCreateIdx = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-col-create')].findIndex(
+      (el) => el.querySelector('input') !== null
+    )
     // Card ids present before the rebuild: anything absent from this set is
     // genuinely new and gets the enter fade (inert under reduced motion via
     // the CSS-side guards). First render is covered by the column stagger.
@@ -123,7 +129,8 @@ export class KanbanView implements SubView {
             // the destination is exactly the gs-landed no-jump contract.
             if (!this.dropInFlight) this.renderBoard()
           },
-          onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before)
+          onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before),
+          onInlineCreate: (title) => this.handleInlineCreate(status.id, title)
         })
       }
     }
@@ -141,7 +148,22 @@ export class KanbanView implements SubView {
     rowScrolls.forEach((left, i) => {
       if (rows[i]) rows[i].scrollLeft = left
     })
+    if (openCreateIdx >= 0) {
+      const wraps = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-col-create')]
+      wraps[openCreateIdx]?.querySelector<HTMLElement>('button')?.click()
+    }
     if (beforeIds.size) markEnter(this.container, '.pm-kanban-card[data-task-id]', beforeIds)
+  }
+
+  /** Inline '+ Create' at a column foot: same store path as the new-task modal (insertTask). */
+  private async handleInlineCreate(status: TaskStatus, title: string): Promise<void> {
+    const task = makeTask({
+      title,
+      status,
+      priority: getDefaultPriorityId(this.config.priorities)
+    })
+    await this.plugin.store.insertTask(this.project, task)
+    await this.onRefresh()
   }
 
   private renderLanesBar(groupBy: KanbanLaneGroup): void {

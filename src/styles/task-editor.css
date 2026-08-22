@@ -460,6 +460,13 @@ input.pm-pop-field:focus {
 .pm-te-copyable:hover {
   color: var(--text-muted);
 }
+/* Header status lozenge: the shared status Chip sized up for the issue header
+   (rendered by TaskModal's breadcrumb row and the detail panel's header). */
+.pm-chip.pm-status-badge--lg {
+  padding: 4px 12px;
+  font-size: var(--font-ui-small);
+  flex-shrink: 0;
+}
 
 .pm-te-body {
   flex: 1;

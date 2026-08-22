@@ -11,7 +11,6 @@ import {
 import { renderSeverityBadge, renderSlaChip } from '../../soc/slaTicker'
 import { formatDateShort } from '../../utils'
 import { AvatarStack } from '../primitives/AvatarStack'
-import { Chip } from '../primitives/Chip'
 import { ProgressBar } from '../primitives/ProgressBar'
 import { renderDueChip } from './dueChip'
 import { renderIssueTypeIcon, renderKeyChip } from './issueMeta'
@@ -83,37 +82,10 @@ export class KanbanCard {
       if (props.parentKey && props.parentTitle) setTooltip(bc, props.parentTitle)
     }
 
-    const titleRow = body.createDiv('pm-kanban-card-title-row')
-    renderIssueTypeIcon(
-      titleRow,
-      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
-    )
-    if (task.key) renderKeyChip(titleRow, task.key)
-    titleRow.createSpan({ text: task.title, cls: 'pm-kanban-card-title' })
-    if (task.type === 'milestone') {
-      new Chip(titleRow)
-        .setLabel('M')
-        .setVariant('solid')
-        .setSize('sm')
-        .setColor('var(--color-purple)')
-        .setTooltip('Milestone')
-    }
-    if (task.type === 'subtask') {
-      new Chip(titleRow)
-        .setLabel('Sub')
-        .setVariant('solid')
-        .setSize('sm')
-        .setColor('var(--color-green)')
-        .setTooltip('Subtask')
-    }
-    if (task.recurrence) {
-      new Chip(titleRow)
-        .setLabel('R')
-        .setVariant('solid')
-        .setSize('sm')
-        .setColor('var(--color-blue)')
-        .setTooltip('Recurring')
-    }
+    // Jira card anatomy: title first; type icon, key and severity live in the
+    // footer. The M/Sub/R letter chips are gone — the type icon and nesting
+    // already encode them.
+    body.createDiv({ text: task.title, cls: 'pm-kanban-card-title' })
 
     if (props.epic) {
       const label = props.epic.label.length > 18 ? props.epic.label.slice(0, 18) + '…' : props.epic.label
@@ -128,12 +100,8 @@ export class KanbanCard {
     }
 
     const soc = body.createDiv('pm-kanban-card-soc')
-    // Severity shows on any task type; the SLA chip stays incident-only
-    // (slaState also gates on issueType, so this is belt and braces).
-    renderSeverityBadge(
-      soc,
-      (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
-    )
+    // SLA chip stays incident-only (slaState also gates on issueType, so this
+    // is belt and braces). Severity renders in the footer.
     if (task.issueType === 'incident') {
       renderSlaChip(soc, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
     }
@@ -195,10 +163,22 @@ export class KanbanCard {
     }
 
     const footer = body.createDiv('pm-kanban-card-footer')
-    new AvatarStack(footer).setNames(task.assignees).setMax(3).setSize('sm')
+    const footLeft = footer.createDiv('pm-kanban-card-footer-left')
+    renderIssueTypeIcon(
+      footLeft,
+      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
+    )
+    if (task.key) renderKeyChip(footLeft, task.key, { plain: true })
+    renderSeverityBadge(
+      footLeft,
+      (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
+    )
+
+    const footRight = footer.createDiv('pm-kanban-card-footer-right')
+    new AvatarStack(footRight).setNames(task.assignees).setMax(3).setSize('sm')
 
     if (task.due) {
-      renderDueChip(footer, formatDateShort(task.due), props.overdue ? 'overdue' : 'normal', 'sm')
+      renderDueChip(footRight, formatDateShort(task.due), props.overdue ? 'overdue' : 'normal', 'sm')
     }
 
     card.addEventListener('dragstart', (e) => {
@@ -215,6 +195,17 @@ export class KanbanCard {
     })
 
     card.addEventListener('click', () => props.onClick())
+    // Keyboard access: the card is a focusable button (same pattern as the
+    // collapsed-column strip). Target check keeps the progress slider's keys.
+    card.setAttribute('role', 'button')
+    card.setAttribute('tabindex', '0')
+    card.addEventListener('keydown', (e) => {
+      if (e.target !== card) return
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        props.onClick()
+      }
+    })
     card.addEventListener('contextmenu', (e) => {
       e.preventDefault()
       props.onContextMenu(e)

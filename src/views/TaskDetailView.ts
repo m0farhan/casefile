@@ -13,6 +13,7 @@ import { findTaskById } from '../store/TaskIndex'
 import { openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
+import { renderStatusBadge } from '../ui/StatusBadge'
 import { CollapseToggle } from '../ui/primitives/CollapseToggle'
 
 export const CASEFILE_TASK_DETAIL_VIEW_TYPE = 'casefile-task-detail'
@@ -22,22 +23,27 @@ export const CASEFILE_TASK_DETAIL_VIEW_TYPE = 'casefile-task-detail'
  * changes plus the Notifier's persisted SLA-breach entries). Collapsed by
  * default; shared by the detail panel and the task modal.
  */
-export function renderActivitySection(container: HTMLElement, task: Task): void {
+export function renderActivitySection(
+  container: HTMLElement,
+  task: Task,
+  // Owner-held collapse flag (shownExtras precedent): rerenders rebuild this
+  // section, so the expanded state must live on the caller to survive them.
+  state: { collapsed: boolean } = { collapsed: true }
+): void {
   const section = container.createDiv('pm-modal-section pm-activity-section')
   const header = section.createDiv('pm-modal-section-header pm-activity-header')
-  let collapsed = true
   // The toggle's own click bubbles to the header handler below — its onToggle
   // stays a no-op so a triangle click doesn't toggle twice.
-  const toggle = new CollapseToggle(header, { collapsed, onToggle: () => {} })
-  toggle.el.setAttr('aria-label', 'Expand activity')
+  const toggle = new CollapseToggle(header, { collapsed: state.collapsed, onToggle: () => {} })
+  toggle.el.setAttr('aria-label', state.collapsed ? 'Expand activity' : 'Collapse activity')
   header.createEl('h4', { text: `Activity (${task.activity.length})`, cls: 'pm-modal-section-title' })
   const list = section.createDiv('pm-activity-list')
-  list.hidden = collapsed
+  list.hidden = state.collapsed
   header.addEventListener('click', () => {
-    collapsed = !collapsed
-    toggle.el.toggleClass('is-collapsed', collapsed)
-    toggle.el.setAttr('aria-label', collapsed ? 'Expand activity' : 'Collapse activity')
-    list.hidden = collapsed
+    state.collapsed = !state.collapsed
+    toggle.el.toggleClass('is-collapsed', state.collapsed)
+    toggle.el.setAttr('aria-label', state.collapsed ? 'Expand activity' : 'Collapse activity')
+    list.hidden = state.collapsed
   })
 
   if (!task.activity.length) {
@@ -81,6 +87,11 @@ export class TaskDetailView extends ItemView {
   private saveTimer: number | null = null
   private dirty = false
   private shownExtras = new Set<string>()
+  /** Half-typed comment, hoisted across rerenders (the composer's DOM dies on every render). */
+  private commentDraft = ''
+  private commentHadFocus = false
+  /** Activity collapse flag, owner-held so rerenders don't snap it shut (shownExtras precedent). */
+  private activityState = { collapsed: true }
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -140,6 +151,10 @@ export class TaskDetailView extends ItemView {
     this.persistedTitle = this.task.title
     this.lastStatus = this.task.status
     this.dirty = false
+    // Per-task UI state: a draft or expanded timeline for task A must not leak into task B.
+    this.commentDraft = ''
+    this.commentHadFocus = false
+    this.activityState = { collapsed: true }
   }
 
   /**
@@ -227,6 +242,13 @@ export class TaskDetailView extends ItemView {
 
   private render(): void {
     const { contentEl } = this
+    // Snapshot before empty() so a property-change rerender doesn't jump the
+    // panel or drop a half-typed comment (KanbanView.renderBoard precedent).
+    const scrollTop = contentEl.scrollTop
+    if (this.commentsSection) {
+      this.commentDraft = this.commentsSection.getDraft()
+      this.commentHadFocus = this.commentsSection.hasFocus()
+    }
     this.descEditor?.destroy()
     this.descEditor = null
     contentEl.empty()
@@ -259,6 +281,13 @@ export class TaskDetailView extends ItemView {
       // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).
       renderSlaChip(header, task, this.plugin.settings.slaPolicies)
     }
+    // Status lozenge: same clone-mutation + verdict-guard path as the grid's
+    // status select (onStatusChanged guards terminal moves and schedules the save).
+    renderStatusBadge(header, task, config.statuses, (id) => {
+      if (id === task.status) return // re-picking the current status must not re-run the guard
+      task.status = id
+      void this.onStatusChanged(task)
+    }).addClass('pm-status-badge--lg')
     header.createDiv('pm-td-header-spacer')
     if (task.filePath) {
       const filePath = task.filePath
@@ -340,9 +369,10 @@ export class TaskDetailView extends ItemView {
       onChange: () => {
         this.scheduleSave()
         this.render()
-      }
+      },
+      initialDraft: this.commentDraft
     })
-    renderActivitySection(body, task)
+    renderActivitySection(body, task, this.activityState)
     renderSubtasksPanel(body, task, this.plugin, config.statuses, {
       onOpen: (sub) => {
         const live = findTaskById(project, sub.id)
@@ -364,5 +394,9 @@ export class TaskDetailView extends ItemView {
     // description editor via its onChange. Event delegation keeps this one
     // listener instead of N hooks.
     body.addEventListener('input', () => this.scheduleSave())
+
+    // Restore the pre-rebuild snapshot (scroll always; focus only where it was).
+    contentEl.scrollTop = scrollTop
+    if (this.commentHadFocus) this.commentsSection?.focusDraft()
   }
 }

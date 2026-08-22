@@ -3,6 +3,8 @@ import type PMPlugin from '../main'
 import type { Task, Project } from '../types'
 import { BUCKETS } from '../types'
 import { safeAsync } from '../utils'
+import { guardVerdictOnClose } from '../soc/verdictGuard'
+import { renderStatusDot } from './StatusBadge'
 import { openTaskModal, confirmDialog, confirmDuplicateSubtasks } from './ModalFactory'
 
 export interface TaskMenuContext {
@@ -58,6 +60,35 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
         })
       )
   )
+  menu.addItem((item) => {
+    item.setTitle('Move to status').setIcon('circle-dot')
+    const sub = (item as unknown as { setSubmenu: () => Menu }).setSubmenu()
+    const statuses = ctx.plugin.store.configFor(ctx.project).statuses
+    for (const s of statuses) {
+      sub.addItem((si) =>
+        si
+          .setTitle(
+            createFragment((f) => {
+              const title = f.createSpan({ cls: 'pm-menu-status-title' })
+              renderStatusDot(title, s.id, statuses, 'pm-menu-status-dot')
+              title.createSpan({ text: s.label })
+            })
+          )
+          .setChecked(task.status === s.id)
+          .onClick(
+            safeAsync(async () => {
+              if (task.status === s.id) return
+              // Same guarded path as the board drop / table status cell:
+              // closing an unverdicted incident prompts for a verdict; null = cancel.
+              const extra = await guardVerdictOnClose(ctx.plugin, ctx.project, task, s.id)
+              if (extra === null) return
+              await ctx.plugin.store.updateTask(ctx.project, task.id, { status: s.id, ...extra })
+              await ctx.onRefresh()
+            })
+          )
+      )
+    }
+  })
   menu.addItem((item) => {
     item.setTitle('Move to bucket').setIcon('inbox')
     const sub = (item as unknown as { setSubmenu: () => Menu }).setSubmenu()

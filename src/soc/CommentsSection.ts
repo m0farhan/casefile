@@ -4,6 +4,11 @@ import type { Project, Task } from '../types'
 
 export interface CommentsSectionHandle {
   destroy(): void
+  /** Half-typed composer text — callers snapshot it before a rerender and pass it back via initialDraft. */
+  getDraft(): string
+  /** True when the composer input held focus (callers restore focus across rerenders). */
+  hasFocus(): boolean
+  focusDraft(): void
 }
 
 /**
@@ -22,7 +27,7 @@ export function renderCommentsSection(
   plugin: PMPlugin,
   project: Project,
   task: Task,
-  opts: { onChange: () => void }
+  opts: { onChange: () => void; initialDraft?: string }
 ): CommentsSectionHandle {
   const section = container.createDiv('pm-modal-section pm-comments-section')
   const header = section.createDiv('pm-modal-section-header')
@@ -48,6 +53,7 @@ export function renderCommentsSection(
   const input = composer.createEl('textarea', { cls: 'pm-comment-input' })
   input.placeholder = 'Add to the investigation journal…'
   input.rows = 2
+  if (opts.initialDraft) input.value = opts.initialDraft
   const addBtn = composer.createEl('button', { cls: 'pm-comment-add' })
   setIcon(addBtn.createSpan(), 'corner-down-left')
   addBtn.createSpan({ text: 'Add' })
@@ -73,6 +79,17 @@ export function renderCommentsSection(
   return {
     destroy(): void {
       comp.unload()
+    },
+    getDraft(): string {
+      return input.value
+    },
+    hasFocus(): boolean {
+      return input.ownerDocument.activeElement === input
+    },
+    focusDraft(): void {
+      input.focus()
+      // Caret at the end — the natural resume point for a half-typed draft.
+      input.setSelectionRange(input.value.length, input.value.length)
     }
   }
 }

@@ -7,6 +7,7 @@ import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { confirmDialog, openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { findTaskById } from '../store/TaskIndex'
 import { renderKeyChip } from '../ui/composites/issueMeta'
+import { renderStatusBadge } from '../ui/StatusBadge'
 import { renderTaskFormFields } from './TaskFormFields'
 import { renderLifecyclePanel } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
@@ -30,6 +31,11 @@ export class TaskModal extends Modal {
   private descEditor: DescriptionEditorHandle | null = null
   private commentsSection: CommentsSectionHandle | null = null
   private shownExtras = new Set<string>()
+  /** Half-typed comment, hoisted across rerenders (the composer's DOM dies on every render). */
+  private commentDraft = ''
+  private commentHadFocus = false
+  /** Activity collapse flag, owner-held so rerenders don't snap it shut (shownExtras precedent). */
+  private activityState = { collapsed: true }
   private saveKeyHandler: ((e: KeyboardEvent) => void) | null = null
   /** Title autofocus fires on the first render only; rerenders must not steal focus. */
   private focusedTitleOnce = false
@@ -56,6 +62,9 @@ export class TaskModal extends Modal {
     } else {
       const config = plugin.store.configFor(project)
       this.task = makeTask({
+        // Empty over the 'New Task' default: doSave rejects empty titles, so a
+        // task can never be created without the analyst naming it.
+        title: '',
         status: getDefaultStatusId(config.statuses),
         // priority is UI-retired but still written to frontmatter (round-trip default)
         priority: getDefaultPriorityId(config.priorities),
@@ -199,6 +208,13 @@ export class TaskModal extends Modal {
 
   private render(): void {
     const { contentEl } = this
+    // Snapshot before empty() so a property-change rerender doesn't jump the
+    // body or drop a half-typed comment (KanbanView.renderBoard precedent).
+    const prevScroll = contentEl.querySelector('.pm-te-body')?.scrollTop ?? 0
+    if (this.commentsSection) {
+      this.commentDraft = this.commentsSection.getDraft()
+      this.commentHadFocus = this.commentsSection.hasFocus()
+    }
     contentEl.empty()
 
     // ── Header: breadcrumb · overflow · close ───────────────────────────────
@@ -239,6 +255,13 @@ export class TaskModal extends Modal {
       // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).
       renderSlaChip(crumb, this.task, this.plugin.settings.slaPolicies)
     }
+    // Status lozenge: mutates the clone like the grid's status select, so
+    // doSave's originalStatus comparison still runs the verdict guard.
+    renderStatusBadge(crumb, this.task, config.statuses, (id) => {
+      if (id === this.task.status) return
+      this.task.status = id
+      this.render()
+    }).addClass('pm-status-badge--lg')
 
     header.createDiv('pm-te-header-spacer')
 
@@ -353,9 +376,10 @@ export class TaskModal extends Modal {
     if (!this.isNew) {
       this.commentsSection?.destroy()
       this.commentsSection = renderCommentsSection(body, this.plugin, this.project, this.task, {
-        onChange: () => this.render()
+        onChange: () => this.render(),
+        initialDraft: this.commentDraft
       })
-      renderActivitySection(body, this.task)
+      renderActivitySection(body, this.task, this.activityState)
     }
 
     // ── Subtasks ────────────────────────────────────────────────────────────
@@ -415,8 +439,7 @@ export class TaskModal extends Modal {
       saving = true
       try {
         if (!this.task.title.trim()) {
-          titleInput.focus()
-          titleInput.classList.add('pm-input-error')
+          showTitleError('A title is required.')
           return
         }
         clearTitleError()
@@ -452,5 +475,9 @@ export class TaskModal extends Modal {
       }
     }
     this.modalEl.addEventListener('keydown', this.saveKeyHandler)
+
+    // Restore the pre-rebuild snapshot (scroll always; focus only where it was).
+    body.scrollTop = prevScroll
+    if (this.commentHadFocus) this.commentsSection?.focusDraft()
   }
 }

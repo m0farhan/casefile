@@ -7,6 +7,9 @@ import { flattenTasks } from '../store/TaskTreeOps'
 import { buildTaskContextMenu } from '../ui/TaskContextMenu'
 import { openTaskModal } from '../ui/ModalFactory'
 import { renderIssueTypeIcon, renderKeyChip } from '../ui/composites/issueMeta'
+import { renderStatusBadge } from '../ui/StatusBadge'
+import { guardVerdictOnClose } from '../soc/verdictGuard'
+import { safeAsync } from '../utils'
 import { relativeDue } from '../dates'
 import type { SubView } from './SubView'
 
@@ -68,9 +71,22 @@ export class BacklogView implements SubView {
         if (task.key) renderKeyChip(row, task.key)
         row.createSpan({ cls: 'pm-backlog-title', text: task.title })
 
-        const status = cfg.statuses.find((s) => s.id === task.status)
-        const statusChip = row.createSpan({ cls: 'pm-backlog-status', text: status?.label ?? task.status })
-        if (status?.color) statusChip.setCssProps({ '--pm-chip-color': status.color })
+        // Wrapper stops the click from bubbling into the row's open-modal handler.
+        const statusCell = row.createSpan({ cls: 'pm-backlog-status-cell' })
+        statusCell.addEventListener('click', (e) => e.stopPropagation())
+        renderStatusBadge(
+          statusCell,
+          task,
+          cfg.statuses,
+          safeAsync(async (newStatus) => {
+            // Same guarded path as the board drop: closing an unverdicted
+            // incident prompts for a verdict; null = cancel.
+            const extra = await guardVerdictOnClose(this.plugin, this.project, task, newStatus)
+            if (extra === null) return
+            await this.plugin.store.updateTask(this.project, task.id, { status: newStatus, ...extra })
+            await this.onRefresh()
+          })
+        )
 
         if (task.due) {
           const due = row.createSpan({ cls: 'pm-backlog-due' })
