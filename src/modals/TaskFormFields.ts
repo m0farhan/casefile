@@ -1,5 +1,5 @@
 import type PMPlugin from '../main'
-import type { IssueBucket, Project, Task, TaskType, Recurrence } from '../types'
+import type { IssueBucket, Project, Task, Recurrence } from '../types'
 import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { wouldCreateCycle } from '../store/Scheduler'
@@ -26,11 +26,12 @@ export interface TaskFormFieldsContext {
   shownExtras: Set<string>
 }
 
-const TYPE_OPTIONS: SelectItem[] = [
-  { id: 'task', label: 'Task', icon: 'square-check-big' },
-  { id: 'subtask', label: 'Subtask', icon: 'git-branch' },
-  { id: 'milestone', label: 'Milestone', icon: 'diamond' }
-]
+/* The structural kinds fold into the ONE type dropdown alongside the issue
+ * types (Jira has a single type control; showing "Type" and "Issue type" as
+ * two near-identical rows read as duplication). Sentinel ids so a custom
+ * issue type can never collide. */
+const MILESTONE_OPTION_ID = '__milestone__'
+const SUBTASK_OPTION_ID = '__subtask__'
 
 const REPEAT_OPTIONS: SelectItem[] = [
   { id: 'none', label: 'Does not repeat', icon: 'repeat' },
@@ -51,7 +52,8 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
   const { statuses, issueTypes, severities, verdicts } = plugin.store.configFor(project)
   const grid = container.createDiv('pm-prop-grid')
 
-  // Type
+  // Type — one merged control: the issue types plus the structural kinds.
+  // The file format is untouched; type and issueType still serialize apart.
   renderPropRow(
     grid,
     'Type',
@@ -59,15 +61,26 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       const cell = createDiv('pm-prop-value')
       renderSelectControl({
         container: cell,
-        value: task.type,
-        options: TYPE_OPTIONS,
+        value: task.type === 'milestone' ? MILESTONE_OPTION_ID : task.issueType,
+        options: [
+          ...issueTypes.map((t) => ({ id: t.id, label: t.label, color: t.color, icon: t.icon || undefined })),
+          { id: MILESTONE_OPTION_ID, label: 'Milestone', icon: 'diamond' },
+          { id: SUBTASK_OPTION_ID, label: 'Subtask of…', icon: 'git-branch' }
+        ],
         onChange: (id) => {
-          task.type = id as TaskType
-          if (id === 'milestone') {
+          if (id === MILESTONE_OPTION_ID) {
+            task.type = 'milestone'
             task.start = ''
             task.progress = 0
+            ctx.setParentId(null)
+          } else if (id === SUBTASK_OPTION_ID) {
+            task.type = 'subtask'
+          } else {
+            task.issueType = id
+            // Leaving milestone mode restores a plain task; a subtask keeps
+            // its nesting — its issue type changes freely.
+            if (task.type === 'milestone') task.type = 'task'
           }
-          if (id !== 'subtask') ctx.setParentId(null)
           rerender()
         }
       })
@@ -97,6 +110,9 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
           width: 230,
           onChange: (id) => {
             ctx.setParentId(id || null)
+            // "No parent" is the way back to a plain task now that the merged
+            // type control no longer offers Task/Subtask as separate kinds.
+            if (!id) task.type = 'task'
             rerender()
           }
         })
@@ -107,27 +123,6 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
   } else {
     grid.createDiv()
   }
-
-  // Issue type (spacer holds the right column so Status | Severity stays paired)
-  renderPropRow(
-    grid,
-    'Issue type',
-    () => {
-      const cell = createDiv('pm-prop-value')
-      renderSelectControl({
-        container: cell,
-        value: task.issueType,
-        options: issueTypes.map((t) => ({ id: t.id, label: t.label, color: t.color, icon: t.icon || undefined })),
-        onChange: (id) => {
-          task.issueType = id
-          rerender()
-        }
-      })
-      return cell
-    },
-    'shapes'
-  )
-  grid.createDiv()
 
   // Status | Severity — severity is the single urgency dial, optional on every task type.
   // Only incidents run an SLA clock off it (slaState gates on issueType).

@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.15.0] - 2026-08-22
+
+### Changed
+
+- **One type control**, like Jira. The separate "Type" and "Issue type" rows
+  merged into a single dropdown: the issue types plus Milestone and
+  "Subtask of…" as structural choices. Picking "No parent" on a subtask
+  turns it back into a plain task. Files are untouched — both fields still
+  round-trip exactly as before.
+
 ## [2.14.0] - 2026-08-22
 
 ### Added
