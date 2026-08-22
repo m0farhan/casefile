@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRequests, parseReputation, vtUrlId } from './reputation'
+import { buildRequests, parseReputation, skippedProviders, vtUrlId } from './reputation'
 
 const KEYS = { virustotal: 'vt-key', abuseipdb: 'ab-key' }
 
@@ -111,5 +111,19 @@ describe('parseReputation - AbuseIPDB', () => {
   it('degrades honestly on errors', () => {
     expect(parseReputation('abuseipdb', 429, '').summary).toContain('rate limited')
     expect(parseReputation('abuseipdb', 200, '{"data":{}}').verdict).toBe('unknown')
+  })
+})
+
+describe('skippedProviders', () => {
+  it('names the keyless provider an ip would have used', () => {
+    expect(skippedProviders('ip', { virustotal: 'vt-key' })).toEqual(['abuseipdb'])
+    expect(skippedProviders('ip', { abuseipdb: 'ab-key' })).toEqual(['virustotal'])
+    expect(skippedProviders('ip', {})).toEqual(['virustotal', 'abuseipdb'])
+  })
+
+  it('never blames a provider that does not cover the type', () => {
+    expect(skippedProviders('domain', { virustotal: 'vt-key' })).toEqual([])
+    expect(skippedProviders('hash', { virustotal: 'vt-key' })).toEqual([])
+    expect(skippedProviders('hash', {})).toEqual(['virustotal'])
   })
 })

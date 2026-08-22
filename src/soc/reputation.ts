@@ -100,6 +100,18 @@ export function buildRequests(
   return out
 }
 
+/**
+ * Providers that DO cover this IOC type but have no key configured — the UI
+ * names them explicitly so a missing key never reads as a provider verdict
+ * (or as the provider having been consulted at all).
+ */
+export function skippedProviders(type: IocType, keys: { virustotal?: string; abuseipdb?: string }): RepProvider[] {
+  const out: RepProvider[] = []
+  if (!keys.virustotal?.trim()) out.push('virustotal')
+  if (!keys.abuseipdb?.trim() && type === 'ip') out.push('abuseipdb')
+  return out
+}
+
 function httpOutcome(provider: RepProvider, status: number): RepOutcome | null {
   if (status === 200) return null
   if (status === 401 || status === 403) return { verdict: 'unknown', summary: 'key rejected' }

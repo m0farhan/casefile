@@ -11,7 +11,14 @@ import {
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
 import { Notice, requestUrl } from 'obsidian'
-import { PROVIDER_LABELS, buildRequests, parseReputation, type RepProvider, type RepVerdict } from './reputation'
+import {
+  PROVIDER_LABELS,
+  buildRequests,
+  parseReputation,
+  skippedProviders,
+  type RepProvider,
+  type RepVerdict
+} from './reputation'
 
 const IOC_TYPES = Object.keys(IOC_TYPE_LABELS) as IocType[]
 
@@ -104,12 +111,19 @@ export function renderIocSection(
     }
     for (const chip of state) {
       const label =
-        chip.queried !== refangIoc(ioc.value)
+        chip.queried && chip.queried !== refangIoc(ioc.value)
           ? `${PROVIDER_LABELS[chip.provider]} (${defangIoc(chip.queried, 'domain')})`
           : PROVIDER_LABELS[chip.provider]
+      const text = `${label} · ${chip.summary}`
+      const cls = `pm-ioc-rep-chip pm-ioc-rep--${chip.verdict}`
+      if (!chip.link) {
+        // Skipped provider (no key): plain chip, nowhere to click through to.
+        strip.createSpan({ cls, text })
+        continue
+      }
       const a = strip.createEl('a', {
-        cls: `pm-ioc-rep-chip pm-ioc-rep--${chip.verdict}`,
-        text: `${label} · ${chip.summary}`,
+        cls,
+        text,
         href: chip.link,
         attr: { 'aria-label': `Open on ${PROVIDER_LABELS[chip.provider]}` }
       })
@@ -125,6 +139,17 @@ export function renderIocSection(
     }
     const key = repKey(ioc)
     if (repCache.get(key) === 'loading') return // in-flight; a re-click must not double-spend quota
+    // A provider this type supports but with no key gets an explicit chip —
+    // a silent omission reads as "the provider said nothing", which is wrong.
+    const skipped = skippedProviders(ioc.type, opts.reputationKeys ?? {}).map(
+      (provider): RepChip => ({
+        provider,
+        verdict: 'unknown',
+        summary: 'no key in settings',
+        link: '',
+        queried: ''
+      })
+    )
     repCache.set(key, 'loading')
     fillRepStrip(ioc)
     const chips = await Promise.all(
@@ -138,7 +163,7 @@ export function renderIocSection(
         }
       })
     )
-    repCache.set(key, chips)
+    repCache.set(key, [...chips, ...skipped])
     fillRepStrip(ioc)
   }
 

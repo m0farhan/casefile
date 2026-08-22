@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.12.2] - 2026-08-22
+
+### Fixed
+
+- A reputation check now says when a provider was skipped for lack of a key
+  ("AbuseIPDB · no key in settings") instead of silently omitting it — a
+  missing chip read as if the provider had been consulted and said nothing.
+
 ## [2.12.1] - 2026-08-22
 
 ### Changed
