@@ -188,6 +188,8 @@
   min-height: 32px;
   cursor: text;
   user-select: text;
+  /* Long unbroken tokens (report URLs, hashes) must wrap inside the box */
+  overflow-wrap: anywhere;
 }
 .pm-modal-desc-preview:hover {
   background: var(--background-modifier-hover);
@@ -353,6 +355,8 @@
 }
 .pm-comment-body {
   font-size: 13px;
+  /* Long unbroken tokens (VirusTotal links, hashes) must wrap inside the box */
+  overflow-wrap: anywhere;
 }
 .pm-comment-body p {
   margin: 0.2em 0;

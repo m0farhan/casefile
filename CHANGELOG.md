@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.11.1] - 2026-08-22
+
+### Fixed
+
+- A long unbroken string in a comment or description — a VirusTotal link, a
+  file hash — no longer overflows the dialog; it wraps inside its box.
+
 ## [2.11.0] - 2026-08-13
 
 ### Changed
