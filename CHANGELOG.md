@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.13.0] - 2026-08-22
+
+### Added
+
+- **Today bucket**, first in the list — triage order runs Today, This week,
+  Next, Later, Someday. It appears everywhere buckets do: the task dialog,
+  the right-click move menu, the backlog columns, board swimlanes, and
+  reports.
+
 ## [2.12.2] - 2026-08-22
 
 ### Fixed

@@ -8,10 +8,12 @@ export type GanttWeekLabel = 'weekNumber' | 'dateRange' | 'both'
 export type ViewMode = 'table' | 'gantt' | 'kanban' | 'backlog' | 'reports'
 export type DueDateFilter = 'any' | 'overdue' | 'this-week' | 'this-month' | 'no-date'
 export type TaskType = 'task' | 'milestone' | 'subtask'
-/** Lightweight planning buckets — the useful part of sprints without ceremony. */
-export type IssueBucket = 'none' | 'this-week' | 'next' | 'later' | 'someday'
+/** Lightweight planning buckets — the useful part of sprints without ceremony.
+ * Triage order: Today first (SOC shift focus), then the horizon widens. */
+export type IssueBucket = 'none' | 'today' | 'this-week' | 'next' | 'later' | 'someday'
 
 export const BUCKETS: { id: IssueBucket; label: string }[] = [
+  { id: 'today', label: 'Today' },
   { id: 'this-week', label: 'This week' },
   { id: 'next', label: 'Next' },
   { id: 'later', label: 'Later' },
