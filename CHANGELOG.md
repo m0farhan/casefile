@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.12.1] - 2026-08-22
+
+### Changed
+
+- Issue-type icons return to the quiet tinted glyphs — the solid colored
+  squares from 2.12.0 read too bright on the dark board.
+
 ## [2.12.0] - 2026-08-22
 
 ### Changed (Jira parity wave — from a full four-lens audit)

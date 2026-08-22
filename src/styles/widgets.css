@@ -283,26 +283,18 @@
 }
 
 /* ─ Casefile issue meta ─ */
-/* Jira idiom: a solid color-filled rounded square with a white glyph. */
+/* The quiet tinted glyph, not Jira's filled square — Farhan's call (2026-08-22). */
 .pm-issuetype-icon {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  border-radius: 2px;
-  background: var(--pm-issuetype-color, var(--gs-ink-subtle));
-  color: var(--text-on-accent);
-  --icon-size: 10px;
-  font-size: 10px; /* emoji-icon fallback */
+  --icon-size: 13px;
+  font-size: 12px; /* emoji-icon fallback */
   vertical-align: middle;
 }
 .pm-issuetype-icon--sm {
-  width: 12px;
-  height: 12px;
-  --icon-size: 8px;
-  font-size: 8px;
+  --icon-size: 12px;
+  font-size: 11px;
 }
 .pm-key-chip {
   font-family: var(--gs-font-mono);
@@ -341,12 +333,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Table title cell: sized down (same box as --sm), spaced from the title text */
+/* Table title cell: sized down, spaced from the title text */
 .pm-table-cell-title .pm-issuetype-icon {
-  width: 12px;
-  height: 12px;
-  --icon-size: 8px;
-  font-size: 8px;
+  --icon-size: 12px;
   margin-right: 6px;
 }
 .pm-table-cell-title .pm-key-chip {

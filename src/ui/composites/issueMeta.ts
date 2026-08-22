@@ -2,8 +2,10 @@ import { setIcon, setTooltip } from 'obsidian'
 import type { IssueTypeConfig } from '../../types'
 import { isIconName, safeAsync } from '../../utils'
 
-/** Jira-style issue-type square: 16px rounded square filled with the type color, white glyph
- * (Lucide id or emoji) centered, type label as tooltip. `size: 'sm'` renders the 12px variant. */
+/** Colored issue-type glyph (Lucide id or emoji) with the type label as tooltip.
+ * Deliberately the quiet tinted glyph, not Jira's filled square — Farhan
+ * prefers the dark look (2026-08-22); revisit only if he asks. `size` kept
+ * for callers that pass it. */
 export function renderIssueTypeIcon(
   el: HTMLElement,
   cfg: IssueTypeConfig | undefined,
@@ -12,7 +14,7 @@ export function renderIssueTypeIcon(
   if (!cfg) return
   const icon = el.createSpan({ cls: 'pm-issuetype-icon' })
   if (opts?.size === 'sm') icon.addClass('pm-issuetype-icon--sm')
-  icon.setCssProps({ '--pm-issuetype-color': cfg.color })
+  icon.setCssStyles({ color: cfg.color })
   if (cfg.icon && isIconName(cfg.icon)) setIcon(icon, cfg.icon)
   else icon.setText(cfg.icon)
   setTooltip(icon, cfg.label)
