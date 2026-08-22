@@ -294,6 +294,33 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
+/* Jira-style child rows: nesting connector on the left, status pill on the right */
+.pm-subtask-connector {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--gs-ink-subtle);
+}
+.pm-subtask-connector svg {
+  width: 12px;
+  height: 12px;
+}
+.pm-subtask-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+  padding: 2px 8px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: 99px;
+  background: var(--gs-surface-2);
+}
+.pm-subtask-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
 .pm-subtask-title {
   flex: 1;
   font-size: 13px;

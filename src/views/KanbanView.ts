@@ -86,6 +86,18 @@ export class KanbanView implements SubView {
         const tasks = lane.tasks.filter((t) => t.status === status.id)
         // The epic chip is noise inside its own epic's lane — the lane header already says it.
         const cards = tasks.map((task) => this.buildCardData(task, groupBy !== 'epic'))
+        // Jira-style nesting: a subtask directly under its parent card (or a
+        // same-parent sibling run) indents instead of repeating the breadcrumb.
+        for (let i = 1; i < tasks.length; i++) {
+          const t = tasks[i]
+          if (t.type !== 'subtask') continue
+          const parent = this.findParentTask(t.id)
+          if (!parent) continue
+          const prev = tasks[i - 1]
+          if (prev.id === parent.id || (prev.type === 'subtask' && this.findParentTask(prev.id)?.id === parent.id)) {
+            cards[i].nested = true
+          }
+        }
         new KanbanColumn(board, {
           status,
           cards,
@@ -242,9 +254,13 @@ export class KanbanView implements SubView {
     }
 
     let parentTitle: string | undefined
+    let parentKey: string | undefined
     if (this.config.kanbanShowSubtasks && task.type === 'subtask') {
       const parent = this.findParentTask(task.id)
-      if (parent) parentTitle = parent.title
+      if (parent) {
+        parentTitle = parent.title
+        parentKey = parent.key || undefined
+      }
     }
 
     let epic: KanbanCardData['epic']
@@ -268,6 +284,7 @@ export class KanbanView implements SubView {
       task,
       descriptionPreview,
       parentTitle,
+      parentKey,
       issueTypes: this.config.issueTypes,
       epic,
       subtaskProgress,

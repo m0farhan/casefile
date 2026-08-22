@@ -19,6 +19,9 @@ export interface KanbanCardData {
   task: Task
   descriptionPreview?: string
   parentTitle?: string
+  parentKey?: string
+  /** Subtask rendering directly under its parent (or a same-parent sibling run) in this column. */
+  nested?: boolean
   issueTypes?: IssueTypeConfig[]
   epic?: { label: string; color?: string }
   subtaskProgress?: { done: number; total: number }
@@ -97,6 +100,8 @@ export class KanbanColumn {
         task: card.task,
         descriptionPreview: card.descriptionPreview,
         parentTitle: card.parentTitle,
+        parentKey: card.parentKey,
+        nested: card.nested,
         issueTypes: card.issueTypes,
         epic: card.epic,
         subtaskProgress: card.subtaskProgress,

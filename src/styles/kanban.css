@@ -213,11 +213,44 @@
   color: var(--text-muted);
 }
 .pm-kanban-card-parent {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 10px;
   color: var(--text-muted);
+  min-width: 0;
+}
+.pm-kanban-card-parent-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.pm-kanban-card-parent-icon svg {
+  width: 10px;
+  height: 10px;
+}
+.pm-kanban-card-parent-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Subtask card nested directly under its parent: indent + elbow connector,
+   reaching up across the 8px card gap into the card above */
+.pm-kanban-card--nested {
+  margin-left: 20px;
+  position: relative;
+}
+.pm-kanban-card--nested::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: -8px;
+  width: 10px;
+  height: calc(50% + 8px);
+  border-left: 1.5px solid var(--gs-hairline-strong);
+  border-bottom: 1.5px solid var(--gs-hairline-strong);
+  border-bottom-left-radius: 6px;
+  pointer-events: none;
 }
 
 /* ─ Casefile board upgrades ─ */

@@ -1,6 +1,8 @@
+import { setIcon } from 'obsidian'
 import type PMPlugin from '../main'
 import type { StatusConfig, Task } from '../types'
 import { makeTask } from '../types'
+import { renderKeyChip } from '../ui/composites/issueMeta'
 import { IconButton } from '../ui/primitives/IconButton'
 import { isTerminalStatus, getCompleteStatusId, getDefaultStatusId } from '../utils'
 
@@ -39,6 +41,9 @@ export function renderSubtasksPanel(
     for (const sub of task.subtasks) {
       const row = subList.createDiv('pm-modal-subtask-row')
 
+      // Jira-style child row: nesting connector, checkbox, key, title, status pill.
+      setIcon(row.createSpan({ cls: 'pm-subtask-connector' }), 'corner-down-right')
+
       const cb = row.createEl('input', { type: 'checkbox', cls: 'pm-subtask-checkbox' })
       cb.checked = isTerminalStatus(sub.status, statuses)
       cb.addEventListener('change', () => {
@@ -47,6 +52,8 @@ export function renderSubtasksPanel(
         renderSubtasks()
         renderCount()
       })
+
+      if (sub.key) renderKeyChip(row, sub.key)
 
       // Title opens the subtask's own page; renaming happens inside it (full editor,
       // slug-rename safety), not via inline contentEditable.
@@ -62,6 +69,13 @@ export function renderSubtasksPanel(
           opts.onOpen(sub)
         }
       })
+
+      const statusCfg = statuses.find((s) => s.id === sub.status)
+      const pill = row.createSpan({ cls: 'pm-subtask-status' })
+      pill
+        .createSpan({ cls: 'pm-subtask-status-dot' })
+        .setCssStyles({ background: statusCfg?.color ?? 'var(--gs-ink-subtle)' })
+      pill.createSpan({ text: statusCfg?.label ?? sub.status })
 
       new IconButton(row)
         .setIcon('x')

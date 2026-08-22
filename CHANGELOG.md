@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.11.0] - 2026-08-13
+
+### Changed
+
+- **Subtasks read like Jira children.** On the board, a subtask card sitting
+  directly under its parent indents with an elbow connector; a subtask in a
+  different column carries a "↳ parent" breadcrumb (key when the parent has
+  one, title otherwise — hover shows the full title). In the task view, each
+  subtask row now shows a nesting connector, the subtask's key, and a colored
+  status pill with its real status, alongside the existing checkbox and
+  click-to-open title.
+
 ## [2.10.1] - 2026-08-12
 
 ### Fixed

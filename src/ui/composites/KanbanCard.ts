@@ -22,6 +22,8 @@ export interface KanbanCardProps {
   task: Task
   descriptionPreview?: string
   parentTitle?: string
+  parentKey?: string
+  nested?: boolean
   /** Resolved issue-type catalog (configFor(project).issueTypes). Defaults apply when absent. */
   issueTypes?: IssueTypeConfig[]
   /** Epic ancestor context. TODO(board agent): the card has no project access — fill from
@@ -69,8 +71,16 @@ export class KanbanCard {
 
     const body = card.createDiv('pm-kanban-card-body')
 
-    if (props.parentTitle) {
-      body.createSpan({ text: props.parentTitle, cls: 'pm-kanban-card-parent' })
+    // Jira-style parent context for subtasks: directly under the parent (or a
+    // same-parent sibling) the card indents with an elbow connector; stranded
+    // in another column it carries a "↳ parent" breadcrumb instead.
+    if (props.nested) {
+      card.addClass('pm-kanban-card--nested')
+    } else if (props.parentTitle || props.parentKey) {
+      const bc = body.createDiv('pm-kanban-card-parent')
+      setIcon(bc.createSpan({ cls: 'pm-kanban-card-parent-icon' }), 'corner-down-right')
+      bc.createSpan({ text: props.parentKey || props.parentTitle || '', cls: 'pm-kanban-card-parent-label' })
+      if (props.parentKey && props.parentTitle) setTooltip(bc, props.parentTitle)
     }
 
     const titleRow = body.createDiv('pm-kanban-card-title-row')
