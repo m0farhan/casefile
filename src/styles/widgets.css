@@ -427,7 +427,47 @@ button.pm-comment-add:hover {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
+}
+
+/* Headline numbers: quiet stat tiles above the card grid */
+.pm-report-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.pm-report-stat {
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-m);
+  background: var(--gs-surface-1);
+  padding: 10px 14px;
+}
+.pm-report-stat-value {
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.pm-report-stat-label {
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 2px;
+}
+
+/* Dashboard-card grid: sections tile the window, one column when narrow */
+.pm-report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.pm-report-section {
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-m);
+  background: var(--gs-surface-1);
+  padding: 12px 14px;
 }
 .pm-report-svg {
   width: 100%;

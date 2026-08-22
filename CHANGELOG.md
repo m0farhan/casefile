@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.14.0] - 2026-08-22
+
+### Added
+
+- **Reports read as a dashboard.** A headline row of stat tiles — open
+  cases, incidents, closed this week, true positives, targets met — sits
+  above the sections, which now tile the window as cards (one column on a
+  narrow pane). New **open incidents by severity** section with
+  severity-colored bars. The weekly chart gained hover tooltips
+  ("2026-W34 · 3 opened"). Every number reuses the same reducers as the
+  sections below it, so the tiles can never disagree with the details.
+
 ## [2.13.1] - 2026-08-22
 
 ### Fixed

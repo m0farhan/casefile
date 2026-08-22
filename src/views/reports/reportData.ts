@@ -220,3 +220,61 @@ export function slaCompliance(incidents: Task[], policies: Record<string, SlaPol
   }
   return [...rows.values()].sort((a, b) => a.severityId.localeCompare(b.severityId))
 }
+
+export interface ReportSummary {
+  open: number
+  incidents: number
+  closedThisWeek: number
+  truePositives: number
+  /** met / (met + breached) across severities; null until a clock has finished. */
+  slaMetPct: number | null
+}
+
+/** Headline numbers for the summary row — every value reuses the reducers above. */
+export function reportSummary(
+  tasks: Task[],
+  incidents: Task[],
+  isTerminal: (statusId: string) => boolean,
+  policies: Record<string, SlaPolicy>,
+  now: number
+): ReportSummary {
+  const open = tasks.filter((t) => !isTerminal(t.status)).length
+  const closedThisWeek = openedClosedPerWeek(tasks, 1, now)[0]?.closed ?? 0
+  const truePositives = incidents.filter((t) => t.verdict === 'true-positive').length
+  const rows = slaCompliance(incidents, policies, now)
+  const met = rows.reduce((n, r) => n + r.met, 0)
+  const breached = rows.reduce((n, r) => n + r.breached, 0)
+  const denom = met + breached
+  return {
+    open,
+    incidents: incidents.length,
+    closedThisWeek,
+    truePositives,
+    slaMetPct: denom ? Math.round((met / denom) * 100) : null
+  }
+}
+
+export interface SeverityCount {
+  severityId: string // '' = no severity set
+  count: number
+}
+
+/** Open (non-terminal) incidents per severity, in config order; unset severity last. Zero rows omitted. */
+export function openBySeverity(
+  incidents: Task[],
+  isTerminal: (statusId: string) => boolean,
+  severityOrder: string[]
+): SeverityCount[] {
+  const counts = new Map<string, number>()
+  for (const t of incidents) {
+    if (isTerminal(t.status)) continue
+    const sev = t.severity || ''
+    counts.set(sev, (counts.get(sev) ?? 0) + 1)
+  }
+  const order = [...severityOrder, '']
+  const known = order.filter((id) => counts.has(id)).map((id) => ({ severityId: id, count: counts.get(id) ?? 0 }))
+  const stray = [...counts.keys()]
+    .filter((k) => !order.includes(k))
+    .map((k) => ({ severityId: k, count: counts.get(k) ?? 0 }))
+  return [...known, ...stray]
+}

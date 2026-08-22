@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, makeProject, makeTask, type SlaPolicy } from '../../types'
 import { buildHandover } from '../../soc/handover'
-import { lifecycleDurations, openedClosedPerWeek, slaCompliance, timeInStatus, verdictBreakdown } from './reportData'
+import {
+  lifecycleDurations,
+  openBySeverity,
+  openedClosedPerWeek,
+  reportSummary,
+  slaCompliance,
+  timeInStatus,
+  verdictBreakdown
+} from './reportData'
 
 const NOW = Date.parse('2026-07-30T12:00:00.000Z') // a Thursday, ISO week 2026-W31
 const DAY = 86_400_000
@@ -158,5 +166,48 @@ describe('buildHandover', () => {
 
     // Deterministic: identical output on a second run.
     expect(buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')).toBe(md)
+  })
+})
+
+describe('reportSummary', () => {
+  const isDone = (statusId: string) => statusId === 'done'
+
+  it('counts open, incidents, closed-this-week and true positives from real fields', () => {
+    const tasks = [
+      makeTask({ status: 'todo' }),
+      makeTask({ status: 'in-progress', issueType: 'incident', verdict: 'true-positive' }),
+      makeTask({ status: 'done', issueType: 'incident', verdict: 'false-positive', completed: '2026-07-30' })
+    ]
+    const incidents = tasks.filter((t) => t.issueType === 'incident')
+    const sum = reportSummary(tasks, incidents, isDone, {}, NOW)
+    expect(sum.open).toBe(2)
+    expect(sum.incidents).toBe(2)
+    expect(sum.closedThisWeek).toBe(1)
+    expect(sum.truePositives).toBe(1)
+  })
+
+  it('reports null target compliance until a clock has finished', () => {
+    const sum = reportSummary([], [], isDone, {}, NOW)
+    expect(sum.slaMetPct).toBeNull()
+  })
+})
+
+describe('openBySeverity', () => {
+  const isDone = (statusId: string) => statusId === 'done'
+
+  it('groups open incidents in severity order, unset last, zero rows omitted', () => {
+    const incidents = [
+      makeTask({ status: 'todo', severity: 'sev3' }),
+      makeTask({ status: 'todo', severity: 'sev1' }),
+      makeTask({ status: 'todo', severity: 'sev1' }),
+      makeTask({ status: 'todo' }),
+      makeTask({ status: 'done', severity: 'sev1' }) // closed — excluded
+    ]
+    const rows = openBySeverity(incidents, isDone, ['sev1', 'sev2', 'sev3'])
+    expect(rows).toEqual([
+      { severityId: 'sev1', count: 2 },
+      { severityId: 'sev3', count: 1 },
+      { severityId: '', count: 1 }
+    ])
   })
 })

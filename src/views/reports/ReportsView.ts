@@ -2,12 +2,14 @@ import type PMPlugin from '../../main'
 import type { FilterState, Project, Task } from '../../types'
 import { matchesFilter } from '../../store/TaskFilter'
 import { flattenTasks } from '../../store/TaskTreeOps'
-import { svgEl } from '../../utils'
+import { isTerminalStatus, svgEl } from '../../utils'
 import { formatSlaRemaining } from '../../soc/sla'
 import type { SubView } from '../SubView'
 import {
   lifecycleDurations,
+  openBySeverity,
   openedClosedPerWeek,
+  reportSummary,
   slaCompliance,
   timeInStatus,
   verdictBreakdown,
@@ -49,11 +51,64 @@ export class ReportsView implements SubView {
     const incidents = tasks.filter((t) => t.issueType === 'incident')
     const now = Date.now()
 
-    this.renderOpenedClosed(root, tasks, now)
-    this.renderTimeInStatus(root, tasks, now)
-    this.renderVerdicts(root, incidents)
-    this.renderSlaCompliance(root, incidents, now)
-    this.renderLifecycleDurations(root, incidents)
+    this.renderSummary(root, tasks, incidents, now)
+    // Sections lay out as dashboard cards in a fluid grid, Jira-gadget style.
+    const grid = root.createDiv('pm-report-grid')
+    this.renderOpenedClosed(grid, tasks, now)
+    this.renderTimeInStatus(grid, tasks, now)
+    this.renderOpenSeverity(grid, incidents)
+    this.renderVerdicts(grid, incidents)
+    this.renderSlaCompliance(grid, incidents, now)
+    this.renderLifecycleDurations(grid, incidents)
+  }
+
+  private renderSummary(root: HTMLElement, tasks: Task[], incidents: Task[], now: number): void {
+    const cfg = this.plugin.store.configFor(this.project)
+    const sum = reportSummary(
+      tasks,
+      incidents,
+      (statusId) => isTerminalStatus(statusId, cfg.statuses),
+      this.plugin.settings.slaPolicies,
+      now
+    )
+    const row = root.createDiv('pm-report-summary')
+    const stat = (value: string, label: string) => {
+      const el = row.createDiv('pm-report-stat')
+      el.createDiv({ cls: 'pm-report-stat-value', text: value })
+      el.createDiv({ cls: 'pm-report-stat-label', text: label })
+    }
+    stat(String(sum.open), 'Open cases')
+    stat(String(sum.incidents), 'Incidents')
+    stat(String(sum.closedThisWeek), 'Closed this week')
+    stat(String(sum.truePositives), 'True positives')
+    stat(sum.slaMetPct === null ? '—' : `${sum.slaMetPct}%`, 'Targets met')
+  }
+
+  private renderOpenSeverity(root: HTMLElement, incidents: Task[]): void {
+    const s = this.section(root, 'Open incidents by severity')
+    const cfg = this.plugin.store.configFor(this.project)
+    const rows = openBySeverity(
+      incidents,
+      (statusId) => isTerminalStatus(statusId, cfg.statuses),
+      cfg.severities.map((x) => x.id)
+    )
+    if (!rows.length) {
+      s.createDiv({ cls: 'pm-report-empty', text: 'No open incidents.' })
+      return
+    }
+    const max = Math.max(...rows.map((r) => r.count))
+    for (const row of rows) {
+      const sev = cfg.severities.find((x) => x.id === row.severityId)
+      const line = s.createDiv('pm-report-hrow')
+      line.createSpan({ cls: 'pm-report-hlabel', text: sev?.label ?? 'No severity' })
+      const track = line.createDiv('pm-report-htrack')
+      const fill = track.createDiv('pm-report-hfill')
+      fill.setCssProps({
+        '--report-fill': `${Math.max(2, Math.round((row.count / max) * 100))}%`,
+        '--report-color': sev?.color ?? 'var(--gs-ink-subtle)'
+      })
+      line.createSpan({ cls: 'pm-report-hvalue', text: String(row.count) })
+    }
   }
 
   private section(root: HTMLElement, title: string): HTMLElement {
@@ -72,22 +127,34 @@ export class ReportsView implements SubView {
     const labelH = 30
     const w = buckets.length * groupW + 8
     const svg = svgEl('svg', { viewBox: `0 0 ${w} ${h + labelH}`, class: 'pm-report-svg' })
+    const withTitle = (rect: SVGElement, text: string): SVGElement => {
+      const t = svgEl('title')
+      t.textContent = text
+      rect.appendChild(t)
+      return rect
+    }
     buckets.forEach((b, i) => {
       const x = 4 + i * groupW
       const openedH = Math.round((b.opened / max) * (h - 16))
       const closedH = Math.round((b.closed / max) * (h - 16))
       svg.appendChild(
-        svgEl('rect', { x, y: h - openedH, width: barW, height: openedH, class: 'pm-report-bar--opened', rx: 2 })
+        withTitle(
+          svgEl('rect', { x, y: h - openedH, width: barW, height: openedH, class: 'pm-report-bar--opened', rx: 2 }),
+          `${b.label} · ${b.opened} opened`
+        )
       )
       svg.appendChild(
-        svgEl('rect', {
-          x: x + barW + 2,
-          y: h - closedH,
-          width: barW,
-          height: closedH,
-          class: 'pm-report-bar--closed',
-          rx: 2
-        })
+        withTitle(
+          svgEl('rect', {
+            x: x + barW + 2,
+            y: h - closedH,
+            width: barW,
+            height: closedH,
+            class: 'pm-report-bar--closed',
+            rx: 2
+          }),
+          `${b.label} · ${b.closed} closed`
+        )
       )
       if (b.opened) {
         const t = svgEl('text', { x: x + barW / 2, y: h - openedH - 3, class: 'pm-report-count' })
