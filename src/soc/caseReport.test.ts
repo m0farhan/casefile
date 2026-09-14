@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import type { App } from 'obsidian'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { TFile, type App } from 'obsidian'
+import type PMPlugin from '../main'
 import { FakeVault } from '../../test/fakeVault'
 import {
   DEFAULT_SEVERITIES,
@@ -10,7 +11,13 @@ import {
   type SlaPolicy,
   type Task
 } from '../types'
-import { composeCaseReport, writeCaseReportNote, type CaseReportContext } from './caseReport'
+import {
+  composeCaseReport,
+  copyCaseReport,
+  generateCaseReport,
+  writeCaseReportNote,
+  type CaseReportContext
+} from './caseReport'
 
 const POLICIES: Record<string, SlaPolicy> = {
   sev1: { responseMins: 60, resolutionMins: 240 }
@@ -156,5 +163,62 @@ describe('writeCaseReportNote', () => {
   it('returns null for a task with no file yet', async () => {
     const app = { vault: new FakeVault() } as unknown as App
     expect(await writeCaseReportNote(app, makeTask(), 'md')).toBeNull()
+  })
+})
+
+describe('copyCaseReport', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** Fake plugin whose loadTaskBody hydrates the description, like the real store does from disk. */
+  function fakePlugin(vault: FakeVault, notices: string[]): PMPlugin {
+    return {
+      app: { vault, workspace: { openLinkText: async () => {} } },
+      settings: { slaPolicies: POLICIES },
+      store: {
+        loadTaskBody: async (t: Task) => {
+          t.description = 'Loaded from disk.'
+        },
+        configFor: () => ({ statuses: DEFAULT_STATUSES, severities: DEFAULT_SEVERITIES, verdicts: DEFAULT_VERDICTS })
+      },
+      showNotice: (m: string) => notices.push(m)
+    } as unknown as PMPlugin
+  }
+
+  it('copies exactly what generateCaseReport writes, via the shared loaded-compose step', async () => {
+    const vault = new FakeVault()
+    await vault.create('Cases/Tasks/Phish.md', 'case body')
+    vault.resetCounts()
+    const task = makeTask({ key: 'SOC-1', title: 'Phish', filePath: 'Cases/Tasks/Phish.md' })
+    const project = makeProject('Cases', 'Cases/Cases.md')
+    project.tasks = [task]
+    const notices: string[] = []
+    const plugin = fakePlugin(vault, notices)
+
+    const copied: string[] = []
+    vi.stubGlobal('navigator', {
+      clipboard: {
+        writeText: async (s: string) => {
+          copied.push(s)
+        }
+      }
+    })
+
+    await copyCaseReport(plugin, project, task)
+
+    // Composed from the freshly loaded body, and the vault was never touched.
+    expect(copied).toHaveLength(1)
+    expect(copied[0]).toContain('# SOC-1 Phish')
+    expect(copied[0]).toContain('Loaded from disk.')
+    expect(vault.createCount.size).toBe(0)
+    expect(vault.modifyCount.size).toBe(0)
+    expect(notices).toEqual(['Case report copied'])
+
+    // Refactor safety: the write path produces the identical report.
+    await generateCaseReport(plugin, project, task)
+    const file = vault.getAbstractFileByPath('Cases/Tasks/Phish — report.md')
+    if (!(file instanceof TFile)) throw new Error('report note was not created')
+    expect(await vault.cachedRead(file)).toBe(copied[0])
   })
 })

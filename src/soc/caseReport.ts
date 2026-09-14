@@ -189,16 +189,16 @@ export async function writeCaseReportNote(app: App, task: Task, md: string): Pro
   return null
 }
 
-/** Menu/command entry point: hydrate the body, compose, write, open, notify. */
-export async function generateCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<void> {
-  if (!task.filePath) {
-    plugin.showNotice('Save the case first — it has no file yet.')
-    return
-  }
-  // Description and journal live in the note body — make sure they are loaded.
+/**
+ * Shared load-then-compose step: description and journal live in the note
+ * body, so hydrate it first, then compose from the project's live config.
+ * Both the write-a-note and copy-to-clipboard paths go through here so their
+ * output can never drift apart.
+ */
+export async function loadAndComposeCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<string> {
   await plugin.store.loadTaskBody(task)
   const cfg = plugin.store.configFor(project)
-  const md = composeCaseReport(task, {
+  return composeCaseReport(task, {
     project,
     statuses: cfg.statuses,
     severities: cfg.severities,
@@ -206,6 +206,21 @@ export async function generateCaseReport(plugin: PMPlugin, project: Project, tas
     slaPolicies: plugin.settings.slaPolicies,
     now: Date.now()
   })
+}
+
+/** Same report, straight to the clipboard — for pasting into an answer box. */
+export async function copyCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<void> {
+  await navigator.clipboard.writeText(await loadAndComposeCaseReport(plugin, project, task))
+  plugin.showNotice('Case report copied')
+}
+
+/** Menu/command entry point: hydrate the body, compose, write, open, notify. */
+export async function generateCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<void> {
+  if (!task.filePath) {
+    plugin.showNotice('Save the case first — it has no file yet.')
+    return
+  }
+  const md = await loadAndComposeCaseReport(plugin, project, task)
   const path = await writeCaseReportNote(plugin.app, task, md)
   if (!path) {
     plugin.showNotice('Could not create the report note.')

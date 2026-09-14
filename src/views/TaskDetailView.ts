@@ -1,4 +1,5 @@
 import { ItemView, Notice, WorkspaceLeaf, TFile, setIcon } from 'obsidian'
+import { iocSightings } from '../soc/ioc'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from '../modals/DescriptionEditor'
@@ -405,7 +406,8 @@ export class TaskDetailView extends ItemView {
         reputationKeys: {
           virustotal: this.plugin.settings.virusTotalApiKey,
           abuseipdb: this.plugin.settings.abuseIpdbApiKey
-        }
+        },
+        findSightings: (value) => iocSightings(value, project.tasks, task.id)
       })
     }
     this.commentsSection?.destroy()

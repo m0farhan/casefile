@@ -45,6 +45,24 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.18.0] - 2026-09-14
+
+### Added
+
+- **Check all indicators.** One button runs the reputation check over every
+  indicator, paced to VirusTotal's free tier (a lookup every ~15 seconds),
+  with live progress and an honest final count — already-checked and
+  uncovered rows are skipped and said so.
+- **Seen-before warnings.** The alert-paste preview warns when extracted
+  indicators already exist in other cases ("2 of 6 seen before — SOC282")
+  and, with a checkbox on by default, links the new case to them as
+  "relates to" on creation. Indicator rows show an "Also in SOC282" hint
+  that jumps into the cross-case search.
+- **Insert playbook.** A button in the description toolbar drops any
+  incident template's playbook markdown at the cursor.
+- **Copy case report** — the case-report composer, straight to the
+  clipboard, for pasting into an answer box.
+
 ## [2.17.0] - 2026-09-14
 
 ### Added

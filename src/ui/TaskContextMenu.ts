@@ -8,7 +8,7 @@ import { renderStatusDot } from './StatusBadge'
 import { openTaskModal, confirmDialog, confirmDuplicateSubtasks } from './ModalFactory'
 import { showUndoNotice } from './undoNotice'
 import { toggleTaskFlag } from './flagOps'
-import { generateCaseReport } from '../soc/caseReport'
+import { copyCaseReport, generateCaseReport } from '../soc/caseReport'
 
 export interface TaskMenuContext {
   plugin: PMPlugin
@@ -117,6 +117,16 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
       .onClick(
         safeAsync(async () => {
           await generateCaseReport(ctx.plugin, ctx.project, task)
+        })
+      )
+  )
+  menu.addItem((item) =>
+    item
+      .setTitle('Copy case report')
+      .setIcon('clipboard-copy')
+      .onClick(
+        safeAsync(async () => {
+          await copyCaseReport(ctx.plugin, ctx.project, task)
         })
       )
   )

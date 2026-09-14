@@ -792,6 +792,54 @@ a.pm-ioc-rep--unknown {
   font-size: 12px;
 }
 
+/* Seen-before sightings hint — quiet line tucked under its indicator row
+   (IocSection) or in the intake preview (AlertIntakeModal) */
+.pm-ioc-sightings {
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+.pm-ioc-rows .pm-ioc-sightings {
+  padding: 0 0 4px 100px; /* same indent as the reputation strip */
+}
+.pm-ioc-sightings-link {
+  cursor: pointer;
+}
+.pm-ioc-sightings-link:hover {
+  text-decoration: underline;
+}
+.pm-alert-link-cases {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--gs-ink);
+  padding-top: 4px;
+  cursor: pointer;
+}
+
+/* IOC header: pack the buttons right (the shared header is space-between,
+   which would scatter four+ items); the progress line sits just before them */
+.pm-ioc-section .pm-modal-section-header {
+  justify-content: flex-start;
+  gap: 8px;
+}
+.pm-ioc-section .pm-modal-section-header .pm-modal-section-title {
+  margin-right: auto;
+}
+
+/* Check-all progress: quiet line in the section header while the run is live */
+.pm-ioc-checkall-progress {
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+}
+.pm-ioc-checkall-progress:empty {
+  display: none;
+}
+.pm-icon-btn--busy {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 /* ─ Casefile activity timeline ─ */
 /* The shared section header is space-between; here the toggle sits beside the
    title, so pack them left. The whole header is the collapse hit target. */

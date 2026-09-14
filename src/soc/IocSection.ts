@@ -6,7 +6,8 @@ import {
   extractIocsFromText,
   formatIocLine,
   parseIocPaste,
-  refangIoc
+  refangIoc,
+  vtWaitMs
 } from './ioc'
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
@@ -53,11 +54,21 @@ export function renderIocSection(
     onPivot?: (value: string) => void
     /** Provider API keys for the live reputation button; absent/empty = provider off. */
     reputationKeys?: { virustotal?: string; abuseipdb?: string }
+    /**
+     * Cross-case sightings of a (refanged) value — cases other than this one
+     * holding the same indicator. Absent = no seen-before hints render.
+     */
+    // ponytail: hosts (TaskModal/TaskDetailView) wire this next release; the
+    // alert-intake modal is the primary seen-before surface today.
+    findSightings?: (value: string) => { key: string; title: string }[]
   }
 ): void {
   const section = container.createDiv('pm-modal-section pm-ioc-section')
   const header = section.createDiv('pm-modal-section-header')
   const title = header.createEl('h4', { cls: 'pm-modal-section-title' })
+  // Quiet per-row progress line for the paced check-all run; blank when idle.
+  const progressEl = header.createSpan({ cls: 'pm-ioc-checkall-progress' })
+  const checkAllBtn = new IconButton(header).setIcon('radar').setTooltip('Check all indicators')
   // Auto-populate from the note: scan description + comments for indicators
   // (defanged or real), skip ones already recorded, append the rest.
   const scanBtn = new IconButton(header).setIcon('text-search').setTooltip('Extract indicators from this note')
@@ -167,6 +178,75 @@ export function renderIocSection(
     fillRepStrip(ioc)
   }
 
+  // Check every row sequentially, pacing VirusTotal-bearing lookups to its
+  // free tier (vtWaitMs). Rows with a cached result this session are skipped
+  // and counted honestly; rows no configured provider covers are counted too.
+  // Each iteration (and each slice of a pacing wait) re-checks that the rows
+  // container is still mounted, so a modal close mid-run stops the loop with
+  // at most one short timer left to fire harmlessly.
+  let checkingAll = false
+  const runCheckAll = async () => {
+    if (checkingAll || !task.iocs.length) return
+    const keys = opts.reputationKeys ?? {}
+    if (!keys.virustotal?.trim() && !keys.abuseipdb?.trim()) {
+      new Notice('No reputation provider covers this indicator — add keys in the plugin settings')
+      return
+    }
+    checkingAll = true
+    checkAllBtn.el.addClass('pm-icon-btn--busy')
+    checkAllBtn.el.setAttribute('aria-disabled', 'true')
+    const vtStarts: number[] = []
+    let checked = 0
+    let alreadyChecked = 0
+    let uncovered = 0
+    let aborted = false
+    const rows = [...task.iocs]
+    try {
+      for (const [i, ioc] of rows.entries()) {
+        if (!rowsEl.isConnected) {
+          aborted = true
+          break
+        }
+        progressEl.setText(`Checking ${i + 1} of ${rows.length}…`)
+        if (!task.iocs.includes(ioc)) continue // row removed mid-run
+        if (Array.isArray(repCache.get(repKey(ioc)))) {
+          alreadyChecked++
+          continue
+        }
+        const reqs = buildRequests(ioc.type, ioc.value, keys)
+        if (!reqs.length) {
+          uncovered++
+          continue
+        }
+        if (reqs.some((r) => r.provider === 'virustotal')) {
+          // ponytail: chunked sleep so an unmount mid-wait never leaves a 15s dangling timer
+          while (vtWaitMs(vtStarts, Date.now()) > 0 && rowsEl.isConnected) {
+            const step = Math.min(500, vtWaitMs(vtStarts, Date.now()))
+            await new Promise<void>((resolve) => window.setTimeout(resolve, step))
+          }
+          if (!rowsEl.isConnected) {
+            aborted = true
+            break
+          }
+          vtStarts.push(Date.now())
+        }
+        await checkReputation(ioc)
+        checked++
+      }
+    } finally {
+      progressEl.setText('')
+      checkingAll = false
+      checkAllBtn.el.removeClass('pm-icon-btn--busy')
+      checkAllBtn.el.removeAttribute('aria-disabled')
+    }
+    if (aborted) return
+    const parts = [`Checked ${checked} indicator${checked === 1 ? '' : 's'}`]
+    if (alreadyChecked) parts.push(`${alreadyChecked} already checked`)
+    if (uncovered) parts.push(`${uncovered} not covered by configured providers`)
+    new Notice(parts.join(' · '))
+  }
+  checkAllBtn.onClick(safeAsync(runCheckAll))
+
   const renderRows = () => {
     title.setText(`Indicators (${task.iocs.length})`)
     rowsEl.empty()
@@ -242,6 +322,21 @@ export function renderIocSection(
         })
       repStrips.set(ioc, rowsEl.createDiv('pm-ioc-rep'))
       fillRepStrip(ioc)
+      // Seen-before hint: same tucked-under-the-row placement as the
+      // reputation strip. Renders only when the host supplies findSightings.
+      const sightings = opts.findSightings?.(refangIoc(ioc.value)) ?? []
+      if (sightings.length) {
+        const hint = rowsEl.createDiv('pm-ioc-sightings')
+        const names = sightings.slice(0, 3).map((s) => s.key || s.title)
+        const extra = sightings.length > 3 ? ` and ${sightings.length - 3} more` : ''
+        const text = `Also in ${names.join(', ')}${extra}`
+        if (onPivot) {
+          const link = hint.createSpan({ cls: 'pm-ioc-sightings-link', text })
+          link.addEventListener('click', () => onPivot(refangIoc(ioc.value)))
+        } else {
+          hint.setText(text)
+        }
+      }
     }
   }
 

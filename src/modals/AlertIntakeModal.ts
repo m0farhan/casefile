@@ -5,6 +5,7 @@ import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
 import { parseAlertPaste, type ParsedAlert } from '../soc/alertIntake'
+import { iocSightings } from '../soc/ioc'
 
 const EMPTY_PARSE: ParsedAlert = { title: '', severityId: '', detectedAt: '', description: '', iocs: [] }
 
@@ -22,6 +23,9 @@ export class AlertIntakeModal extends Modal {
   private severitySelect!: HTMLSelectElement
   private detectedEl!: HTMLElement
   private iocCountEl!: HTMLElement
+  private sightingsEl!: HTMLElement
+  private linkCheckbox: HTMLInputElement | null = null
+  private sightedTaskIds: string[] = []
   private createBtn!: ButtonComponent
 
   constructor(
@@ -75,6 +79,7 @@ export class AlertIntakeModal extends Modal {
     this.detectedEl.addClass('pm-alert-detected')
 
     this.iocCountEl = preview.createDiv('pm-alert-ioc-count')
+    this.sightingsEl = preview.createDiv('pm-alert-sightings')
     preview.createDiv({ cls: 'pm-alert-note', text: 'The full paste becomes the case description.' })
 
     const footer = contentEl.createDiv('pm-modal-btn-row')
@@ -96,7 +101,38 @@ export class AlertIntakeModal extends Modal {
     this.renderDetected(this.parsed.detectedAt)
     const n = this.parsed.iocs.length
     this.iocCountEl.setText(n === 0 ? 'No indicators found' : `${n} indicator${n === 1 ? '' : 's'} found`)
+    this.renderSightings()
     this.createBtn.setDisabled(!this.parsed.title.trim())
+  }
+
+  /**
+   * Seen-before check over the parsed indicators: name the other cases
+   * holding any of them and offer to link them on create (relates-to,
+   * checked by default). Real counts only — no hits, no line.
+   */
+  private renderSightings(): void {
+    this.sightingsEl.empty()
+    this.linkCheckbox = null
+    const byCase = new Map<string, { key: string; title: string }>()
+    let seen = 0
+    for (const ioc of this.parsed.iocs) {
+      const hits = iocSightings(ioc.value, this.project.tasks, '')
+      if (hits.length) seen++
+      for (const h of hits) byCase.set(h.taskId, h)
+    }
+    this.sightedTaskIds = [...byCase.keys()]
+    if (!seen) return
+    const total = this.parsed.iocs.length
+    const names = [...byCase.values()].slice(0, 3).map((c) => c.key || c.title)
+    const extra = byCase.size > 3 ? ` and ${byCase.size - 3} more` : ''
+    this.sightingsEl.createDiv({
+      cls: 'pm-ioc-sightings',
+      text: `${seen} of ${total} indicator${total === 1 ? '' : 's'} seen before — ${names.join(', ')}${extra}`
+    })
+    const label = this.sightingsEl.createEl('label', { cls: 'pm-alert-link-cases' })
+    this.linkCheckbox = label.createEl('input', { type: 'checkbox' })
+    this.linkCheckbox.checked = true
+    label.appendText('Link related cases')
   }
 
   private renderDetected(iso: string): void {
@@ -129,6 +165,10 @@ export class AlertIntakeModal extends Modal {
       iocs: this.parsed.iocs,
       detectedAt: this.detectedAt
     })
+    // Link sighted cases before insertTask so links serialize with the first save.
+    if (this.linkCheckbox?.checked && this.sightedTaskIds.length) {
+      task.links = this.sightedTaskIds.map((taskId) => ({ type: 'relates-to' as const, taskId }))
+    }
     try {
       await this.plugin.store.insertTask(this.project, task)
     } catch (err) {

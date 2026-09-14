@@ -10,7 +10,7 @@ import {
   type DecorationSet,
   type ViewUpdate
 } from '@codemirror/view'
-import { Component, MarkdownRenderer, Notice, type App } from 'obsidian'
+import { Component, MarkdownRenderer, Menu, Notice, type App } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { IconButton } from '../ui/primitives/IconButton'
@@ -342,6 +342,36 @@ export function renderDescriptionEditor(
     // mousedown would steal focus (and the selection) from the editor.
     btn.el.addEventListener('mousedown', (e) => e.preventDefault())
     btn.onClick(() => applyMarker(marker))
+  }
+
+  // Playbook insert: incident templates already carry playbook markdown —
+  // surface them here. The button lives in the toolbar, which only exists in
+  // edit mode (showPreview hides it, showEdit reveals it — verified above), so
+  // the read-mode preview needs no extra handling. Templates are snapshotted
+  // at render time, like every other settings read in this section.
+  const playbooks = plugin.settings.incidentTemplates.filter((t) => t.bodyMarkdown.trim().length > 0)
+  if (playbooks.length > 0) {
+    const playbookBtn = new IconButton(descToolbar).setIcon('list-checks').setTooltip('Insert playbook')
+    playbookBtn.el.addEventListener('mousedown', (e) => e.preventDefault())
+    playbookBtn.onClick((e) => {
+      const menu = new Menu()
+      for (const tpl of playbooks) {
+        menu.addItem((item) =>
+          item.setTitle(tpl.name).onClick(() => {
+            const { from, to } = view.state.selection.main
+            // Blank line before the playbook when the cursor isn't at line start.
+            const prefix = from > view.state.doc.lineAt(from).from ? '\n\n' : ''
+            const insert = prefix + tpl.bodyMarkdown
+            view.dispatch({
+              changes: { from, to, insert },
+              selection: { anchor: from + insert.length }
+            })
+            view.focus()
+          })
+        )
+      }
+      menu.showAtMouseEvent(e)
+    })
   }
 
   const toggleCheckbox = (index: number) => {

@@ -1,4 +1,5 @@
-import type { Ioc, IocType } from '../types'
+import type { Ioc, IocType, Task } from '../types'
+import { flattenTasks } from '../store/TaskTreeOps'
 
 export const IOC_TYPE_LABELS: Record<IocType, string> = {
   ip: 'IP',
@@ -67,6 +68,43 @@ export function parseIocPaste(text: string, existingValues: string[]): Ioc[] {
     if (seen.has(key)) continue
     seen.add(key)
     out.push({ type: detectIocType(value), value })
+  }
+  return out
+}
+
+/** Minimum gap between VirusTotal-bearing lookups: free tier is 4/minute. */
+// ponytail: 15.5s keeps a whole run safely under 4/min with clock-jitter margin
+export const VT_PACE_MS = 15500
+
+/**
+ * Pacing decision for the check-all run: given the start timestamps of prior
+ * VirusTotal-bearing lookups, how long to wait before starting the next one.
+ * No prior calls = start immediately. Pure — the caller supplies `now`.
+ */
+export function vtWaitMs(prevVtStarts: number[], now: number): number {
+  if (!prevVtStarts.length) return 0
+  return Math.max(0, VT_PACE_MS - (now - Math.max(...prevVtStarts)))
+}
+
+/**
+ * Cases (other than `excludeTaskId`) whose indicators contain the same real
+ * value: both sides refang (idempotent on real values) and compare
+ * case-insensitively, so a defanged query still finds a real stored value and
+ * vice versa. Subtasks are searched too.
+ */
+export function iocSightings(
+  value: string,
+  tasks: Task[],
+  excludeTaskId: string
+): { taskId: string; key: string; title: string }[] {
+  const needle = refangIoc(value).toLowerCase()
+  if (!needle) return []
+  const out: { taskId: string; key: string; title: string }[] = []
+  for (const { task } of flattenTasks(tasks)) {
+    if (task.id === excludeTaskId) continue
+    if (task.iocs.some((i) => refangIoc(i.value).toLowerCase() === needle)) {
+      out.push({ taskId: task.id, key: task.key, title: task.title })
+    }
   }
   return out
 }
