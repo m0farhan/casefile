@@ -173,6 +173,11 @@ export class KanbanCard {
       footLeft,
       (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
     )
+    if (task.flagged) {
+      const flagEl = footLeft.createSpan({ cls: 'pm-flag-icon' })
+      setIcon(flagEl, 'flag')
+      setTooltip(flagEl, 'Flagged')
+    }
 
     const footRight = footer.createDiv('pm-kanban-card-footer-right')
     new AvatarStack(footRight).setNames(task.assignees).setMax(3).setSize('sm')

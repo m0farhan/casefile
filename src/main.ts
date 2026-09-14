@@ -19,6 +19,7 @@ import {
   confirmDialog,
   promptText
 } from './ui/ModalFactory'
+import { AlertIntakeModal } from './modals/AlertIntakeModal'
 import { Notifier } from './components/Notifier'
 import { buildHandover } from './soc/handover'
 import { ensureFolder } from './store/vaultFs'
@@ -192,6 +193,20 @@ export default class PMPlugin extends Plugin {
       name: 'Generate shift handover',
       callback: () => {
         void this.generateShiftHandover()
+      }
+    })
+
+    this.addCommand({
+      id: 'new-case-from-alert',
+      name: 'Create case from pasted alert',
+      checkCallback: (checking: boolean) => {
+        const project = this.activeProjectViewProject()
+        if (!project) return false
+        if (checking) return true
+        new AlertIntakeModal(this.app, this, project, async () => {
+          await this.router.openProjectByPath(project.filePath)
+        }).open()
+        return true
       }
     })
 
@@ -654,6 +669,14 @@ export default class PMPlugin extends Plugin {
         this.refreshProjectViews()
       })()
     })
+  }
+
+  /** The project of the first open project view, for commands scoped to an open project. */
+  private activeProjectViewProject(): Project | null {
+    for (const leaf of this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
+      if (leaf.view instanceof ProjectView && leaf.view.project) return leaf.view.project
+    }
+    return null
   }
 
   private async pickProjectThenCreateTask(mode: null | 'pick-parent'): Promise<void> {

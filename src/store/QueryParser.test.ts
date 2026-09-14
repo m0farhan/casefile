@@ -270,6 +270,15 @@ describe('field matchers', () => {
     expect(matches('due:<garbage', { due: '2026-08-01' })).toBe(false)
   })
 
+  it('flag: matches the impediment marker as boolean-as-string', () => {
+    expect(matches('flag:true', { flagged: true })).toBe(true)
+    expect(matches('flag:true', {})).toBe(false)
+    expect(matches('flag:false', {})).toBe(true)
+    expect(matches('flag:false', { flagged: true })).toBe(false)
+    expect(matches('flag:!true', {})).toBe(true)
+    expect(matches('flag:maybe', { flagged: true })).toBe(false)
+  })
+
   it('archived: matches the flag (visibility still gated by showArchived upstream)', () => {
     expect(matches('archived:true', { archived: true })).toBe(true)
     expect(matches('archived:true', {})).toBe(false)

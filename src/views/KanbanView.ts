@@ -9,6 +9,7 @@ import type { QueryCtx } from '../store/QueryParser'
 import { dueUrgency, getDefaultPriorityId, isTerminalStatus, safeAsync } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
 import { buildTaskContextMenu } from '../ui/TaskContextMenu'
+import { showUndoNotice } from '../ui/undoNotice'
 import { KanbanColumn, type DropNeighbor, type KanbanCardData } from '../ui/composites/KanbanColumn'
 import { setKanbanSocConfig } from '../ui/composites/KanbanCard'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
@@ -406,7 +407,10 @@ export class KanbanView implements SubView {
           // ponytail: drop order inside the Archive column isn't persisted;
           // archive order is tree order, reordering archived files is noise.
           await this.plugin.store.archiveTask(this.project, taskId)
-          new Notice('Task archived')
+          showUndoNotice(`Archived ${task.title}`, async () => {
+            await this.plugin.store.unarchiveTask(this.project, taskId)
+            await this.onRefresh()
+          })
           await this.refreshWithFlip(taskId)
         } else {
           this.renderBoard() // already archived: snap the live-moved card back
@@ -419,6 +423,11 @@ export class KanbanView implements SubView {
           this.renderBoard() // cancelled: snap the live-moved card back
           return
         }
+        // Captured before the write, for the undo below. ponytail: only status
+        // is restored — the drop path tracks no prior order position, and a
+        // reorder is a same-column drop that shows no notice anyway.
+        const prevStatus = task.status
+        const wasArchived = task.archived
         // Drop out of Archive: unarchive first (the guard already passed), then
         // apply the target status through the normal path.
         if (task.archived) {
@@ -426,6 +435,14 @@ export class KanbanView implements SubView {
           new Notice('Task unarchived')
         }
         await this.plugin.store.updateTask(this.project, taskId, { status: newStatus, ...extra })
+        const label = this.config.statuses.find((s) => s.id === newStatus)?.label ?? newStatus
+        showUndoNotice(`Moved to ${label}`, async () => {
+          // Same store path as the drop itself. Moving OUT of a terminal status
+          // is already unguarded, so the verdict guard never re-prompts here.
+          await this.plugin.store.updateTask(this.project, taskId, { status: prevStatus })
+          if (wasArchived) await this.plugin.store.archiveTask(this.project, taskId)
+          await this.onRefresh()
+        })
       } else if (task.archived) {
         // Drop out of Archive onto the column matching the stored status: no
         // status write, no verdict guard (status unchanged) — just unarchive.

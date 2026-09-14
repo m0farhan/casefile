@@ -201,6 +201,11 @@ export const FIELD_MATCHERS: Record<string, FieldMatcher> = {
     if (value !== 'true' && value !== 'false') return false
     return withNeg(op, !!task.archived === (value === 'true'))
   },
+  // Impediment marker; boolean-as-string like archived:.
+  flag: (task, op, value) => {
+    if (value !== 'true' && value !== 'false') return false
+    return withNeg(op, !!task.flagged === (value === 'true'))
+  },
   // Buckets the pure SLA clock: breached | warn (at risk) | ok | none (no clock applies).
   sla: (task, op, value, ctx) => {
     const policies = ctx.slaPolicies ?? registeredSlaPolicies
@@ -245,6 +250,7 @@ export const FIELD_HELP: { field: string; example: string; hint: string }[] = [
   { field: 'progress', example: 'progress:>=50', hint: 'percent 0–100' },
   { field: 'due', example: 'due:overdue', hint: 'keyword, date, or 7d/2w/1m' },
   { field: 'archived', example: 'archived:true', hint: 'true / false' },
+  { field: 'flag', example: 'flag:true', hint: 'true / false' },
   { field: 'sla', example: 'sla:breached', hint: 'breached / warn / ok / none' },
   { field: 'ioc', example: 'ioc:evil[.]com', hint: 'substring, defanged ok' }
 ]

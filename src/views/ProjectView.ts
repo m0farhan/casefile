@@ -10,6 +10,7 @@ import { KanbanView } from './KanbanView'
 import { BacklogView } from './BacklogView'
 import { ReportsView } from './reports/ReportsView'
 import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
+import { AlertIntakeModal } from '../modals/AlertIntakeModal'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
 import { tickAllSlaChips } from '../soc/slaTicker'
@@ -413,6 +414,14 @@ export class ProjectView extends ItemView {
         })
       })
     }
+
+    new ExtraButtonComponent(right)
+      .setIcon('clipboard-paste')
+      .setTooltip('New case from pasted alert')
+      .onClick(() => {
+        if (!this.project) return
+        new AlertIntakeModal(this.plugin.app, this.plugin, this.project, () => this.refreshProject()).open()
+      })
 
     new ExtraButtonComponent(right)
       .setIcon('settings')

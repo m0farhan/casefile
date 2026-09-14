@@ -1,17 +1,18 @@
 import type PMPlugin from '../../main'
-import type { Project, FilterState, StatusConfig } from '../../types'
+import type { Project, FilterState, StatusConfig, Task } from '../../types'
+import { formatDateLong } from '../../utils'
 import { type FlatTask, flattenTasks } from '../../store/TaskTreeOps'
 import { findTaskById } from '../../store/TaskIndex'
 import { applyTaskFilterFlat, isFilterActive } from '../../store/TaskFilter'
 import { confirmDialog, openTaskModal } from '../../ui/ModalFactory'
 import { renderAddButton } from '../../ui/composites/addButton'
-import { compareTask } from './TableFilters'
+import { compareTask, lastUpdated } from './TableFilters'
 import { renderTaskRow, updateSelectedRow, updateSelectAllCheckbox } from './TableRow'
 
 // 'severity' replaced 'priority' when priority was retired from the UI. A saved view
 // persisted with sortKey 'priority' falls through compareTask's default case (stable,
 // unsorted) — graceful, never a crash.
-type SortKey = 'title' | 'status' | 'severity' | 'due' | 'assignees' | 'progress' | 'sla'
+type SortKey = 'title' | 'status' | 'severity' | 'due' | 'assignees' | 'progress' | 'sla' | 'updated'
 type SortDir = 'asc' | 'desc'
 
 export type { SortKey, SortDir }
@@ -104,7 +105,8 @@ export function renderTable(ctx: TableContext): void {
       ctx.state.sortDir = ctx.state.sortDir === 'asc' ? 'desc' : 'asc'
     } else {
       ctx.state.sortKey = key
-      ctx.state.sortDir = 'asc'
+      // Newest-first is the useful default for a recency column.
+      ctx.state.sortDir = key === 'updated' ? 'desc' : 'asc'
     }
     syncHeaderSort()
     refreshTableBody(ctx)
@@ -160,12 +162,19 @@ export function renderTable(ctx: TableContext): void {
       th.setText(col.label)
     }
   }
-  syncHeaderSort()
-
   for (const cf of ctx.project.customFields) {
     const th = hrow.createEl('th', { text: cf.name })
     th.setCssStyles({ width: '120px' })
   }
+
+  // Updated column: sits after custom fields, mirrored by the cell injected in
+  // renderWindowRows. Registered before syncHeaderSort so a persisted 'updated'
+  // sort paints its indicator on first render.
+  const updatedTh = hrow.createEl('th')
+  updatedTh.setCssStyles({ width: '110px' })
+  updatedTh.createSpan({ text: 'Updated' })
+  wireSortControl(updatedTh, updatedTh, 'updated', 'Updated')
+  syncHeaderSort()
 
   // Actions column header (must be last)
   const actionsTh = hrow.createEl('th')
@@ -273,7 +282,8 @@ function renderWindowRows(ctx: TableContext): void {
   if (!tbody) return
 
   const rows = state.visibleRows
-  const colCount = 10 + ctx.project.customFields.length
+  // 10 fixed cells + custom fields + the Updated column.
+  const colCount = 11 + ctx.project.customFields.length
   const { start, end } = computeWindow(state)
   state.windowStart = start
   state.windowEnd = end
@@ -284,6 +294,7 @@ function renderWindowRows(ctx: TableContext): void {
   const cfg = ctx.plugin.store.configFor(ctx.project)
   for (let i = start; i < end; i++) {
     renderTaskRow(tbody, rows[i].task, rows[i].depth, ctx, cfg)
+    injectUpdatedCell(tbody.lastElementChild, rows[i].task)
   }
   if (end < rows.length) spacerRow(tbody, colCount, (rows.length - end) * state.rowHeight)
 
@@ -307,6 +318,22 @@ function renderWindowRows(ctx: TableContext): void {
       }
     }
   }
+}
+
+/**
+ * Insert the Updated cell into a freshly rendered task row, before the trailing
+ * actions cell (i.e. after any custom-field cells, matching the header order).
+ * ponytail: injected here rather than in TableRow's cell roster so the whole
+ * Updated column lives in this file; fold into TableRow if it grows behavior.
+ */
+function injectUpdatedCell(row: Element | null, task: Task): void {
+  if (!(row instanceof HTMLElement)) return
+  const actions = row.lastElementChild
+  const value = lastUpdated(task)
+  const td = row.createEl('td', { cls: 'pm-table-cell', text: value ? formatDateLong(value) : '—' })
+  // Tooltip shows the stored timestamp verbatim — no invented precision.
+  if (value) td.setAttr('title', value)
+  if (actions) row.insertBefore(td, actions)
 }
 
 function spacerRow(tbody: HTMLElement, colCount: number, height: number): void {

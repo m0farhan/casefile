@@ -61,9 +61,29 @@ export function renderLifecyclePanel(container: HTMLElement, task: Task, opts: {
       renderSummary()
       opts.onChange()
     }
-    input.addEventListener('change', () => commit(localInputToIso(input.value)))
+    // ponytail: kept as a native datetime-local input — DateControl is
+    // date-only (type="date", Today/Clear) and would drop the time component.
+    input.addEventListener('change', () => {
+      // '' here means a partial/invalid edit (datetime-local exposes incomplete
+      // values as ''), not a deliberate clear — clearing goes through the Clear
+      // button. Committing '' mid-edit silently wiped stamps.
+      if (input.value) commit(localInputToIso(input.value))
+    })
+    input.addEventListener('blur', () => {
+      // Partial/invalid value on leave: revert the display to the stored stamp.
+      if (!input.value) input.value = isoToLocalInput(task[f.key])
+    })
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return
+      // First Escape cancels the edit (don't let the modal's Escape close it).
+      e.stopPropagation()
+      input.value = isoToLocalInput(task[f.key])
+      input.blur()
+    })
     const nowBtn = row.createEl('button', { cls: 'pm-soc-btn', text: 'Now' })
     nowBtn.addEventListener('click', () => commit(new Date().toISOString()))
+    const clearBtn = row.createEl('button', { cls: 'pm-soc-btn', text: 'Clear' })
+    clearBtn.addEventListener('click', () => commit(''))
   }
   renderSummary()
 }

@@ -80,6 +80,8 @@ export interface Task {
   severity: string
   /** Incident resolution: '' | true-positive | false-positive | security-testing | anomalous-safe. */
   verdict: string
+  /** Jira-style impediment flag. Serialized only when true; makeTask defaults it to false. */
+  flagged?: boolean
   bucket: IssueBucket
   start: string // YYYY-MM-DD, empty string = unset
   due: string // YYYY-MM-DD, empty string = unset
@@ -463,6 +465,8 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     priority: 'medium',
     severity: '',
     verdict: '',
+    // Always a boolean in memory so activity-log diffs read "false" → "true", never "undefined".
+    flagged: false,
     bucket: 'none',
     start: today().toString(),
     due: '',

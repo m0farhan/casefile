@@ -1,4 +1,4 @@
-import { Menu } from 'obsidian'
+import { Menu, setIcon, setTooltip } from 'obsidian'
 import { getStatusConfig, dueUrgency, isTerminalStatus, safeAsync, stringifyCustomValue } from '../../utils'
 import { totalLoggedHours } from '../../store/TaskTreeOps'
 import type { ResolvedProjectConfig, Task } from '../../types'
@@ -81,7 +81,7 @@ export function renderTaskRow(
     })
   })
 
-  new TitleCell(row, {
+  const titleCell = new TitleCell(row, {
     task,
     depth,
     showTagColors: ctx.plugin.settings.showTagColors,
@@ -107,6 +107,14 @@ export function renderTaskRow(
       })
     }
   })
+  if (task.flagged) {
+    // Leads the title cell (before the type icon) — TitleCell exposes el for
+    // exactly this kind of rider (renderSlaChip on severityCell precedent).
+    const flagEl = titleCell.el.createSpan({ cls: 'pm-flag-icon' })
+    setIcon(flagEl, 'flag')
+    setTooltip(flagEl, 'Flagged')
+    titleCell.el.prepend(flagEl)
+  }
 
   new StatusCell(row, {
     task,

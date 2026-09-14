@@ -119,6 +119,8 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
     priority: (r.priority as Task['priority']) ?? 'medium',
     severity: typeof r.severity === 'string' ? r.severity : '',
     verdict: typeof r.verdict === 'string' ? r.verdict : '',
+    // Anything not literally true (absent, 'yes', 1, …) hydrates to false.
+    flagged: r.flagged === true,
     bucket: hydrateBucket(r.bucket),
     start: (r.start as string) ?? '',
     due: (r.due as string) ?? '',

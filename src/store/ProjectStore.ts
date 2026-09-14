@@ -1038,6 +1038,7 @@ export class ProjectStore implements TaskSource {
     'severity',
     'priority',
     'verdict',
+    'flagged',
     'assignees',
     'due',
     'bucket'
@@ -1178,7 +1179,8 @@ export class ProjectStore implements TaskSource {
         prev.issueType !== task.issueType ||
         prev.bucket !== task.bucket ||
         prev.severity !== task.severity ||
-        prev.verdict !== task.verdict
+        prev.verdict !== task.verdict ||
+        prev.flagged !== task.flagged
       ) {
         this.markDirty(project, [task.id], 'fm')
       }

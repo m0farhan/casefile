@@ -463,3 +463,49 @@ button.pm-verdict-cancel:hover {
   color: var(--gs-ink);
   border-color: var(--gs-hairline-strong);
 }
+
+/* ---------------------------------------------------------------------------
+   ALERT INTAKE (new case from pasted alert)
+   --------------------------------------------------------------------------- */
+.pm-alert-intake {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pm-alert-paste {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-s);
+  background: var(--gs-surface-1);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+.pm-alert-paste:focus {
+  border-color: var(--gs-hairline-strong);
+  box-shadow: var(--gs-focus-ring);
+  outline: none;
+}
+.pm-alert-preview {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+}
+.pm-alert-detected {
+  font-size: 13px;
+}
+.pm-alert-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.pm-alert-ioc-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+.pm-alert-note {
+  font-size: 12px;
+  color: var(--gs-ink-subtle);
+}

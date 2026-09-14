@@ -5,6 +5,7 @@ import { findTaskById } from '../../store/TaskIndex'
 import { formatBadgeText } from '../../utils'
 import { today } from '../../dates'
 import { promptText } from '../../ui/ModalFactory'
+import { showUndoNotice } from '../../ui/undoNotice'
 import { TaskPickerModal } from '../../modals/PickerModals'
 import type { TableContext } from './TableRenderer'
 import { updateSelectAllCheckbox } from './TableRow'
@@ -58,27 +59,44 @@ function updateBarContent(bar: HTMLElement, ctx: TableContext, onAction: (a: Bul
   const left = bar.createDiv('pm-bulk-bar-left')
   left.createSpan({ text: `${count} selected`, cls: 'pm-bulk-bar-count' })
 
-  // Status button
+  // Status button — routes through runBulkPatch (defined below) instead of
+  // onAction: identical write (updateTasks + clear + refresh), plus undo.
   new ButtonComponent(left).setButtonText('Set status').onClick((e) => {
     const menu = new Menu()
     for (const s of ctx.statuses) {
       menu.addItem((item) =>
-        item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => onAction({ type: 'set-status', status: s.id }))
+        item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => runBulkPatch({ status: s.id }))
       )
     }
     menu.showAtMouseEvent(e)
   })
 
-  // Severity / Verdict buttons — applied here through store.updateTasks (the
-  // same batch path TableView's BulkAction handler uses; it activity-stamps
-  // both fields) instead of via onAction, so the BulkAction union stays as-is.
+  // Status / Severity / Verdict buttons — applied here through
+  // store.updateTasks (the same batch path TableView's BulkAction handler
+  // uses; it activity-stamps severity and verdict) instead of via onAction,
+  // so the BulkAction union stays as-is and the undo can restore each task's
+  // captured prior values through that same path. The bulk path never runs
+  // the verdict guard, and restoring prior values never moves a task INTO
+  // terminal without a verdict it already had — no re-prompt on undo.
   const runBulkPatch = async (patch: Partial<Task>): Promise<void> => {
     const ids = [...ctx.state.selectedTaskIds]
     if (!ids.length) return
     try {
+      // Capture each task's prior values of the patched fields BEFORE the write.
+      const keys = Object.keys(patch) as (keyof Task)[]
+      const prior = new Map<string, Partial<Task>>()
+      for (const id of ids) {
+        const t = findTaskById(ctx.project, id)
+        if (t) prior.set(id, Object.fromEntries(keys.map((k) => [k, t[k]])))
+      }
       await ctx.plugin.store.updateTasks(ctx.project, ids, patch)
       ctx.state.selectedTaskIds.clear()
       await ctx.onRefresh()
+      const n = prior.size
+      showUndoNotice(`Updated ${n} task${n === 1 ? '' : 's'}`, async () => {
+        await ctx.plugin.store.updateTasks(ctx.project, [...prior.keys()], (t) => prior.get(t.id) ?? null)
+        await ctx.onRefresh()
+      })
     } catch (err) {
       console.error('Bulk action failed', err)
       new Notice('Bulk action failed. Please try again.')

@@ -423,3 +423,15 @@ button.pm-chip-rm {
   margin-left: 6px;
   vertical-align: middle;
 }
+
+/* Impediment flag marker (shared class with kanban.css). */
+.pm-flag-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--gs-red);
+}
+.pm-flag-icon svg {
+  width: 12px;
+  height: 12px;
+}

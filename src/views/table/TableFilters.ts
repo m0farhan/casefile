@@ -27,6 +27,9 @@ export function compareTask(
       return dir * (a.assignees[0] ?? '').localeCompare(b.assignees[0] ?? '')
     case 'progress':
       return dir * (a.progress - b.progress)
+    case 'updated':
+      // ISO-ish strings compare lexicographically; '' (no timestamp at all) sorts oldest.
+      return dir * (lastUpdated(a) ?? '').localeCompare(lastUpdated(b) ?? '')
     case 'sla': {
       // JSM queue parity: ascending = closest-to-breach first (breached = most
       // negative remaining, so plain remainingMs order). No running clock sorts
@@ -39,6 +42,21 @@ export function compareTask(
     default:
       return 0
   }
+}
+
+/**
+ * When the task last changed: the newest timestamp among its activity log,
+ * createdAt and completed date — all real, stored values (task.updatedAt is
+ * re-stamped by the hydrator when absent, so it can't be trusted as history).
+ * Null when the task carries no timestamp at all. Mixed YYYY-MM-DD and ISO
+ * datetime strings compare correctly lexicographically.
+ */
+export function lastUpdated(task: Task): string | null {
+  let newest = ''
+  for (const entry of task.activity) if (entry.at > newest) newest = entry.at
+  if (task.createdAt > newest) newest = task.createdAt
+  if (task.completed > newest) newest = task.completed
+  return newest || null
 }
 
 /** Bucket 0 = running clock (ordered by remainingMs), 1 = no clock, 2 = done/terminal. */

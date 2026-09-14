@@ -45,6 +45,31 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.16.0] - 2026-09-14
+
+### Added
+
+- **Create a case from a pasted alert.** A clipboard button next to add-task
+  (and a command-palette entry) opens a paste box: drop in a monitoring
+  alert and the title (from its Rule line), severity, detected time,
+  description, and every indicator are extracted into an editable preview —
+  anything that can't be parsed stays empty, never guessed. One click
+  creates the incident and opens it.
+- **Undo.** Moving a card to another column, archiving (menu or drop), and
+  bulk edits now show a toast with an Undo button that restores the exact
+  previous values.
+- **Flag.** Right-click → Flag marks a case with a red flag on its card and
+  table row (Jira's impediment marker). Stored in the file, shown in the
+  activity log, searchable with `flag:true`.
+- **Updated column** in the table — the newest recorded change per task,
+  sortable, newest first.
+
+### Fixed
+
+- Escape now cancels an inline date edit in the table instead of committing
+  a half-typed value; the incident timeline's timestamp fields revert on
+  invalid input and each gained a clear button.
+
 ## [2.15.1] - 2026-09-14
 
 ### Fixed (full-plugin audit — 19 verified defects)

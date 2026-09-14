@@ -6,6 +6,8 @@ import { safeAsync } from '../utils'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderStatusDot } from './StatusBadge'
 import { openTaskModal, confirmDialog, confirmDuplicateSubtasks } from './ModalFactory'
+import { showUndoNotice } from './undoNotice'
+import { toggleTaskFlag } from './flagOps'
 
 export interface TaskMenuContext {
   plugin: PMPlugin
@@ -107,6 +109,18 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
     }
   })
   menu.addSeparator()
+  menu.addItem((item) =>
+    item
+      .setTitle(task.flagged ? 'Remove flag' : 'Flag')
+      .setIcon('flag')
+      .onClick(
+        safeAsync(async () => {
+          // No undo notice: the toggle is its own undo.
+          await toggleTaskFlag(ctx.plugin, ctx.project, task)
+          await ctx.onRefresh()
+        })
+      )
+  )
   if (task.archived) {
     menu.addItem((item) =>
       item
@@ -128,7 +142,12 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
         .onClick(
           safeAsync(async () => {
             await ctx.plugin.store.archiveTask(ctx.project, task.id)
-            new Notice('Task archived')
+            // Undo = the existing unarchive op, which restores the file to the
+            // same place unarchiving normally puts it.
+            showUndoNotice(`Archived ${task.title}`, async () => {
+              await ctx.plugin.store.unarchiveTask(ctx.project, task.id)
+              await ctx.onRefresh()
+            })
             await ctx.onRefresh()
           })
         )
