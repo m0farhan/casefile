@@ -2,21 +2,36 @@ import { setIcon } from 'obsidian'
 import type PMPlugin from '../main'
 import type { StatusConfig, Task } from '../types'
 import { makeTask } from '../types'
+import { today } from '../dates'
 import { renderKeyChip } from '../ui/composites/issueMeta'
 import { IconButton } from '../ui/primitives/IconButton'
 import { isTerminalStatus, getCompleteStatusId, getDefaultStatusId } from '../utils'
 
 /**
+ * Checkbox semantics for a subtask row: terminal/default status, full/zero
+ * progress, and the completion date stamped the same way the store stamps a
+ * top-level task (ProjectStore.stampCompletion idiom).
+ * ponytail: no per-subtask activity entry — activity is store-owned and
+ * stamped for the parent patch only; accepted remainder.
+ */
+export function applySubtaskChecked(sub: Task, checked: boolean, statuses: StatusConfig[]): void {
+  sub.status = checked ? getCompleteStatusId(statuses) : getDefaultStatusId(statuses)
+  sub.progress = checked ? 100 : 0
+  sub.completed = checked ? today().toString() : ''
+}
+
+/**
  * Renders the subtasks section: a header with a completed count, the list (each row opens the
  * subtask's own page via onOpen), and an inline add row. The count is derived from how many
- * subtasks sit in a terminal status.
+ * subtasks sit in a terminal status. onChange fires on every mutation (add, check, remove) so
+ * autosave hosts can schedule a save; onRemove additionally reports the removed subtask's id.
  */
 export function renderSubtasksPanel(
   container: HTMLElement,
   task: Task,
   plugin: PMPlugin,
   statuses: StatusConfig[],
-  opts: { onOpen: (sub: Task) => void }
+  opts: { onOpen: (sub: Task) => void; onChange?: () => void; onRemove?: (subtaskId: string) => void }
 ): void {
   const subSection = container.createDiv('pm-modal-section')
 
@@ -47,10 +62,10 @@ export function renderSubtasksPanel(
       const cb = row.createEl('input', { type: 'checkbox', cls: 'pm-subtask-checkbox' })
       cb.checked = isTerminalStatus(sub.status, statuses)
       cb.addEventListener('change', () => {
-        sub.status = cb.checked ? getCompleteStatusId(statuses) : getDefaultStatusId(statuses)
-        sub.progress = cb.checked ? 100 : 0
+        applySubtaskChecked(sub, cb.checked, statuses)
         renderSubtasks()
         renderCount()
+        opts.onChange?.()
       })
 
       if (sub.key) renderKeyChip(row, sub.key)
@@ -85,6 +100,8 @@ export function renderSubtasksPanel(
           task.subtasks = task.subtasks.filter((s) => s.id !== sub.id)
           renderSubtasks()
           renderCount()
+          opts.onRemove?.(sub.id)
+          opts.onChange?.()
         })
     }
   }
@@ -105,5 +122,6 @@ export function renderSubtasksPanel(
     addInput.value = ''
     renderSubtasks()
     renderCount()
+    opts.onChange?.()
   })
 }

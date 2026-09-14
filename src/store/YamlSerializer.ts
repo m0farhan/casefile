@@ -26,7 +26,7 @@ function serializeProjectConfig(config: ProjectConfig | undefined): Record<strin
   return Object.keys(out).length ? out : null
 }
 
-export function serializeProject(project: Project, statuses: StatusConfig[] = []): string {
+export function serializeProject(project: Project, statuses: StatusConfig[] = [], extraBody = ''): string {
   const seen = new Set<string>()
   const tasks: Task[] = []
   for (const t of project.tasks) {
@@ -79,9 +79,61 @@ export function serializeProject(project: Project, statuses: StatusConfig[] = []
     }
     yamlLines.push('')
   }
+  // Hand-written body content recovered from the previous file version
+  // (stripGeneratedProjectContent) — re-emitted verbatim, never regenerated.
+  if (extraBody) {
+    yamlLines.push(extraBody)
+    yamlLines.push('')
+  }
 
   return yamlLines.join('\n')
 }
+
+/**
+ * Frontmatter keys the plugin owns on task notes. Anything else in a task
+ * file's frontmatter is the user's (aliases, cssclasses, …): captured into
+ * `task.extraFrontmatter` at hydrate and re-emitted after the owned keys on
+ * save. Keys listed here are never captured, so extras can't collide with them.
+ */
+export const KNOWN_TASK_FRONTMATTER_KEYS = new Set([
+  TASK_FRONTMATTER_KEY,
+  'projectId',
+  'parentId',
+  'id',
+  'key',
+  'title',
+  'description',
+  'type',
+  'issueType',
+  'status',
+  'priority',
+  'severity',
+  'verdict',
+  'bucket',
+  'start',
+  'due',
+  'detectedAt',
+  'respondedAt',
+  'containedAt',
+  'resolvedAt',
+  'progress',
+  'completed',
+  'assignees',
+  'tags',
+  'iocs',
+  'attack',
+  'activity',
+  'subtasks',
+  'subtaskIds',
+  'dependencies',
+  'recurrence',
+  'timeEstimate',
+  'timeLogs',
+  'customFields',
+  'collapsed',
+  'createdAt',
+  'updatedAt'
+])
 
 export function buildTaskFrontmatter(task: Task, project: Project, parentTask: Task | null): Record<string, unknown> {
   const fm: Record<string, unknown> = {
@@ -121,6 +173,13 @@ export function buildTaskFrontmatter(task: Task, project: Project, parentTask: T
   if (task.iocs.length) fm.iocs = task.iocs
   if (task.attack.length) fm.attack = task.attack
   if (task.activity.length) fm.activity = task.activity
+  // User-added frontmatter keys, after the owned keys. Capture filtered by
+  // KNOWN_TASK_FRONTMATTER_KEYS, so the `in` guard is belt-and-braces only.
+  if (task.extraFrontmatter) {
+    for (const [k, v] of Object.entries(task.extraFrontmatter)) {
+      if (!(k in fm) && !KNOWN_TASK_FRONTMATTER_KEYS.has(k)) fm[k] = v
+    }
+  }
   return fm
 }
 

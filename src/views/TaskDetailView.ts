@@ -67,6 +67,23 @@ interface TaskDetailState {
 }
 
 /**
+ * Top-level fields whose working value differs from the snapshot (JSON
+ * compare — key order is stable because working descends from the same
+ * clone). Fields the panel never touched stay out of the patch, so a stale
+ * clone can no longer revert edits made elsewhere (board drag-to-Done, etc.).
+ */
+export function diffTaskPatch(snapshot: Task, working: Task): Partial<Task> {
+  const patch: Record<string, unknown> = {}
+  const keys = new Set([...Object.keys(snapshot), ...Object.keys(working)])
+  for (const key of keys) {
+    const before = (snapshot as unknown as Record<string, unknown>)[key]
+    const after = (working as unknown as Record<string, unknown>)[key]
+    if (JSON.stringify(before) !== JSON.stringify(after)) patch[key] = after
+  }
+  return patch
+}
+
+/**
  * Right-leaf task detail panel — the triage alternative to TaskModal (list
  * left, detail right). Edits a deep clone like the modal, but persists with a
  * debounced autosave instead of an explicit Save. Title is the exception: a
@@ -92,6 +109,10 @@ export class TaskDetailView extends ItemView {
   private commentHadFocus = false
   /** Activity collapse flag, owner-held so rerenders don't snap it shut (shownExtras precedent). */
   private activityState = { collapsed: true }
+  /** Pristine deep clone of the last persisted state; persist() sends only fields that differ from it. */
+  private snapshot: Task | null = null
+  /** Subtask ids removed in the panel since the last successful save — only these get their files trashed. */
+  private removedSubtaskIds: string[] = []
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -148,6 +169,8 @@ export class TaskDetailView extends ItemView {
     await this.plugin.store.loadTaskBody(live)
     this.project = project
     this.task = JSON.parse(JSON.stringify(live)) as Task
+    this.snapshot = JSON.parse(JSON.stringify(live)) as Task
+    this.removedSubtaskIds = []
     this.persistedTitle = this.task.title
     this.lastStatus = this.task.status
     this.dirty = false
@@ -196,13 +219,25 @@ export class TaskDetailView extends ItemView {
 
   /** Debounce-path save: everything except the in-flight title edit. */
   private async persist(): Promise<void> {
-    if (!this.project || !this.task) return
+    if (!this.project || !this.task || !this.snapshot) return
     this.dirty = false
+    // Diff against the pristine snapshot and send only what this panel
+    // changed — the whole stale clone as a patch reverted concurrent edits
+    // made elsewhere (drag a card to Done, type here → status undone on disk).
+    const patch = diffTaskPatch(this.snapshot, { ...this.task, title: this.persistedTitle })
+    const removed = this.removedSubtaskIds
+    if (!Object.keys(patch).length && !removed.length) return
     try {
-      await this.plugin.store.updateTask(this.project, this.task.id, { ...this.task, title: this.persistedTitle })
+      await this.plugin.store.updateTask(
+        this.project,
+        this.task.id,
+        patch,
+        removed.length ? { removedSubtaskIds: removed } : undefined
+      )
+      this.removedSubtaskIds = []
       // Store-side stamps (activity entries, lifecycle timestamps, completion)
       // land on the LIVE task, not this editor clone. Sync them back, or the
-      // next debounced whole-task patch would overwrite them with stale values.
+      // next debounced patch would diff against stale values.
       const live = this.project.taskIndex.get(this.task.id)?.task
       if (live) {
         this.task.activity = JSON.parse(JSON.stringify(live.activity)) as Task['activity']
@@ -210,6 +245,8 @@ export class TaskDetailView extends ItemView {
         this.task.resolvedAt = live.resolvedAt
         this.task.completed = live.completed
       }
+      // Snapshot follows the save: the next diff is relative to what's on disk.
+      this.snapshot = JSON.parse(JSON.stringify({ ...this.task, title: this.persistedTitle })) as Task
       // The store marks this write as a self-write, so open boards deliberately
       // skip their file-watcher reload — but that skip assumes the SAVING view
       // refreshes itself. The panel is a different view: poke the boards.
@@ -331,7 +368,10 @@ export class TaskDetailView extends ItemView {
       plugin: this.plugin,
       parentId: project.taskIndex.get(task.id)?.parentId ?? null,
       // Reparenting is a modal affordance; the panel keeps hierarchy read-only.
+      // Without a working picker, "Subtask of…" would wedge tasks as
+      // parentless subtasks — so the merged Type dropdown drops that option.
       setParentId: () => {},
+      parentPickerEnabled: false,
       rerender: () => {
         if (task.status !== this.lastStatus) {
           void this.onStatusChanged(task)
@@ -385,9 +425,12 @@ export class TaskDetailView extends ItemView {
           task: live,
           onSave: () => this.plugin.refreshProjectViews()
         })
-      }
+      },
+      // Click-only edits never pass through the body 'input' delegation below.
+      onChange: () => this.scheduleSave(),
+      onRemove: (id) => this.removedSubtaskIds.push(id)
     })
-    renderTimeTrackingPanel(body, task)
+    renderTimeTrackingPanel(body, task, { onChange: () => this.scheduleSave() })
 
     // Any input inside the body (subtask titles, time logs) marks the clone
     // dirty; the field controls above already do it via rerender(), and the

@@ -477,6 +477,10 @@
   outline: none;
   box-shadow: var(--gs-focus-ring);
 }
+/* In-flight create: the input is disabled until the insert settles (single-flight). */
+.pm-kanban-create-input:disabled {
+  opacity: 0.6;
+}
 
 /* ─ Casefile SOC ambient ─ */
 /* Severity + sla + ioc-count chips on incident cards (chip bases shared with the table) */

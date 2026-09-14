@@ -14,6 +14,7 @@ import { Component, MarkdownRenderer, Notice, type App } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { IconButton } from '../ui/primitives/IconButton'
+import { toggleRenderedCheckbox } from './checkboxToggle'
 import { toggleInlineMarker } from './inlineFormat'
 import { classifyLine, computeInlineMarks, fenceMap } from './livePreviewMarks'
 import { NoteLinkSuggest } from './NoteLinkSuggest'
@@ -344,11 +345,7 @@ export function renderDescriptionEditor(
   }
 
   const toggleCheckbox = (index: number) => {
-    let count = 0
-    task.description = task.description.replace(/^([ \t]*[-*+] \[)([ x])(\])/gm, (match, pre, state, post) => {
-      if (count++ === index) return pre + (state === ' ' ? 'x' : ' ') + post
-      return match
-    })
+    task.description = toggleRenderedCheckbox(task.description, index)
     void renderPreview()
   }
 

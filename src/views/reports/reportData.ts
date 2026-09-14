@@ -238,7 +238,10 @@ export function reportSummary(
   policies: Record<string, SlaPolicy>,
   now: number
 ): ReportSummary {
-  const open = tasks.filter((t) => !isTerminal(t.status)).length
+  // The reports corpus deliberately includes archived tasks (history must
+  // survive archiving), but archived is closed-for-work regardless of status —
+  // an archived never-closed task is not open work.
+  const open = tasks.filter((t) => !t.archived && !isTerminal(t.status)).length
   const closedThisWeek = openedClosedPerWeek(tasks, 1, now)[0]?.closed ?? 0
   const truePositives = incidents.filter((t) => t.verdict === 'true-positive').length
   const rows = slaCompliance(incidents, policies, now)
@@ -259,7 +262,7 @@ export interface SeverityCount {
   count: number
 }
 
-/** Open (non-terminal) incidents per severity, in config order; unset severity last. Zero rows omitted. */
+/** Open (non-terminal, non-archived) incidents per severity, in config order; unset severity last. Zero rows omitted. */
 export function openBySeverity(
   incidents: Task[],
   isTerminal: (statusId: string) => boolean,
@@ -267,7 +270,7 @@ export function openBySeverity(
 ): SeverityCount[] {
   const counts = new Map<string, number>()
   for (const t of incidents) {
-    if (isTerminal(t.status)) continue
+    if (t.archived || isTerminal(t.status)) continue
     const sev = t.severity || ''
     counts.set(sev, (counts.get(sev) ?? 0) + 1)
   }

@@ -50,6 +50,11 @@ export interface KanbanColumnProps {
   onDrop: (taskId: string, newStatus: string, before: DropNeighbor | null) => Promise<void>
   /** Present = the column foot shows the inline '+ Create' affordance (absent on Archive). */
   onInlineCreate?: (title: string) => Promise<void>
+  /** Build with the inline-create input already open holding this draft (undefined = closed). */
+  createDraft?: string
+  /** Open/typed/closed changes to the inline-create input, so the owning view
+   *  can restore it across rebuilds. A string is the current draft; null = closed. */
+  onCreateStateChange?: (draft: string | null) => void
 }
 
 export class KanbanColumn {
@@ -149,46 +154,76 @@ export class KanbanColumn {
       })
     )
 
-    if (props.onInlineCreate) this.renderInlineCreate(col, props.onInlineCreate)
+    if (props.onInlineCreate) this.renderInlineCreate(col, props.onInlineCreate, props)
   }
 
   /** Quiet '+ Create' at the column foot; click swaps it for a borderless input (Jira rapid entry). */
-  private renderInlineCreate(col: HTMLElement, onCreate: (title: string) => Promise<void>): void {
+  private renderInlineCreate(
+    col: HTMLElement,
+    onCreate: (title: string) => Promise<void>,
+    props: KanbanColumnProps
+  ): void {
+    // Every open/typed/closed transition is reported so the owning view can
+    // rebuild the board without losing an open input or its half-typed draft.
+    const report = (draft: string | null): void => props.onCreateStateChange?.(draft)
     const wrap = col.createDiv('pm-kanban-col-create')
     const showButton = (): void => {
       wrap.empty()
       const btn = wrap.createEl('button', { cls: 'pm-kanban-create-btn' })
       setIcon(btn.createSpan({ cls: 'pm-kanban-create-icon' }), 'plus')
       btn.appendText('Create')
-      btn.addEventListener('click', () => showInput())
+      btn.addEventListener('click', () => {
+        report('')
+        showInput('')
+      })
     }
-    const showInput = (): void => {
+    const showInput = (draft: string): void => {
       wrap.empty()
       const input = wrap.createEl('input', {
         type: 'text',
         cls: 'pm-kanban-create-input',
         attr: { placeholder: 'What needs doing?', 'aria-label': 'New task title' }
       })
+      input.value = draft
+      input.addEventListener('input', () => report(input.value))
       input.addEventListener(
         'keydown',
         safeAsync(async (e: KeyboardEvent) => {
           if (e.key === 'Escape') {
+            report(null)
             showButton()
           } else if (e.key === 'Enter') {
             const title = input.value.trim()
-            if (!title) return
-            // The create refreshes the board; KanbanView reopens a fresh input
-            // in this column afterwards, keeping the rapid-entry loop going.
-            await onCreate(title)
+            // Single-flight: holding Enter repeats keydown while the create is
+            // still persisting, and each repeat would insert a duplicate. A
+            // disabled input receives no key events; re-enabled on failure so
+            // the analyst can retry (on success the refresh replaces it).
+            if (!title || input.disabled) return
+            input.disabled = true
+            try {
+              // The create refreshes the board; KanbanView reopens a fresh input
+              // in this column afterwards, keeping the rapid-entry loop going.
+              await onCreate(title)
+            } finally {
+              input.disabled = false
+              // Disabling blurred it; restore focus for a retry after failure.
+              // After success this input is already detached, so this no-ops.
+              input.focus()
+            }
           }
         })
       )
       input.addEventListener('blur', () => {
-        if (!input.value.trim()) showButton()
+        if (!input.value.trim() && !input.disabled) {
+          report(null)
+          showButton()
+        }
       })
       input.focus()
+      input.setSelectionRange(input.value.length, input.value.length)
     }
-    showButton()
+    if (props.createDraft !== undefined) showInput(props.createDraft)
+    else showButton()
   }
 
   /** Narrow vertical strip: rotated label + count; clicking anywhere expands. */

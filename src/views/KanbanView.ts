@@ -25,6 +25,39 @@ import type { SubView } from './SubView'
  */
 const ARCHIVE_COLUMN_ID = '__archive__'
 
+/**
+ * Half-typed inline-create drafts, keyed project·lane·status (presence = the
+ * input is open). Module-level on purpose: an external file change rebuilds
+ * the whole KanbanView instance (ProjectView.loadProject → renderCurrentView),
+ * so instance state would die exactly when the draft matters most.
+ * ponytail: never pruned on project close — a handful of short strings; two
+ * panes on one project sharing a draft is harmless.
+ */
+const createDrafts = new Map<string, string>()
+
+/**
+ * Field patch an inline create applies so the card materializes in the lane
+ * it was created in. null = no create affordance in this lane at all:
+ * ponytail: an epic lane can't be honored honestly (a task belongs to an epic
+ * through real parentage, which inline create must not fake), so the
+ * affordance renders only in the no-epic lane — the task modal creates under
+ * an epic.
+ */
+export function laneCreatePatch(groupBy: KanbanLaneGroup, laneKey: string): Partial<Task> | null {
+  switch (groupBy) {
+    case 'epic':
+      return laneKey === '' ? {} : null
+    case 'severity':
+      return laneKey === '' ? {} : { severity: laneKey }
+    case 'bucket':
+      return { bucket: laneKey as Task['bucket'] }
+    case 'assignee':
+      return laneKey === '' ? {} : { assignees: [laneKey] }
+    case 'none':
+      return {}
+  }
+}
+
 export class KanbanView implements SubView {
   private dragTask: Task | null = null
   /** True while handleDrop is persisting, so dragend's snap-back render skips. */
@@ -55,11 +88,6 @@ export class KanbanView implements SubView {
     // keying — the rebuilt DOM enumerates in the same order) and restore after.
     const cardScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-cards')].map((el) => el.scrollTop)
     const rowScrolls = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-board')].map((el) => el.scrollLeft)
-    // An open inline-create input must survive the rebuild (Enter-create
-    // refreshes the board mid-loop). Positional keying, same as the scrolls.
-    const openCreateIdx = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-col-create')].findIndex(
-      (el) => el.querySelector('input') !== null
-    )
     // Card ids present before the rebuild: anything absent from this set is
     // genuinely new and gets the enter fade (inert under reduced motion via
     // the CSS-side guards). First render is covered by the column stagger.
@@ -88,6 +116,9 @@ export class KanbanView implements SubView {
       }
       const board = this.container.createDiv('pm-kanban-board')
       lastBoard = board
+      // Inline create carries the lane's field so the card lands in the lane
+      // it was created in; null = the lane can't host an honest create.
+      const lanePatch = laneCreatePatch(groupBy, lane.key)
       for (const status of this.config.statuses) {
         const tasks = lane.tasks.filter((t) => t.status === status.id)
         // The epic chip is noise inside its own epic's lane — the lane header already says it.
@@ -104,6 +135,7 @@ export class KanbanView implements SubView {
             cards[i].nested = true
           }
         }
+        const draftKey = `${this.project.filePath}\u0000${lane.key}\u0000${status.id}`
         new KanbanColumn(board, {
           status,
           cards,
@@ -130,7 +162,16 @@ export class KanbanView implements SubView {
             if (!this.dropInFlight) this.renderBoard()
           },
           onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before),
-          onInlineCreate: (title) => this.handleInlineCreate(status.id, title)
+          onInlineCreate: lanePatch
+            ? (title) => this.handleInlineCreate(status.id, title, lanePatch, draftKey)
+            : undefined,
+          createDraft: lanePatch ? createDrafts.get(draftKey) : undefined,
+          onCreateStateChange: lanePatch
+            ? (draft) => {
+                if (draft === null) createDrafts.delete(draftKey)
+                else createDrafts.set(draftKey, draft)
+              }
+            : undefined
         })
       }
     }
@@ -148,22 +189,33 @@ export class KanbanView implements SubView {
     rowScrolls.forEach((left, i) => {
       if (rows[i]) rows[i].scrollLeft = left
     })
-    if (openCreateIdx >= 0) {
-      const wraps = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-col-create')]
-      wraps[openCreateIdx]?.querySelector<HTMLElement>('button')?.click()
-    }
     if (beforeIds.size) markEnter(this.container, '.pm-kanban-card[data-task-id]', beforeIds)
   }
 
   /** Inline '+ Create' at a column foot: same store path as the new-task modal (insertTask). */
-  private async handleInlineCreate(status: TaskStatus, title: string): Promise<void> {
+  private async handleInlineCreate(
+    status: TaskStatus,
+    title: string,
+    lanePatch: Partial<Task>,
+    draftKey: string
+  ): Promise<void> {
     const task = makeTask({
       title,
       status,
-      priority: getDefaultPriorityId(this.config.priorities)
+      priority: getDefaultPriorityId(this.config.priorities),
+      ...lanePatch
     })
     await this.plugin.store.insertTask(this.project, task)
+    // Success clears the half-typed draft but keeps the input open (draft ''),
+    // so the refresh reopens an empty input — the rapid-entry loop.
+    createDrafts.set(draftKey, '')
     await this.onRefresh()
+    // Same call visibleTasks() gates the board with: a created card that fails
+    // the active filter is invisible, which reads as "creation failed" — say
+    // where it went instead. Never mutates the filter.
+    if (!matchesFilter(task, this.filter, this.config.statuses, this.queryCtx())) {
+      new Notice('Created — hidden by the active filter')
+    }
   }
 
   private renderLanesBar(groupBy: KanbanLaneGroup): void {
@@ -382,10 +434,15 @@ export class KanbanView implements SubView {
       }
       // reorderTask persists sibling order through the shared parent's list, so a
       // neighbor under a different parent (possible when subtask cards are shown)
-      // can't be persisted — skip the reorder silently, keeping the status change.
+      // can't be persisted — skip the reorder, keeping the status change, and
+      // say why the card snapped back instead of discarding the drop silently.
       // With subtasks hidden both cards are top-level, so the parents match (null).
-      if (before && findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
-        await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
+      if (before) {
+        if (findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
+          await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
+        } else {
+          new Notice("That slot sits inside another card's subtasks")
+        }
       }
       await this.refreshWithFlip(taskId)
     } finally {

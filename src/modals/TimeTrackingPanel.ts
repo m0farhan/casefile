@@ -7,9 +7,11 @@ import { ProgressBar } from '../ui/primitives/ProgressBar'
 
 /**
  * Renders the time tracking section (estimate, progress bar, log entries)
- * into the given container.
+ * into the given container. onChange fires on the click-only mutations (add
+ * log, remove log) — typing in the row inputs already reaches autosave hosts
+ * through their body-level 'input' delegation.
  */
-export function renderTimeTrackingPanel(container: HTMLElement, task: Task): void {
+export function renderTimeTrackingPanel(container: HTMLElement, task: Task, opts?: { onChange?: () => void }): void {
   if (task.type === 'milestone') return
 
   const timeSection = container.createDiv('pm-modal-section')
@@ -78,6 +80,7 @@ export function renderTimeTrackingPanel(container: HTMLElement, task: Task): voi
         .onClick(() => {
           logs.splice(i, 1)
           renderLogs()
+          opts?.onChange?.()
         })
     }
   }
@@ -91,5 +94,6 @@ export function renderTimeTrackingPanel(container: HTMLElement, task: Task): voi
       note: ''
     })
     renderLogs()
+    opts?.onChange?.()
   })
 }

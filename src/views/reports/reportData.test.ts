@@ -190,6 +190,20 @@ describe('reportSummary', () => {
     const sum = reportSummary([], [], isDone, {}, NOW)
     expect(sum.slaMetPct).toBeNull()
   })
+
+  it('an archived never-closed task is not open work, but stays in history', () => {
+    const archived = makeTask({
+      status: 'in-progress', // non-terminal — archived alone must close it for work
+      archived: true,
+      createdAt: '2026-07-29T08:00:00.000Z',
+      completed: '2026-07-30'
+    })
+    const live = makeTask({ status: 'todo' })
+    expect(reportSummary([archived, live], [], isDone, {}, NOW).open).toBe(1)
+    // History must survive archiving: the same task still counts in the
+    // weekly opened/closed buckets. Do NOT "fix" this the other way.
+    expect(openedClosedPerWeek([archived], 1, NOW)[0]).toMatchObject({ opened: 1, closed: 1 })
+  })
 })
 
 describe('openBySeverity', () => {
@@ -209,5 +223,14 @@ describe('openBySeverity', () => {
       { severityId: 'sev3', count: 1 },
       { severityId: '', count: 1 }
     ])
+  })
+
+  it('an archived incident is not open, even with a non-terminal status', () => {
+    const rows = openBySeverity(
+      [makeTask({ status: 'todo', severity: 'sev1', archived: true }), makeTask({ status: 'todo', severity: 'sev1' })],
+      isDone,
+      ['sev1']
+    )
+    expect(rows).toEqual([{ severityId: 'sev1', count: 1 }])
   })
 })

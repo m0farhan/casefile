@@ -1,5 +1,5 @@
 import type PMPlugin from '../main'
-import type { IssueBucket, Project, Task, Recurrence } from '../types'
+import type { IssueBucket, IssueTypeConfig, Project, Task, Recurrence } from '../types'
 import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { wouldCreateCycle } from '../store/Scheduler'
@@ -24,6 +24,9 @@ export interface TaskFormFieldsContext {
   setParentId: (id: string | null) => void
   rerender: () => void
   shownExtras: Set<string>
+  /** Hosts without a working parent picker (their setParentId is a no-op) pass
+   * false to drop 'Subtask of…' from the merged Type dropdown. Default true. */
+  parentPickerEnabled?: boolean
 }
 
 /* The structural kinds fold into the ONE type dropdown alongside the issue
@@ -32,6 +35,31 @@ export interface TaskFormFieldsContext {
  * issue type can never collide. */
 const MILESTONE_OPTION_ID = '__milestone__'
 const SUBTASK_OPTION_ID = '__subtask__'
+
+/** The merged Type dropdown: the project's issue types plus the structural
+ * kinds. 'Subtask of…' only offers itself where the host can actually pick a
+ * parent — otherwise it would mint parentless 'subtask' rows. */
+export function typeOptions(issueTypes: IssueTypeConfig[], parentPickerEnabled: boolean): SelectItem[] {
+  const options: SelectItem[] = [
+    ...issueTypes.map((t) => ({ id: t.id, label: t.label, color: t.color, icon: t.icon || undefined })),
+    { id: MILESTONE_OPTION_ID, label: 'Milestone', icon: 'diamond' }
+  ]
+  if (parentPickerEnabled) options.push({ id: SUBTASK_OPTION_ID, label: 'Subtask of…', icon: 'git-branch' })
+  return options
+}
+
+/** The task's own id plus every descendant's. None of these may become the
+ * task's parent — re-parenting under a descendant creates an index cycle and
+ * an infinite ancestor walk. */
+export function subtreeIds(task: Task): Set<string> {
+  const ids = new Set<string>()
+  const walk = (t: Task) => {
+    ids.add(t.id)
+    for (const s of t.subtasks) walk(s)
+  }
+  walk(task)
+  return ids
+}
 
 const REPEAT_OPTIONS: SelectItem[] = [
   { id: 'none', label: 'Does not repeat', icon: 'repeat' },
@@ -62,11 +90,7 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       renderSelectControl({
         container: cell,
         value: task.type === 'milestone' ? MILESTONE_OPTION_ID : task.issueType,
-        options: [
-          ...issueTypes.map((t) => ({ id: t.id, label: t.label, color: t.color, icon: t.icon || undefined })),
-          { id: MILESTONE_OPTION_ID, label: 'Milestone', icon: 'diamond' },
-          { id: SUBTASK_OPTION_ID, label: 'Subtask of…', icon: 'git-branch' }
-        ],
+        options: typeOptions(issueTypes, ctx.parentPickerEnabled ?? true),
         onChange: (id) => {
           if (id === MILESTONE_OPTION_ID) {
             task.type = 'milestone'
@@ -97,9 +121,12 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       'Parent task',
       () => {
         const cell = createDiv('pm-prop-value')
+        // Excluding the whole subtree (not just self): picking a descendant as
+        // parent cycles the index and hangs the ancestor walk.
+        const excluded = subtreeIds(task)
         const parents = flattenTasks(project.tasks)
           .map((f) => f.task)
-          .filter((t) => t.id !== task.id)
+          .filter((t) => !excluded.has(t.id))
         renderSelectControl({
           container: cell,
           value: ctx.parentId,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { makeTask, type Task } from '../types'
+import { makeTask, type StatusConfig, type Task } from '../types'
 import {
   addTaskToTree,
   cloneTaskSubtree,
@@ -9,6 +9,7 @@ import {
   filterArchived,
   findTask,
   flattenTasks,
+  mergeMissingSubtasks,
   moveTaskInTree,
   totalLoggedHours,
   updateTaskInTree
@@ -250,5 +251,73 @@ describe('cloneTaskSubtree — Casefile field semantics', () => {
     expect(clone.iocs).not.toBe(source.iocs)
     expect(clone.iocs[0]).not.toBe(source.iocs[0])
     expect(clone.attack).not.toBe(source.attack)
+  })
+})
+
+describe('cloneTaskSubtree — a duplicate is new work', () => {
+  const STATUSES: StatusConfig[] = [
+    { id: 'todo', label: 'Todo', color: '#888', icon: '', complete: false },
+    { id: 'done', label: 'Done', color: '#0a0', icon: '', complete: true }
+  ]
+
+  it('resets a terminal status to the default and clears completed, per node', () => {
+    // Cloning done+completed while the verdict resets would mint a
+    // closed-without-verdict incident.
+    const child = makeTask({ id: 'c', status: 'done', completed: '2026-01-02' })
+    const source = makeTask({
+      id: 's',
+      status: 'done',
+      completed: '2026-01-01',
+      verdict: 'true-positive',
+      subtasks: [child]
+    })
+    const clone = cloneTaskSubtree(source, true, STATUSES)
+    expect(clone.status).toBe('todo')
+    expect(clone.completed).toBe('')
+    expect(clone.verdict).toBe('')
+    expect(clone.subtasks[0].status).toBe('todo')
+    expect(clone.subtasks[0].completed).toBe('')
+  })
+
+  it('keeps a non-terminal status but still clears completed', () => {
+    const clone = cloneTaskSubtree(makeTask({ id: 's', status: 'todo', completed: '2026-01-01' }), false, STATUSES)
+    expect(clone.status).toBe('todo')
+    expect(clone.completed).toBe('')
+  })
+})
+
+describe('mergeMissingSubtasks', () => {
+  it('preserves a live subtask missing from a stale patch array', () => {
+    const liveA = task({ id: 'a', title: 'A' })
+    const liveB = task({ id: 'b', title: 'B' })
+    const live = task({ id: 'p', subtasks: [liveA, liveB] })
+    const staleA = task({ id: 'a', title: 'A renamed' }) // the clone predates B
+
+    const merged = mergeMissingSubtasks(live, [staleA], [])
+
+    expect(merged.map((t) => t.id)).toEqual(['a', 'b'])
+    expect(merged[0]).toBe(staleA) // patch wins for what it contains
+    expect(merged[1]).toBe(liveB) // the live object rides along untouched
+  })
+
+  it('removes a subtask (and its live descendants) only when explicitly listed', () => {
+    const b = task({ id: 'b', subtasks: [task({ id: 'b1' })] })
+    const live = task({ id: 'p', subtasks: [task({ id: 'a' }), b] })
+
+    const merged = mergeMissingSubtasks(live, [task({ id: 'a' })], ['b'])
+
+    expect(flattenTasks(merged).map((f) => f.task.id)).toEqual(['a'])
+  })
+
+  it('re-attaches a preserved nested subtask under its old parent in the patched tree', () => {
+    const grand = task({ id: 'g' })
+    const live = task({ id: 'p', subtasks: [task({ id: 'a', subtasks: [grand] })] })
+    const staleA = task({ id: 'a', subtasks: [] }) // clone predates g
+
+    const merged = mergeMissingSubtasks(live, [staleA], [])
+
+    expect(merged[0]).toBe(staleA)
+    expect(merged[0].subtasks.map((t) => t.id)).toEqual(['g'])
+    expect(merged[0].subtasks[0]).toBe(grand)
   })
 })

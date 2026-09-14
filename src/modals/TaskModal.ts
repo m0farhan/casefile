@@ -25,6 +25,14 @@ export class TaskModal extends Modal {
   private originalParentId: string | null
   /** Live status at open time — the verdict guard runs only when the save changes it. */
   private originalStatus: string
+  /** Title at open time — restored on close if the analyst cleared it, so the
+   * other edits still save (a title is required, but never at the cost of the
+   * rest of the form). */
+  private originalTitle: string
+  /** Subtask ids removed via the panel this session; passed to updateTask so
+   * only these get their files trashed (live subtasks missing from the patch
+   * for any other reason are preserved). */
+  private removedSubtaskIds: string[] = []
   private cancelled = false
   private saved = false
   private persistPromise: Promise<void> | null = null
@@ -75,6 +83,7 @@ export class TaskModal extends Modal {
     }
     this.originalParentId = this.parentId
     this.originalStatus = this.task.status
+    this.originalTitle = this.task.title
   }
 
   onOpen(): void {
@@ -86,18 +95,18 @@ export class TaskModal extends Modal {
   }
 
   onClose(): void {
-    if (
-      this.plugin.settings.saveTaskOnClose &&
-      !this.isNew &&
-      !this.cancelled &&
-      !this.saved &&
-      this.task.title.trim()
-    ) {
+    if (this.plugin.settings.saveTaskOnClose && !this.isNew && !this.cancelled && !this.saved) {
+      // A cleared title never discards the rest of the edits — keep the
+      // original title and save everything else.
+      if (!this.task.title.trim()) {
+        this.task.title = this.originalTitle
+        new Notice('Title kept — a title is required.')
+      }
       const conflict = this.plugin.store.findTaskFileConflict(this.project, this.task)
       if (conflict) {
         new Notice(`Task not saved: a note named "${conflict.fileName}" already exists.`)
       } else {
-        void this.persistTask()
+        this.persistOnClose()
       }
     }
     if (this.saveKeyHandler) {
@@ -110,6 +119,24 @@ export class TaskModal extends Modal {
     this.commentsSection = null
     this.contentEl.empty()
   }
+
+  /** Save-on-close runs the SAME verdict guard as the Save button — a terminal
+   * status change must never slip out unguarded through Esc / X / click-out.
+   * The task modal is already torn down when the guard resolves, so a
+   * cancelled guard cannot reopen it: the status change is dropped instead
+   * and everything else still saves. */
+  private readonly persistOnClose = safeAsync(async () => {
+    if (this.task.status !== this.originalStatus) {
+      const patch = await guardVerdictOnClose(this.plugin, this.project, this.task, this.task.status)
+      if (patch === null) {
+        this.task.status = this.originalStatus
+        new Notice('Status change not saved — the verdict prompt was cancelled. Other edits were saved.')
+      } else if (patch.verdict) {
+        this.task.verdict = patch.verdict
+      }
+    }
+    await this.persistTask()
+  })
 
   private persistTask(): Promise<void> {
     if (this.persistPromise) return this.persistPromise
@@ -126,14 +153,19 @@ export class TaskModal extends Modal {
   }
 
   private async runPersist(): Promise<void> {
+    // ponytail: 'Subtask of…' with no parent picked is not a subtask — a
+    // top-level task typed 'subtask' confuses every tree walk downstream.
+    if (this.task.type === 'subtask' && this.parentId == null) this.task.type = 'task'
+    const opts = { removedSubtaskIds: this.removedSubtaskIds }
     if (this.isNew) {
       await this.plugin.store.insertTask(this.project, this.task, this.parentId)
     } else if (this.parentId !== this.originalParentId) {
-      await this.plugin.store.updateTask(this.project, this.task.id, this.task)
+      await this.plugin.store.updateTask(this.project, this.task.id, this.task, opts)
       await this.plugin.store.moveTask(this.project, this.task.id, this.parentId)
     } else {
-      await this.plugin.store.updateTask(this.project, this.task.id, this.task)
+      await this.plugin.store.updateTask(this.project, this.task.id, this.task, opts)
     }
+    this.removedSubtaskIds = []
     await this.plugin.store.scheduleAfterChange(this.project, this.task.id)
     await this.onSave(this.task)
   }
@@ -398,6 +430,9 @@ export class TaskModal extends Modal {
           task: live,
           onSave: () => this.plugin.refreshProjectViews()
         })
+      },
+      onRemove: (subtaskId) => {
+        this.removedSubtaskIds.push(subtaskId)
       }
     })
 

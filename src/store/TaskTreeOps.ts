@@ -1,5 +1,6 @@
-import type { Task } from '../types'
+import type { StatusConfig, Task } from '../types'
 import { makeId } from '../types'
+import { getDefaultStatusId, isTerminalStatus } from '../utils'
 
 /** Flatten a task tree into a list, preserving depth info */
 export interface FlatTask {
@@ -78,28 +79,33 @@ export function addTaskToTree(tasks: Task[], newTask: Task, parentId: string | n
  * When includeSubtasks is true, the whole subtree is cloned and dependencies
  * that target another node within the subtree are remapped to the new ids;
  * dependencies pointing outside the subtree are preserved as-is.
+ * A duplicate is new work: a node cloned from a terminal status restarts at the
+ * default status (otherwise the reset verdict/lifecycle would mint a
+ * closed-without-verdict incident), and `completed` is always cleared.
  */
-export function cloneTaskSubtree(source: Task, includeSubtasks: boolean): Task {
+export function cloneTaskSubtree(source: Task, includeSubtasks: boolean, statuses: StatusConfig[] = []): Task {
   const idMap = new Map<string, string>()
-  const clone = cloneNode(source, includeSubtasks, idMap)
+  const clone = cloneNode(source, includeSubtasks, idMap, statuses)
   if (includeSubtasks) remapDeps(clone, idMap)
   return clone
 }
 
-function cloneNode(source: Task, includeSubtasks: boolean, idMap: Map<string, string>): Task {
+function cloneNode(source: Task, includeSubtasks: boolean, idMap: Map<string, string>, statuses: StatusConfig[]): Task {
   const now = new Date().toISOString()
   const newId = makeId()
   idMap.set(source.id, newId)
   return {
     ...source,
     id: newId,
+    status: isTerminalStatus(source.status, statuses) ? getDefaultStatusId(statuses) : source.status,
+    completed: '',
     // Keys are immutable and never reused — a duplicate gets a fresh one on save.
     key: '',
     filePath: undefined,
     createdAt: now,
     updatedAt: now,
     collapsed: false,
-    subtasks: includeSubtasks ? source.subtasks.map((s) => cloneNode(s, true, idMap)) : [],
+    subtasks: includeSubtasks ? source.subtasks.map((s) => cloneNode(s, true, idMap, statuses)) : [],
     dependencies: [...source.dependencies],
     assignees: [...source.assignees],
     tags: [...source.tags],
@@ -141,6 +147,42 @@ export function repointDescendantFiles(task: Task, from: string, to: string): { 
     }
   }
   return moved
+}
+
+/**
+ * Merge a possibly stale editor subtask array with the live tree: a live
+ * subtask absent from `patched` is PRESERVED (the same live object, its
+ * subtree, index entry and file untouched) unless it — or an ancestor — is
+ * listed in `removedIds`. Destructive removal always requires explicit intent;
+ * a stale clone alone can never delete a subtask created elsewhere meanwhile.
+ * Preserved nodes re-attach under their old parent (appended after the
+ * patched siblings); patched order and edits win for everything the patch
+ * does contain. Mutates and returns `patched`.
+ *
+ * ponytail: a removed id nested inside a PRESERVED (patch-unknown) ancestor is
+ * not detached — the editor can only remove subtasks its clone contains, so
+ * that state is unreachable from the UI; revisit if a non-editor caller ever
+ * passes removals for nodes outside its own patch.
+ */
+export function mergeMissingSubtasks(live: Task, patched: Task[], removedIds: Iterable<string>): Task[] {
+  const removed = new Set(removedIds)
+  const present = new Set(flattenTasks(patched).map((f) => f.task.id))
+  for (const { task, parentId } of flattenTasks(live.subtasks)) {
+    if (removed.has(task.id)) {
+      // Explicit removal takes the live descendants with it (matching how the
+      // removed note's own folder carries its nested subtask files).
+      for (const d of flattenTasks(task.subtasks)) removed.add(d.task.id)
+      continue
+    }
+    if (present.has(task.id)) continue
+    // The editor's array predates this subtask — keep the live object; its
+    // descendants ride along, so mark them present too.
+    present.add(task.id)
+    for (const d of flattenTasks(task.subtasks)) present.add(d.task.id)
+    const parent = parentId ? findTask(patched, parentId) : null
+    ;(parent ? parent.subtasks : patched).push(task)
+  }
+  return patched
 }
 
 /** Move a task before or after another task in the tree (same level) */

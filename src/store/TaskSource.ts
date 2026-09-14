@@ -45,7 +45,12 @@ export interface TaskSource {
     sources: Map<string, TFile>,
     handling: 'move' | 'copy'
   ): Promise<number>
-  updateTask(project: Project, taskId: string, patch: Partial<Task>): Promise<void>
+  updateTask(
+    project: Project,
+    taskId: string,
+    patch: Partial<Task>,
+    opts?: { removedSubtaskIds?: string[] }
+  ): Promise<void>
   updateTasks(
     project: Project,
     taskIds: string[],

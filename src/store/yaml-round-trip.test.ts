@@ -439,3 +439,63 @@ describe('comments section round-trip', () => {
     expect(md).not.toContain('## Comments')
   })
 })
+
+describe('hand-written trailing content round-trip', () => {
+  it('keeps a hand-written section below the generated Subtasks list through hydrate and re-serialize', () => {
+    const child = makeTask({ id: 'c-keep', title: 'Child' })
+    const original = makeTask({ id: 'keep-1', description: 'Desc.', subtasks: [child] })
+    const project = makeProject('Test', 'Projects/Test.md')
+    const hand = '## My notes\nHand-written, keep me.'
+    const edited = `${serializeTask(original, project, null)}\n\n${hand}`
+
+    const { frontmatter, body } = parseFrontmatter(edited)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    const { task } = hydrateTaskFromFile(frontmatter, body, 'Projects/Tasks/Test/t.md')
+    expect(task.description).toContain(hand)
+
+    const again = serializeTask(task, project, null)
+    expect(again).toContain(hand)
+    // Stable from now on: a second round-trip reproduces the same description.
+    const { frontmatter: fm2, body: body2 } = parseFrontmatter(again)
+    if (!fm2) throw new Error('frontmatter missing')
+    expect(hydrateTaskFromFile(fm2, body2, 'Projects/Tasks/Test/t.md').task.description).toBe(task.description)
+  })
+})
+
+describe('user-added frontmatter keys round-trip', () => {
+  it('captures unknown keys at hydrate and re-emits them after the owned keys', () => {
+    const fm: Record<string, unknown> = {
+      id: 't1',
+      title: 'T',
+      status: 'in-progress',
+      aliases: ['INC-42'],
+      cssclasses: ['wide'],
+      'analyst-shift': 'nights'
+    }
+    const { task } = hydrateTaskFromFile(fm, '', 'p.md')
+    expect(task.extraFrontmatter).toEqual({
+      aliases: ['INC-42'],
+      cssclasses: ['wide'],
+      'analyst-shift': 'nights'
+    })
+
+    const md = serializeTask(task, makeProject('Test', 'Projects/Test.md'), null)
+    const { frontmatter } = parseFrontmatter(md)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    expect(frontmatter.aliases).toEqual(['INC-42'])
+    expect(frontmatter.cssclasses).toEqual(['wide'])
+    expect(frontmatter['analyst-shift']).toBe('nights')
+    // Owned keys stay owned: the plugin's values win, extras never collide.
+    expect(frontmatter.status).toBe('in-progress')
+    expect(frontmatter.title).toBe('T')
+
+    // And they survive a second hydrate identically.
+    const second = hydrateTaskFromFile(frontmatter, '', 'p.md').task
+    expect(second.extraFrontmatter).toEqual(task.extraFrontmatter)
+  })
+
+  it('does not capture owned keys as extras, and a task with none has no extraFrontmatter', () => {
+    const { task } = hydrateTaskFromFile({ id: 't2', title: 'Plain', status: 'todo' }, '', 'p.md')
+    expect(task.extraFrontmatter).toBeUndefined()
+  })
+})

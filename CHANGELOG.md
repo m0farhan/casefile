@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## Folded in across 2.2.x–2.4.x
+
+Everything in this section shipped long ago (it predated the versioned
+entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ### Changed (severity replaces priority)
 
@@ -41,6 +44,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A task description rewrapped its text when clicked for editing
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
+
+## [2.15.1] - 2026-09-14
+
+### Fixed (full-plugin audit — 19 verified defects)
+
+- **Picking a task's own subtask as its parent hung Obsidian** in an endless
+  loop. The picker no longer offers descendants, and the store refuses the
+  move outright as a second line of defense.
+- **The side panel's autosave could quietly undo other changes**: it saved
+  its whole stale copy, which could revert a status changed on the board,
+  delete a subtask created elsewhere, and erase SLA-breach entries from the
+  activity log. The panel now saves only the fields it actually changed;
+  removing a subtask is an explicit operation; the activity log is owned by
+  the store and can no longer be overwritten by an editor's stale copy.
+- **Hand-written content in notes survives saves**: text below the generated
+  sections of a task note, the body of the project note, and any frontmatter
+  keys you added yourself (aliases, cssclasses, …) are all preserved now.
+- **Closing the dialog with Esc respects the verdict guard** — a move to a
+  done status prompts for a verdict on every path, not just the Save button.
+  Clearing a title then closing keeps the old title and saves the rest
+  instead of silently discarding everything.
+- **Side-panel button edits actually save**: removing a subtask, ticking its
+  checkbox, and adding or removing a time log now schedule the autosave.
+  Ticking a subtask also stamps its completion date.
+- **Inline board create**: Enter can no longer double-create; creating inside
+  a severity/bucket/assignee swimlane lands in that lane (epic lanes only
+  offer create in the no-epic lane); creating under an active filter says
+  "Created — hidden by the active filter"; a half-typed title survives board
+  rebuilds and column collapse.
+- **Read-mode checkboxes toggle the right line** with capital `[X]`, custom
+  states, and checkbox-looking lines inside code fences.
+- Duplicating a closed incident no longer clones the closed status without
+  its verdict — a duplicate starts as open work.
+- Reports no longer count archived, never-closed cases as open.
+- "Subtask of…" can no longer save a parentless subtask, and the side panel
+  (where the parent picker doesn't apply) no longer offers it.
 
 ## [2.15.0] - 2026-08-22
 

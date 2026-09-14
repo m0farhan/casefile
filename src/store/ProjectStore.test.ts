@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { makeFakeApp, type FakeVault } from '../../test/fakeVault'
 import { DEFAULT_SETTINGS, makeTask, type PMSettings, type Project, type StatusConfig, type Task } from '../types'
 import { ProjectStore } from './ProjectStore'
+import { parseFrontmatter } from './YamlParser'
 import { buildTaskIndex } from './TaskIndex'
 import { findTask, flattenTasks } from './TaskTreeOps'
 
@@ -762,7 +763,7 @@ describe('ProjectStore editor subtask save', () => {
     ).toEqual(['New sub', 'Parent'])
   })
 
-  it('renames one subtask and trashes another removed in the editor', async () => {
+  it('renames one subtask and trashes another removed in the editor (with explicit intent)', async () => {
     const { store, vault, app } = newStore()
     const project = await store.createProject('Editor', 'Projects')
     const parent = await addNamed(store, project, 'Parent')
@@ -774,7 +775,7 @@ describe('ProjectStore editor subtask save', () => {
     const edited = JSON.parse(JSON.stringify(live)) as Task
     edited.subtasks = edited.subtasks.filter((s) => s.title !== 'Beta')
     edited.subtasks[0].title = 'Alpha renamed'
-    await store.updateTask(project, parent.id, edited)
+    await store.updateTask(project, parent.id, edited, { removedSubtaskIds: [beta.id] })
 
     expect(vault.getAbstractFileByPath(betaPath)).toBeNull()
     const reloaded = await reload(app, vault, project.filePath)
@@ -1650,5 +1651,189 @@ describe('comments persistence', () => {
     const t3 = expectDefined(findTask(p3.tasks, t2.id))
     await store3.loadTaskBody(t3)
     expect(t3.comments).toEqual([{ at: '2026-07-30 09:00', text: 'Keep me' }])
+  })
+})
+
+describe('ProjectStore stale editor clone safety', () => {
+  const reload = async (app: App, vault: FakeVault, path: string): Promise<Project> => {
+    const file = vault.getAbstractFileByPath(path)
+    if (!(file instanceof TFile)) throw new Error('missing file')
+    return expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(file))
+  }
+
+  it('preserves a subtask created elsewhere while the editor held a stale clone', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Stale', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+
+    // The detail panel opens: it works on a deep clone of the parent.
+    const clone = JSON.parse(JSON.stringify(parent)) as Task
+    // Meanwhile a subtask is created via the board context menu.
+    const boardChild = await addNamed(store, project, 'Board child', parent.id)
+    const childPath = expectDefined(boardChild.filePath)
+
+    // The panel autosaves its stale whole-task clone (no removal intent).
+    clone.severity = 'sev2'
+    await store.updateTask(project, parent.id, clone)
+
+    // The board-created subtask survives: tree, index, and file all intact.
+    const live = expectDefined(findTask(project.tasks, parent.id))
+    expect(live.subtasks.map((s) => s.id)).toContain(boardChild.id)
+    expect(project.taskIndex.has(boardChild.id)).toBe(true)
+    expect(vault.getAbstractFileByPath(childPath)).toBeInstanceOf(TFile)
+    expect(live.severity).toBe('sev2') // the clone's own edit still applied
+
+    const reloaded = await reload(app, vault, project.filePath)
+    expect(flattenTasks(reloaded.tasks).map((f) => f.task.title)).toContain('Board child')
+  })
+
+  it('still applies ordering and edits from the patch to subtasks it does contain', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Order', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const a = await addNamed(store, project, 'Alpha', parent.id)
+    const b = await addNamed(store, project, 'Beta', parent.id)
+
+    const live = expectDefined(findTask(project.tasks, parent.id))
+    const clone = JSON.parse(JSON.stringify(live)) as Task
+    const c = await addNamed(store, project, 'Gamma', parent.id) // created after the clone
+
+    clone.subtasks.reverse() // [Beta, Alpha]
+    clone.subtasks[1].title = 'Alpha renamed'
+    await store.updateTask(project, parent.id, clone)
+
+    const saved = expectDefined(findTask(project.tasks, parent.id))
+    expect(saved.subtasks.map((s) => s.id)).toEqual([b.id, a.id, c.id])
+    expect(saved.subtasks[1].title).toBe('Alpha renamed')
+  })
+
+  it('keeps an activity entry appended to the live task when a stale whole-clone patch saves', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Audit', 'Projects')
+    const task = await addNamed(store, project, 'Incident')
+
+    const clone = JSON.parse(JSON.stringify(task)) as Task // modal opens
+    // A notifier appends an entry to the live task while the modal is open.
+    await store.appendActivity(project, task.id, {
+      at: '2026-01-01T00:00:00.000Z',
+      field: 'sla',
+      from: '',
+      to: 'response breached'
+    })
+
+    await store.updateTask(project, task.id, { ...clone, status: 'in-progress' })
+
+    const fields = task.activity.map((e) => e.field)
+    expect(fields).toContain('sla') // the breach entry survived the stale clone
+    expect(fields).toContain('status') // and the patch's own diff still stamped
+  })
+})
+
+describe('ProjectStore hand-written note content', () => {
+  it('keeps a hand-written section below the generated Subtasks list across a full rewrite', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Hand', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await addNamed(store, project, 'Child', parent.id)
+    const path = expectDefined(parent.filePath)
+    const hand = '## My notes\nHand-written, below the generated list.'
+    const file = vault.getAbstractFileByPath(path)
+    if (!(file instanceof TFile)) throw new Error('missing parent file')
+    await vault.process(file, (c) => `${c}\n\n${hand}`)
+
+    // Fresh store: reload from disk, then trigger a whole-clone full rewrite.
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const pf = vault.getAbstractFileByPath(project.filePath)
+    if (!(pf instanceof TFile)) throw new Error('missing project file')
+    const reloaded = expectDefined(await store2.loadProject(pf))
+    const liveParent = expectDefined(findTask(reloaded.tasks, parent.id))
+    const clone = JSON.parse(JSON.stringify(liveParent)) as Task
+    await store2.updateTask(reloaded, parent.id, clone)
+
+    expect(await vault.cachedRead(file)).toContain(hand)
+  })
+
+  it('keeps hand-written project note content across saves, byte-stable in that region', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Casenotes', 'Projects')
+    await addNamed(store, project, 'Alpha')
+    const file = vault.getAbstractFileByPath(project.filePath)
+    if (!(file instanceof TFile)) throw new Error('missing project file')
+    const hand = '## Investigation notes\nKeep me.'
+    await vault.process(file, (c) => `${c}\n${hand}\n`)
+
+    await store.saveProject(project)
+    const first = await vault.cachedRead(file)
+    expect(first).toContain(hand)
+    expect(first.split('## Investigation notes').length - 1).toBe(1) // never duplicated
+
+    await store.saveProject(project)
+    const second = await vault.cachedRead(file)
+    expect(second.split('## Investigation notes').length - 1).toBe(1)
+    // Byte-for-byte in the hand-written region (frontmatter timestamps differ).
+    expect(second.slice(second.indexOf('## Investigation notes'))).toBe(
+      first.slice(first.indexOf('## Investigation notes'))
+    )
+  })
+
+  it('keeps user-added frontmatter keys on a task through a frontmatter-only update', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Fm', 'Projects')
+    const task = await addNamed(store, project, 'Aliased')
+    const path = expectDefined(task.filePath)
+    const file = vault.getAbstractFileByPath(path)
+    if (!(file instanceof TFile)) throw new Error('missing task file')
+    // A user adds their own keys by hand.
+    await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      fm.aliases = ['INC-42']
+    })
+
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const pf = vault.getAbstractFileByPath(project.filePath)
+    if (!(pf instanceof TFile)) throw new Error('missing project file')
+    const reloaded = expectDefined(await store2.loadProject(pf))
+    await store2.updateTask(reloaded, task.id, { status: 'in-progress' }) // fm-only save path
+
+    const { frontmatter } = parseFrontmatter(await vault.cachedRead(file))
+    if (!frontmatter) throw new Error('frontmatter missing')
+    expect(frontmatter.aliases).toEqual(['INC-42'])
+    expect(frontmatter.status).toBe('in-progress')
+  })
+})
+
+describe('ProjectStore duplicate of a closed task', () => {
+  it('restarts at the default status with completed cleared (never closed-without-verdict)', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Dupdone', 'Projects')
+    const task = await addNamed(store, project, 'Closed out')
+    await store.updateTask(project, task.id, { status: 'done', verdict: 'true-positive' })
+    expect(task.completed).not.toBe('')
+
+    const copy = expectDefined(await store.duplicateTask(project, task.id, false))
+    expect(copy.status).toBe('todo')
+    expect(copy.completed).toBe('')
+    expect(copy.verdict).toBe('')
+  })
+})
+
+describe('ProjectStore move-cycle guard', () => {
+  it('refuses to move a task under its own descendant or itself', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Cycle', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const child = await addNamed(store, project, 'Child', parent.id)
+    const grand = await addNamed(store, project, 'Grand', child.id)
+    const shape = [parent.id, child.id, grand.id]
+
+    await store.moveTask(project, parent.id, grand.id)
+    expect(flattenTasks(project.tasks).map((f) => f.task.id)).toEqual(shape)
+    expect(project.taskIndex.get(parent.id)?.parentId ?? null).toBeNull()
+
+    await store.moveTask(project, parent.id, parent.id)
+    expect(flattenTasks(project.tasks).map((f) => f.task.id)).toEqual(shape)
+
+    await store.moveTasks(project, [parent.id], grand.id)
+    expect(flattenTasks(project.tasks).map((f) => f.task.id)).toEqual(shape)
+    expect(project.taskIndex.get(parent.id)?.parentId ?? null).toBeNull()
   })
 })
