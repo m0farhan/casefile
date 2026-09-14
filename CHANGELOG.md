@@ -45,6 +45,25 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.17.0] - 2026-09-14
+
+### Added
+
+- **Linked cases.** Mark a case as blocking, relating to, or duplicating
+  another — the other case shows the inverse automatically ("Blocked by…").
+  Below the explicit links, cases sharing indicators appear as derived
+  rows ("Shares 3 indicators", labeled derived, computed from real IOC
+  overlap — never stored as an assertion). Links round-trip in frontmatter.
+- **Evidence section.** Every screenshot and file embedded in the
+  description or journal, listed with type icons, sizes, and open buttons.
+  Dangling references stay listed as "missing" — a broken evidence link is
+  worth seeing.
+- **Case report.** Right-click → "Generate case report" writes a markdown
+  writeup next to the case file: summary, incident timeline, response-target
+  outcomes, a defanged indicator table, linked cases, the journal, and the
+  description verbatim — every value from recorded fields, empty sections
+  saying "not recorded", indicator values only ever defanged.
+
 ## [2.16.0] - 2026-09-14
 
 ### Added

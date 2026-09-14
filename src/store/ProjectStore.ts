@@ -1032,7 +1032,10 @@ export class ProjectStore implements TaskSource {
     else if (!nowComplete && wasComplete) patch.completed = ''
   }
 
-  /** Fields whose changes land in the append-only audit log. A const list, not config. */
+  /** Fields whose changes land in the append-only audit log. A const list, not config.
+   * ponytail: `links` is deliberately NOT tracked — an object-array diff stringifies
+   * unreadably ("[object Object]"); add a per-entry diff like the iocs block below
+   * if link changes ever need to land in the log. */
   private static readonly ACTIVITY_FIELDS = [
     'status',
     'severity',
@@ -1180,7 +1183,9 @@ export class ProjectStore implements TaskSource {
         prev.bucket !== task.bucket ||
         prev.severity !== task.severity ||
         prev.verdict !== task.verdict ||
-        prev.flagged !== task.flagged
+        prev.flagged !== task.flagged ||
+        // Object array: JSON compare (order is part of the value; both sides descend from clones).
+        JSON.stringify(prev.links ?? []) !== JSON.stringify(task.links ?? [])
       ) {
         this.markDirty(project, [task.id], 'fm')
       }

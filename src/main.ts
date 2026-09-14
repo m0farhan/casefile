@@ -22,6 +22,7 @@ import {
 import { AlertIntakeModal } from './modals/AlertIntakeModal'
 import { Notifier } from './components/Notifier'
 import { buildHandover } from './soc/handover'
+import { generateCaseReport } from './soc/caseReport'
 import { ensureFolder } from './store/vaultFs'
 import { migrateProjects } from './migration'
 import { isCasesLayout, isProjectFolderLayout, projectFileName, taskFolderForProjectPath } from './store/layout'
@@ -193,6 +194,14 @@ export default class PMPlugin extends Plugin {
       name: 'Generate shift handover',
       callback: () => {
         void this.generateShiftHandover()
+      }
+    })
+
+    this.addCommand({
+      id: 'generate-case-report',
+      name: 'Generate case report for the open case',
+      callback: () => {
+        void this.generateCaseReportForActiveFile()
       }
     })
 
@@ -449,6 +458,28 @@ export default class PMPlugin extends Plugin {
       await this.app.vault.create(path, md)
     }
     await this.app.workspace.openLinkText(path, '', true)
+  }
+
+  /**
+   * "Open case" for the report command = the active file, matched against the
+   * loaded projects' task files. There is no sync marker for task files, so
+   * this resolves after load and explains itself when the file is not a case.
+   */
+  private async generateCaseReportForActiveFile(): Promise<void> {
+    const file = this.app.workspace.getActiveFile()
+    if (!file) {
+      this.showNotice('Open a case file first.')
+      return
+    }
+    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
+    for (const project of projects) {
+      const hit = flattenTasks(project.tasks).find((f) => f.task.filePath === file.path)
+      if (hit) {
+        await generateCaseReport(this, project, hit.task)
+        return
+      }
+    }
+    this.showNotice('The active file is not a case file.')
   }
 
   /**

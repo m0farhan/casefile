@@ -568,3 +568,53 @@ button.pm-comment-add:hover {
   font-size: 12px;
   color: var(--gs-ink-subtle);
 }
+
+/* -- Evidence (attachments) section -------------------------------------- */
+.pm-evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pm-evidence-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  transition: background 150ms ease-out;
+}
+.pm-evidence-row:hover {
+  background: var(--background-modifier-hover);
+}
+.pm-evidence-row:hover .pm-icon-btn--hover-only {
+  opacity: 1;
+}
+.pm-evidence-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--gs-ink-subtle);
+}
+.pm-evidence-icon svg {
+  width: 12px;
+  height: 12px;
+}
+.pm-evidence-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-evidence-size {
+  font-size: 11px;
+  color: var(--gs-ink-tertiary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.pm-evidence-missing {
+  font-size: 11px;
+  color: var(--gs-ink-tertiary);
+  font-style: italic;
+  flex-shrink: 0;
+}

@@ -23,6 +23,15 @@ export const BUCKETS: { id: IssueBucket; label: string }[] = [
 
 export type IocType = 'ip' | 'domain' | 'hash' | 'url' | 'email'
 
+export type TaskLinkType = 'blocks' | 'relates-to' | 'duplicates'
+
+/** Typed case link (Jira parity). Stored one-way on the declaring task; the
+ * other end renders it as a derived inverse row, never writes it. */
+export interface TaskLink {
+  type: TaskLinkType
+  taskId: string
+}
+
 export interface Ioc {
   type: IocType
   value: string
@@ -103,6 +112,8 @@ export interface Task {
   comments?: Comment[]
   subtasks: Task[]
   dependencies: string[] // task IDs
+  /** Typed case links this task declares. Absent when none — serialized only when non-empty. */
+  links?: TaskLink[]
   recurrence?: Recurrence
   timeEstimate?: number // hours
   timeLogs?: TimeLog[]

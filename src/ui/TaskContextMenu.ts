@@ -8,6 +8,7 @@ import { renderStatusDot } from './StatusBadge'
 import { openTaskModal, confirmDialog, confirmDuplicateSubtasks } from './ModalFactory'
 import { showUndoNotice } from './undoNotice'
 import { toggleTaskFlag } from './flagOps'
+import { generateCaseReport } from '../soc/caseReport'
 
 export interface TaskMenuContext {
   plugin: PMPlugin
@@ -109,6 +110,16 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
     }
   })
   menu.addSeparator()
+  menu.addItem((item) =>
+    item
+      .setTitle('Generate case report')
+      .setIcon('file-text')
+      .onClick(
+        safeAsync(async () => {
+          await generateCaseReport(ctx.plugin, ctx.project, task)
+        })
+      )
+  )
   menu.addItem((item) =>
     item
       .setTitle(task.flagged ? 'Remove flag' : 'Flag')

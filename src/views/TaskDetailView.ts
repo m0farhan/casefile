@@ -9,6 +9,8 @@ import { renderIocSection } from '../soc/IocSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderSubtasksPanel } from '../modals/SubtasksPanel'
+import { renderLinksPanel } from '../modals/LinksPanel'
+import { renderAttachmentsSection } from '../modals/AttachmentsSection'
 import { findTaskById } from '../store/TaskIndex'
 import { openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
@@ -393,6 +395,8 @@ export class TaskDetailView extends ItemView {
       // 'input' events the body-level delegation below relies on.
       onChange: () => this.scheduleSave()
     })
+    // Evidence (files referenced in description/comments) — read-only, no save wiring.
+    renderAttachmentsSection(body, { app: this.app, project, task })
     if (task.issueType === 'incident') {
       renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave() })
       renderIocSection(body, task, {
@@ -429,6 +433,25 @@ export class TaskDetailView extends ItemView {
       // Click-only edits never pass through the body 'input' delegation below.
       onChange: () => this.scheduleSave(),
       onRemove: (id) => this.removedSubtaskIds.push(id)
+    })
+    // Linked cases: click-only mutations never fire the body 'input' delegation,
+    // so onChange schedules the save explicitly — the panel mutates the clone's
+    // links array, and diffTaskPatch picks the changed field up off it.
+    renderLinksPanel(body, {
+      app: this.app,
+      plugin: this.plugin,
+      project,
+      task,
+      onChange: () => this.scheduleSave(),
+      onOpen: (target) => {
+        const live = findTaskById(project, target.id)
+        if (!live) return
+        // Honors openTaskIn: in panel mode this panel becomes the linked case's page.
+        openTaskModal(this.plugin, project, {
+          task: live,
+          onSave: () => this.plugin.refreshProjectViews()
+        })
+      }
     })
     renderTimeTrackingPanel(body, task, { onChange: () => this.scheduleSave() })
 

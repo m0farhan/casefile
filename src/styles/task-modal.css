@@ -344,6 +344,83 @@
   text-underline-offset: 2px;
 }
 
+/* Linked cases */
+.pm-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pm-link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-s);
+  transition: background 150ms ease-out;
+}
+.pm-link-row:hover {
+  background: var(--background-modifier-hover);
+}
+/* Type chip, the pm-subtask-status idiom without the dot */
+.pm-link-chip {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+  padding: 2px 8px;
+  border: 1px solid var(--gs-hairline);
+  border-radius: 99px;
+  background: var(--gs-surface-2);
+}
+/* Quiet suffix marking a computed row (indicator overlap) */
+.pm-link-chip--derived {
+  border-style: dashed;
+  background: transparent;
+  font-style: italic;
+}
+.pm-link-title {
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+.pm-link-title:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pm-link-title:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -1px;
+}
+.pm-link-missing {
+  font-size: 13px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+.pm-link-hint,
+.pm-links-more {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.pm-links-more {
+  padding: 2px 8px;
+}
+.pm-links-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+}
+.pm-link-row .pm-icon-btn {
+  margin-left: auto;
+}
+.pm-links-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
 /* Modal footer */
 .pm-modal-footer {
   display: flex;

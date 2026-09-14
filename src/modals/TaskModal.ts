@@ -16,6 +16,8 @@ import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderActivitySection } from '../views/TaskDetailView'
 import { renderTimeTrackingPanel } from './TimeTrackingPanel'
 import { renderSubtasksPanel } from './SubtasksPanel'
+import { renderLinksPanel } from './LinksPanel'
+import { renderAttachmentsSection } from './AttachmentsSection'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from './DescriptionEditor'
 import { renderCommentsSection, type CommentsSectionHandle } from '../soc/CommentsSection'
 
@@ -384,6 +386,9 @@ export class TaskModal extends Modal {
       }
     })
 
+    // ── Evidence (files referenced in description/comments) ─────────────────
+    renderAttachmentsSection(body, { app: this.app, project: this.project, task: this.task })
+
     // ── Incident sections (timeline + indicators) ───────────────────────────
     // onChange is a no-op here: the modal persists the whole clone on Save.
     if (this.task.issueType === 'incident') {
@@ -433,6 +438,28 @@ export class TaskModal extends Modal {
       },
       onRemove: (subtaskId) => {
         this.removedSubtaskIds.push(subtaskId)
+      }
+    })
+
+    // ── Linked cases ────────────────────────────────────────────────────────
+    // onChange is a no-op: link mutations ride the whole-clone save like IOCs.
+    renderLinksPanel(body, {
+      app: this.app,
+      plugin: this.plugin,
+      project: this.project,
+      task: this.task,
+      onChange: () => {},
+      onOpen: (target) => {
+        const live = findTaskById(this.project, target.id)
+        if (!live) return
+        // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
+        this.saved = false
+        this.cancelled = false
+        this.close()
+        openTaskModal(this.plugin, this.project, {
+          task: live,
+          onSave: () => this.plugin.refreshProjectViews()
+        })
       }
     })
 

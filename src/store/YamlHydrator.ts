@@ -10,6 +10,7 @@ import type {
   SavedView,
   StatusConfig,
   Task,
+  TaskLink,
   ViewMode
 } from '../types'
 import { BUCKETS, makeTask } from '../types'
@@ -27,6 +28,7 @@ declare module '../types' {
 }
 
 const IOC_TYPES = new Set(['ip', 'domain', 'hash', 'url', 'email'])
+const LINK_TYPES = new Set(['blocks', 'relates-to', 'duplicates'])
 const BUCKET_IDS = new Set(BUCKETS.map((b) => b.id))
 
 function hydrateBucket(raw: unknown): IssueBucket {
@@ -48,6 +50,20 @@ function hydrateIocs(raw: unknown): Ioc[] {
     })
   }
   return iocs
+}
+
+/** Accept only well-formed entries ({type in the union, taskId string}); drop garbage silently (hydrateIocs precedent). */
+function hydrateLinks(raw: unknown): TaskLink[] {
+  if (!Array.isArray(raw)) return []
+  const links: TaskLink[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const l = entry as Record<string, unknown>
+    if (typeof l.type !== 'string' || !LINK_TYPES.has(l.type)) continue
+    if (typeof l.taskId !== 'string' || !l.taskId) continue
+    links.push({ type: l.type as TaskLink['type'], taskId: l.taskId })
+  }
+  return links
 }
 
 function hydrateActivity(raw: unknown): ActivityEntry[] {
@@ -108,6 +124,8 @@ export function hydrateSavedViews(raw: unknown[]): SavedView[] {
 
 /** Map raw frontmatter fields to a Task, with optional overrides */
 export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Task>): Task {
+  // Absent when empty (flagged/recurrence idiom): the key never round-trips into files.
+  const links = hydrateLinks(r.links)
   return makeTask({
     id: r.id as string,
     key: typeof r.key === 'string' ? r.key : '',
@@ -131,6 +149,7 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
     progress: typeof r.progress === 'number' ? r.progress : 0,
     completed: (r.completed as string) ?? '',
     iocs: hydrateIocs(r.iocs),
+    ...(links.length ? { links } : {}),
     attack: Array.isArray(r.attack) ? [...(r.attack as string[])].filter((t) => typeof t === 'string') : [],
     activity: hydrateActivity(r.activity),
     // Copy container fields rather than aliasing them. On the metadataCache

@@ -123,6 +123,7 @@ export const KNOWN_TASK_FRONTMATTER_KEYS = new Set([
   'tags',
   'iocs',
   'attack',
+  'links',
   'activity',
   'subtasks',
   'subtaskIds',
@@ -175,6 +176,8 @@ export function buildTaskFrontmatter(task: Task, project: Project, parentTask: T
   if (task.resolvedAt) fm.resolvedAt = task.resolvedAt
   if (task.iocs.length) fm.iocs = task.iocs
   if (task.attack.length) fm.attack = task.attack
+  // iocs idiom: emitted only when non-empty, omitted key otherwise.
+  if (task.links?.length) fm.links = task.links
   if (task.activity.length) fm.activity = task.activity
   // User-added frontmatter keys, after the owned keys. Capture filtered by
   // KNOWN_TASK_FRONTMATTER_KEYS, so the `in` guard is belt-and-braces only.
