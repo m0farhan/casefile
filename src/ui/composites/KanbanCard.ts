@@ -4,6 +4,7 @@ import {
   DEFAULT_SEVERITIES,
   DEFAULT_SLA_POLICIES,
   type IssueTypeConfig,
+  type Recurrence,
   type SeverityConfig,
   type SlaPolicy,
   type Task
@@ -56,6 +57,14 @@ let socConfig: KanbanSocConfig | null = null
 
 export function setKanbanSocConfig(cfg: KanbanSocConfig): void {
   socConfig = cfg
+}
+
+/** Tooltip text for the card's repeat marker: 'Repeats weekly' / 'Repeats every 2 weeks'. */
+export function recurrenceLabel(rec: Recurrence): string {
+  const adverb = { daily: 'daily', weekly: 'weekly', monthly: 'monthly', yearly: 'yearly' }[rec.interval]
+  if (rec.every <= 1) return `Repeats ${adverb}`
+  const unit = { daily: 'days', weekly: 'weeks', monthly: 'months', yearly: 'years' }[rec.interval]
+  return `Repeats every ${rec.every} ${unit}`
 }
 
 export class KanbanCard {
@@ -177,6 +186,11 @@ export class KanbanCard {
       const flagEl = footLeft.createSpan({ cls: 'pm-flag-icon' })
       setIcon(flagEl, 'flag')
       setTooltip(flagEl, 'Flagged')
+    }
+    if (task.recurrence) {
+      const recurEl = footLeft.createSpan({ cls: 'pm-recur-icon' })
+      setIcon(recurEl, 'repeat')
+      setTooltip(recurEl, recurrenceLabel(task.recurrence))
     }
 
     const footRight = footer.createDiv('pm-kanban-card-footer-right')

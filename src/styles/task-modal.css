@@ -8,6 +8,12 @@
   max-height: 88vh;
 }
 
+/* Only the task editor widens for its two-column layout; every other modal
+   keeps the 680px base above. */
+.pm-modal.pm-modal--task {
+  max-width: min(1040px, 94vw);
+}
+
 .pm-task-modal {
   display: flex;
   flex-direction: column;

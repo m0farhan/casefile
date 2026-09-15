@@ -546,3 +546,15 @@
   width: 12px;
   height: 12px;
 }
+
+/* Recurring-task marker: quiet muted glyph beside the flag (no bright fills). */
+.pm-recur-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--gs-ink-muted);
+}
+.pm-recur-icon svg {
+  width: 12px;
+  height: 12px;
+}

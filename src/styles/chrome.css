@@ -115,6 +115,18 @@
   flex-wrap: wrap;
 }
 
+/* Stay-open multi-select popover behind the filter chips. Panel chrome
+   (surface, hairline border, radius, fixed positioning) comes from .pm-pop;
+   this bounds the option list and draws the separator above the Clear row. */
+.pm-filter-pop {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.pm-filter-pop-sep {
+  margin: 4px 0;
+  border-top: 1px solid var(--gs-hairline);
+}
+
 /* -- Toolbar --------------------------------------------------------------- */
 .pm-toolbar {
   display: flex;

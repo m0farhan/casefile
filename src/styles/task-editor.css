@@ -509,11 +509,51 @@ input.pm-pop-field:focus {
 .pm-te-props {
   margin-bottom: 14px;
 }
-.pm-te-divider {
-  height: 1px;
-  margin: 14px 0;
-  border: none;
-  background: var(--background-modifier-border);
+
+/* ── Two-column issue layout (Jira-style) ───────────────────────────────────
+   Container queries, not media queries: the detail panel is a leaf whose
+   width has nothing to do with the window's. Both bodies are the containers. */
+.pm-te-body,
+.pm-td-body {
+  container-type: inline-size;
+}
+.pm-te-cols {
+  display: grid;
+  /* minmax(0, 1fr): the CodeMirror editor and the IOC table must not blow
+     the content column out past its track. */
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 0 32px;
+  align-items: start;
+}
+.pm-te-side {
+  position: sticky;
+  top: 0;
+  border-left: 1px solid var(--gs-hairline);
+  padding-left: 24px;
+}
+/* The shared property grid pairs fields two-up with empty spacer divs for
+   alignment; in a 300px rail that leaves no room — one column, spacers gone. */
+.pm-te-side .pm-prop-grid {
+  grid-template-columns: 1fr;
+}
+.pm-te-side .pm-prop-grid > div:empty {
+  display: none;
+}
+/* Narrow host (the right-leaf panel is usually 350–500px): stack with the
+   rail FIRST, which reproduces the old single-column section order. */
+@container (max-width: 640px) {
+  .pm-te-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pm-te-side {
+    order: -1;
+    position: static;
+    border-left: none;
+    padding-left: 0;
+    border-bottom: 1px solid var(--gs-hairline);
+    padding-bottom: 8px;
+    margin-bottom: 14px;
+  }
 }
 
 .pm-te-footer {

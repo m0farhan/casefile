@@ -45,6 +45,27 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.19.0] - 2026-09-15
+
+### Changed
+
+- **Two-column issue layout.** The task editor now reads like a Jira issue:
+  description, evidence, indicators, subtasks, linked cases, comments and
+  activity flow down the left; a properties rail on the right carries the
+  fields, the incident timeline and time tracking, and stays in view while
+  the page scrolls. In narrow panes (the side-by-side detail panel) the rail
+  stacks on top, so nothing gets cramped.
+- **Filters stay open.** The status, severity, verdict, assignee and tag
+  filter menus no longer close after every click — pick several options in
+  one visit while the board updates live behind the menu, then click away
+  or press Escape to dismiss.
+
+### Added
+
+- **Recurring-task marker.** Cards with a repeat schedule show a quiet
+  repeat glyph beside the flag, with the schedule in its tooltip ("Repeats
+  every 2 weeks").
+
 ## [2.18.0] - 2026-09-14
 
 ### Added
