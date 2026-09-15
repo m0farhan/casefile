@@ -520,16 +520,11 @@ input.pm-pop-field:focus {
 .pm-te-cols {
   display: grid;
   /* minmax(0, 1fr): the CodeMirror editor and the IOC table must not blow
-     the content column out past its track. */
-  grid-template-columns: minmax(0, 1fr) 300px;
+     the content column out past its track. 320px rail: narrower clips the
+     AM/PM segment off the timeline's datetime inputs. */
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 0 32px;
   align-items: start;
-}
-.pm-te-side {
-  position: sticky;
-  top: 0;
-  border-left: 1px solid var(--gs-hairline);
-  padding-left: 24px;
 }
 /* The shared property grid pairs fields two-up with empty spacer divs for
    alignment; in a 300px rail that leaves no room — one column, spacers gone. */
@@ -539,6 +534,41 @@ input.pm-pop-field:focus {
 .pm-te-side .pm-prop-grid > div:empty {
   display: none;
 }
+/* Wide host: the rail is a quiet Details card. A bare hairline divider
+   vanishes against the modal background, so the card carries the structure
+   (hairline-strong border, subtle surface lift). Deliberately NOT sticky:
+   an incident rail (fields + timeline + time tracking) is often taller than
+   the scrollport, and a stuck rail's lower rows can never scroll into view —
+   it rides the body scroll instead. */
+@container (min-width: 641px) {
+  .pm-te-side {
+    background: var(--gs-surface-2);
+    border: 1px solid var(--gs-hairline-strong);
+    border-radius: 8px;
+    padding: 8px 16px 12px;
+  }
+  /* Sections keep their top-border dividers inside the card but drop the
+     24px section inset (the card's own padding is the inset). */
+  .pm-te-side .pm-modal-section {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  /* Timeline rows were built for a full-width section (76px label + 200px
+     input + Now/Clear inline overflows a 300px rail): in the card the label
+     takes its own line and the input flexes beside the buttons. */
+  .pm-te-side .pm-lc-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .pm-te-side .pm-lc-label {
+    flex: 0 0 100%;
+  }
+  .pm-te-side .pm-lc-input {
+    width: auto;
+    flex: 1 1 120px;
+    min-width: 0;
+  }
+}
 /* Narrow host (the right-leaf panel is usually 350–500px): stack with the
    rail FIRST, which reproduces the old single-column section order. */
 @container (max-width: 640px) {
@@ -547,9 +577,6 @@ input.pm-pop-field:focus {
   }
   .pm-te-side {
     order: -1;
-    position: static;
-    border-left: none;
-    padding-left: 0;
     border-bottom: 1px solid var(--gs-hairline);
     padding-bottom: 8px;
     margin-bottom: 14px;

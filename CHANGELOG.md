@@ -45,6 +45,17 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.19.1] - 2026-09-15
+
+### Fixed
+
+- **The wide layout's properties rail is now a proper Details card.** The
+  plain divider was invisible against the modal background, leaving the
+  fields floating loose; the rail now sits in a quietly bordered panel.
+  Timeline rows fit inside it (labels above their inputs, nothing clipped
+  at the modal edge), and the rail scrolls with the page — previously a
+  tall incident rail could pin itself and leave its lower rows unreachable.
+
 ## [2.19.0] - 2026-09-15
 
 ### Changed
