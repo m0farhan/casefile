@@ -357,15 +357,8 @@ export class TaskModal extends Modal {
       if (this.isNew) titleInput.select()
     }
 
-    // Two-column shell (Jira issue view): work content left, properties rail
-    // right. Under 640 container px the rail stacks first, which restores the
-    // old single-column section order (task-editor.css).
-    const cols = body.createDiv('pm-te-cols')
-    const main = cols.createDiv('pm-te-main')
-    const side = cols.createDiv('pm-te-side')
-
     // Properties
-    const props = side.createDiv('pm-te-props')
+    const props = body.createDiv('pm-te-props')
     renderTaskFormFields(props, {
       task: this.task,
       project: this.project,
@@ -378,9 +371,11 @@ export class TaskModal extends Modal {
       shownExtras: this.shownExtras
     })
 
+    body.createEl('hr', { cls: 'pm-te-divider' })
+
     // ── Description (preview / edit) ─────────────────────────────────────────
     this.descEditor?.destroy()
-    this.descEditor = renderDescriptionEditor(main, {
+    this.descEditor = renderDescriptionEditor(body, {
       app: this.app,
       plugin: this.plugin,
       project: this.project,
@@ -393,14 +388,13 @@ export class TaskModal extends Modal {
     })
 
     // ── Evidence (files referenced in description/comments) ─────────────────
-    renderAttachmentsSection(main, { app: this.app, project: this.project, task: this.task })
+    renderAttachmentsSection(body, { app: this.app, project: this.project, task: this.task })
 
     // ── Incident sections (timeline + indicators) ───────────────────────────
     // onChange is a no-op here: the modal persists the whole clone on Save.
-    // The lifecycle timeline is a property panel, so it lives in the rail.
     if (this.task.issueType === 'incident') {
-      renderLifecyclePanel(side, this.task, { onChange: () => {} })
-      renderIocSection(main, this.task, {
+      renderLifecyclePanel(body, this.task, { onChange: () => {} })
+      renderIocSection(body, this.task, {
         onChange: () => {},
         reputationKeys: {
           virustotal: this.plugin.settings.virusTotalApiKey,
@@ -417,8 +411,18 @@ export class TaskModal extends Modal {
       })
     }
 
+    // Comments render for every task with a hydrated body (new tasks have none yet).
+    if (!this.isNew) {
+      this.commentsSection?.destroy()
+      this.commentsSection = renderCommentsSection(body, this.plugin, this.project, this.task, {
+        onChange: () => this.render(),
+        initialDraft: this.commentDraft
+      })
+      renderActivitySection(body, this.task, this.activityState)
+    }
+
     // ── Subtasks ────────────────────────────────────────────────────────────
-    renderSubtasksPanel(main, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses, {
+    renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses, {
       onOpen: (sub) => {
         const live = findTaskById(this.project, sub.id)
         if (!live) {
@@ -441,7 +445,7 @@ export class TaskModal extends Modal {
 
     // ── Linked cases ────────────────────────────────────────────────────────
     // onChange is a no-op: link mutations ride the whole-clone save like IOCs.
-    renderLinksPanel(main, {
+    renderLinksPanel(body, {
       app: this.app,
       plugin: this.plugin,
       project: this.project,
@@ -461,18 +465,8 @@ export class TaskModal extends Modal {
       }
     })
 
-    // Comments render for every task with a hydrated body (new tasks have none yet).
-    if (!this.isNew) {
-      this.commentsSection?.destroy()
-      this.commentsSection = renderCommentsSection(main, this.plugin, this.project, this.task, {
-        onChange: () => this.render(),
-        initialDraft: this.commentDraft
-      })
-      renderActivitySection(main, this.task, this.activityState)
-    }
-
     // ── Time tracking ─────────────────────────────────────────────────────────
-    renderTimeTrackingPanel(side, this.task)
+    renderTimeTrackingPanel(body, this.task)
 
     // ── Footer ──────────────────────────────────────────────────────────────
     const footer = contentEl.createDiv('pm-te-footer')

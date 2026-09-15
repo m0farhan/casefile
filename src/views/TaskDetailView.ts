@@ -365,14 +365,7 @@ export class TaskDetailView extends ItemView {
 
     // ── Body: shared form/description/subtask/time panels ───────────────────
     const body = contentEl.createDiv('pm-td-body')
-    // Two-column shell (Jira issue view): work content left, properties rail
-    // right. The right-leaf panel is usually well under the 640 container-px
-    // breakpoint, so it stacks single-column with the rail first — today's
-    // section order (task-editor.css).
-    const cols = body.createDiv('pm-te-cols')
-    const main = cols.createDiv('pm-te-main')
-    const side = cols.createDiv('pm-te-side')
-    renderTaskFormFields(side, {
+    renderTaskFormFields(body, {
       task,
       project,
       plugin: this.plugin,
@@ -393,7 +386,8 @@ export class TaskDetailView extends ItemView {
       shownExtras: this.shownExtras
     })
 
-    this.descEditor = renderDescriptionEditor(main, {
+    body.createEl('hr', { cls: 'pm-te-divider' })
+    this.descEditor = renderDescriptionEditor(body, {
       app: this.app,
       plugin: this.plugin,
       project,
@@ -403,11 +397,10 @@ export class TaskDetailView extends ItemView {
       onChange: () => this.scheduleSave()
     })
     // Evidence (files referenced in description/comments) — read-only, no save wiring.
-    renderAttachmentsSection(main, { app: this.app, project, task })
-    // The lifecycle timeline is a property panel, so it lives in the rail.
+    renderAttachmentsSection(body, { app: this.app, project, task })
     if (task.issueType === 'incident') {
-      renderLifecyclePanel(side, task, { onChange: () => this.scheduleSave() })
-      renderIocSection(main, task, {
+      renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave() })
+      renderIocSection(body, task, {
         onChange: () => this.scheduleSave(),
         onPivot: (value) => void openIndicatorSearch(this.plugin, value),
         reputationKeys: {
@@ -417,7 +410,16 @@ export class TaskDetailView extends ItemView {
         findSightings: (value) => iocSightings(value, project.tasks, task.id)
       })
     }
-    renderSubtasksPanel(main, task, this.plugin, config.statuses, {
+    this.commentsSection?.destroy()
+    this.commentsSection = renderCommentsSection(body, this.plugin, project, task, {
+      onChange: () => {
+        this.scheduleSave()
+        this.render()
+      },
+      initialDraft: this.commentDraft
+    })
+    renderActivitySection(body, task, this.activityState)
+    renderSubtasksPanel(body, task, this.plugin, config.statuses, {
       onOpen: (sub) => {
         const live = findTaskById(project, sub.id)
         if (!live) {
@@ -437,7 +439,7 @@ export class TaskDetailView extends ItemView {
     // Linked cases: click-only mutations never fire the body 'input' delegation,
     // so onChange schedules the save explicitly — the panel mutates the clone's
     // links array, and diffTaskPatch picks the changed field up off it.
-    renderLinksPanel(main, {
+    renderLinksPanel(body, {
       app: this.app,
       plugin: this.plugin,
       project,
@@ -453,16 +455,7 @@ export class TaskDetailView extends ItemView {
         })
       }
     })
-    this.commentsSection?.destroy()
-    this.commentsSection = renderCommentsSection(main, this.plugin, project, task, {
-      onChange: () => {
-        this.scheduleSave()
-        this.render()
-      },
-      initialDraft: this.commentDraft
-    })
-    renderActivitySection(main, task, this.activityState)
-    renderTimeTrackingPanel(side, task, { onChange: () => this.scheduleSave() })
+    renderTimeTrackingPanel(body, task, { onChange: () => this.scheduleSave() })
 
     // Any input inside the body (subtask titles, time logs) marks the clone
     // dirty; the field controls above already do it via rerender(), and the

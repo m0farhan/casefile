@@ -45,6 +45,14 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.19.2] - 2026-09-15
+
+### Changed
+
+- **The two-column layout is gone.** The task editor returns to its
+  single-column view at the previous width — the wide layout didn't earn
+  its keep. Stay-open filter menus and the recurring-task marker remain.
+
 ## [2.19.1] - 2026-09-15
 
 ### Fixed

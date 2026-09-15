@@ -509,78 +509,11 @@ input.pm-pop-field:focus {
 .pm-te-props {
   margin-bottom: 14px;
 }
-
-/* ── Two-column issue layout (Jira-style) ───────────────────────────────────
-   Container queries, not media queries: the detail panel is a leaf whose
-   width has nothing to do with the window's. Both bodies are the containers. */
-.pm-te-body,
-.pm-td-body {
-  container-type: inline-size;
-}
-.pm-te-cols {
-  display: grid;
-  /* minmax(0, 1fr): the CodeMirror editor and the IOC table must not blow
-     the content column out past its track. 320px rail: narrower clips the
-     AM/PM segment off the timeline's datetime inputs. */
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 0 32px;
-  align-items: start;
-}
-/* The shared property grid pairs fields two-up with empty spacer divs for
-   alignment; in a 300px rail that leaves no room — one column, spacers gone. */
-.pm-te-side .pm-prop-grid {
-  grid-template-columns: 1fr;
-}
-.pm-te-side .pm-prop-grid > div:empty {
-  display: none;
-}
-/* Wide host: the rail is a quiet Details card. A bare hairline divider
-   vanishes against the modal background, so the card carries the structure
-   (hairline-strong border, subtle surface lift). Deliberately NOT sticky:
-   an incident rail (fields + timeline + time tracking) is often taller than
-   the scrollport, and a stuck rail's lower rows can never scroll into view —
-   it rides the body scroll instead. */
-@container (min-width: 641px) {
-  .pm-te-side {
-    background: var(--gs-surface-2);
-    border: 1px solid var(--gs-hairline-strong);
-    border-radius: 8px;
-    padding: 8px 16px 12px;
-  }
-  /* Sections keep their top-border dividers inside the card but drop the
-     24px section inset (the card's own padding is the inset). */
-  .pm-te-side .pm-modal-section {
-    padding-left: 0;
-    padding-right: 0;
-  }
-  /* Timeline rows were built for a full-width section (76px label + 200px
-     input + Now/Clear inline overflows a 300px rail): in the card the label
-     takes its own line and the input flexes beside the buttons. */
-  .pm-te-side .pm-lc-row {
-    flex-wrap: wrap;
-    row-gap: 4px;
-  }
-  .pm-te-side .pm-lc-label {
-    flex: 0 0 100%;
-  }
-  .pm-te-side .pm-lc-input {
-    width: auto;
-    flex: 1 1 120px;
-    min-width: 0;
-  }
-}
-/* Narrow host (the right-leaf panel is usually 350–500px): stack with the
-   rail FIRST, which reproduces the old single-column section order. */
-@container (max-width: 640px) {
-  .pm-te-cols {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .pm-te-side {
-    order: -1;
-    border-bottom: 1px solid var(--gs-hairline);
-    padding-bottom: 8px;
-    margin-bottom: 14px;
-  }
+.pm-te-divider {
+  height: 1px;
+  margin: 14px 0;
+  border: none;
+  background: var(--background-modifier-border);
 }
 
 .pm-te-footer {
