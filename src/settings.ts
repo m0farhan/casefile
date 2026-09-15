@@ -386,6 +386,24 @@ export class PMSettingTab extends PluginSettingTab {
         })
     })
 
+    const acDesc = new Setting(containerEl)
+      .setName('abuse.ch auth key')
+      .setDesc(
+        'Adds MalwareBazaar (hashes), URLhaus (URLs and domains) and ThreatFox ' +
+          '(IPs) — one free key from auth.abuse.ch covers all three. Same rules: ' +
+          'local key, sent only on click.'
+      )
+    acDesc.addText((text) => {
+      text.inputEl.type = 'password'
+      text
+        .setPlaceholder('None — checks disabled')
+        .setValue(this.plugin.settings.abuseChApiKey)
+        .onChange(async (v) => {
+          this.plugin.settings.abuseChApiKey = v.trim()
+          await this.plugin.saveSettings()
+        })
+    })
+
     // ── Shift handover ────────────────────────────────────────────────────────
     new Setting(containerEl).setName('Shift handover').setHeading()
 

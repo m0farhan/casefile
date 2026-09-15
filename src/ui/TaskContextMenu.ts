@@ -132,6 +132,14 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
   )
   menu.addItem((item) =>
     item
+      .setTitle('Open case timeline')
+      .setIcon('history')
+      .onClick(() => {
+        ctx.plugin.openCaseTimeline(ctx.project, task)
+      })
+  )
+  menu.addItem((item) =>
+    item
       .setTitle(task.flagged ? 'Remove flag' : 'Flag')
       .setIcon('flag')
       .onClick(

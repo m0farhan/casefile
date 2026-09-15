@@ -10,6 +10,7 @@ import {
   type Task
 } from '../../types'
 import { renderSeverityBadge, renderSlaChip } from '../../soc/slaTicker'
+import { checklistProgress } from '../../modals/checkboxToggle'
 import { formatDateShort } from '../../utils'
 import { AvatarStack } from '../primitives/AvatarStack'
 import { ProgressBar } from '../primitives/ProgressBar'
@@ -119,6 +120,15 @@ export class KanbanCard {
       setIcon(iocChip.createSpan({ cls: 'pm-ioc-count-icon' }), 'crosshair')
       iocChip.createSpan({ text: String(task.iocs.length) })
       setTooltip(iocChip, `${task.iocs.length} indicator${task.iocs.length === 1 ? '' : 's'}`)
+    }
+    // Playbook progress: the description's rendered checkbox set (the same
+    // set the editor's clickable checkboxes flip).
+    const checklist = checklistProgress(task.description)
+    if (checklist) {
+      const chip = soc.createSpan({ cls: 'pm-checklist-count' })
+      setIcon(chip.createSpan({ cls: 'pm-checklist-count-icon' }), 'list-checks')
+      chip.createSpan({ text: `${checklist.done}/${checklist.total}` })
+      setTooltip(chip, `Checklist: ${checklist.done} of ${checklist.total} done`)
     }
     if (!soc.hasChildNodes()) soc.remove()
 

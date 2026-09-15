@@ -534,6 +534,22 @@
   width: 11px;
   height: 11px;
 }
+/* Playbook checklist progress (same quiet family as the indicator count). */
+.pm-checklist-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.pm-checklist-count-icon {
+  display: inline-flex;
+}
+.pm-checklist-count-icon svg {
+  width: 11px;
+  height: 11px;
+}
 
 /* Impediment flag marker (shared class with table.css). */
 .pm-flag-icon {

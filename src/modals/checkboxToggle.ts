@@ -18,6 +18,26 @@ import { fenceMap } from './livePreviewMarks'
 const CHECKBOX_LINE = /^(\s*(?:[-*+]|\d{1,9}[.)]) \[)(.)\](?= |$)/
 
 /**
+ * Progress over the same rendered-checkbox set toggleRenderedCheckbox walks
+ * (fence-skipped; x/X = done, any other state char = open). Null when the
+ * text has no checkboxes, so callers can skip the chip entirely.
+ */
+export function checklistProgress(source: string): { done: number; total: number } | null {
+  const fenced = fenceMap(source)
+  const lines = source.split('\n')
+  let done = 0
+  let total = 0
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue
+    const m = lines[i].match(CHECKBOX_LINE)
+    if (!m) continue
+    total++
+    if (m[2].toLowerCase() === 'x') done++
+  }
+  return total ? { done, total } : null
+}
+
+/**
  * Returns `source` with the checkbox at rendered index `renderedIndex`
  * toggled; unchanged if the index is beyond the rendered set.
  */

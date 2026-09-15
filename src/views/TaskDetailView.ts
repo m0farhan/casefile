@@ -405,7 +405,8 @@ export class TaskDetailView extends ItemView {
         onPivot: (value) => void openIndicatorSearch(this.plugin, value),
         reputationKeys: {
           virustotal: this.plugin.settings.virusTotalApiKey,
-          abuseipdb: this.plugin.settings.abuseIpdbApiKey
+          abuseipdb: this.plugin.settings.abuseIpdbApiKey,
+          abusech: this.plugin.settings.abuseChApiKey
         },
         findSightings: (value) => iocSightings(value, project.tasks, task.id)
       })

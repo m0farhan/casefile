@@ -48,6 +48,51 @@ describe('buildRequests', () => {
   })
 })
 
+describe('buildRequests - abuse.ch', () => {
+  const AC = { abusech: 'ac-key' }
+
+  it('sends a hash to MalwareBazaar as a form POST', () => {
+    const [req] = buildRequests('hash', 'cd903ad2211cf7d166646d75e57fb866', AC)
+    expect(req.provider).toBe('malwarebazaar')
+    expect(req.url).toBe('https://mb-api.abuse.ch/api/v1/')
+    expect(req.method).toBe('POST')
+    expect(req.body).toBe('query=get_info&hash=cd903ad2211cf7d166646d75e57fb866')
+    expect(req.headers).toEqual({ 'Auth-Key': 'ac-key', 'Content-Type': 'application/x-www-form-urlencoded' })
+    expect(req.link).toBe('') // sample page needs the response sha256
+  })
+
+  it('sends a url to URLhaus with the value form-encoded', () => {
+    const [req] = buildRequests('url', 'https://free-coffee.zip/a?b=1', AC)
+    expect(req.provider).toBe('urlhaus')
+    expect(req.url).toBe('https://urlhaus-api.abuse.ch/v1/url/')
+    expect(req.body).toBe(`url=${encodeURIComponent('https://free-coffee.zip/a?b=1')}`)
+    expect(req.link).toBe('') // url page needs the response id
+  })
+
+  it('sends a domain to the URLhaus host endpoint, refanged', () => {
+    const [req] = buildRequests('domain', 'coffeeshooop[.]com', AC)
+    expect(req.provider).toBe('urlhaus')
+    expect(req.url).toBe('https://urlhaus-api.abuse.ch/v1/host/')
+    expect(req.body).toBe('host=coffeeshooop.com')
+    expect(req.link).toBe('https://urlhaus.abuse.ch/host/coffeeshooop.com/')
+  })
+
+  it('sends an ip to ThreatFox as JSON, alongside the other providers', () => {
+    const reqs = buildRequests('ip', '103.80.134.63', { ...KEYS, ...AC })
+    expect(reqs.map((r) => r.provider)).toEqual(['virustotal', 'abuseipdb', 'threatfox'])
+    const tf = reqs[2]
+    expect(tf.url).toBe('https://threatfox-api.abuse.ch/api/v1/')
+    expect(tf.method).toBe('POST')
+    expect(JSON.parse(tf.body ?? '')).toEqual({ query: 'search_ioc', search_term: '103.80.134.63' })
+    expect(tf.headers).toEqual({ 'Auth-Key': 'ac-key', 'Content-Type': 'application/json' })
+    expect(tf.link).toBe('https://threatfox.abuse.ch/browse.php?search=ioc%3A103.80.134.63')
+  })
+
+  it('sends nothing to abuse.ch for an email', () => {
+    expect(buildRequests('email', 'free@coffeeshooop.com', AC)).toEqual([])
+  })
+})
+
 describe('parseReputation - VirusTotal', () => {
   const vtBody = (stats: Record<string, number>) =>
     JSON.stringify({ data: { attributes: { last_analysis_stats: stats } } })
@@ -114,16 +159,79 @@ describe('parseReputation - AbuseIPDB', () => {
   })
 })
 
+describe('parseReputation - abuse.ch', () => {
+  it('reads a MalwareBazaar listing as malicious, named by its signature', () => {
+    const body = JSON.stringify({
+      query_status: 'ok',
+      data: [{ signature: 'AgentTesla', sha256_hash: 'a'.repeat(64) }]
+    })
+    expect(parseReputation('malwarebazaar', 200, body)).toEqual({
+      verdict: 'malicious',
+      summary: 'AgentTesla',
+      link: `https://bazaar.abuse.ch/sample/${'a'.repeat(64)}/`
+    })
+  })
+
+  it('reads a URLhaus url listing with its status and threat, linked by id', () => {
+    const body = JSON.stringify({ query_status: 'ok', id: '105821', url_status: 'online', threat: 'malware_download' })
+    expect(parseReputation('urlhaus', 200, body)).toEqual({
+      verdict: 'malicious',
+      summary: 'malware_download · online',
+      link: 'https://urlhaus.abuse.ch/url/105821/'
+    })
+  })
+
+  it('reads a URLhaus host listing by its malicious-URL count', () => {
+    const out = parseReputation('urlhaus', 200, JSON.stringify({ query_status: 'ok', url_count: 53 }))
+    expect(out).toEqual({ verdict: 'malicious', summary: '53 malicious URLs known' })
+  })
+
+  it('reads a ThreatFox listing as malicious, named by its malware', () => {
+    const body = JSON.stringify({ query_status: 'ok', data: [{ malware_printable: 'Cobalt Strike' }] })
+    expect(parseReputation('threatfox', 200, body)).toEqual({ verdict: 'malicious', summary: 'Cobalt Strike' })
+  })
+
+  it('treats not-listed as unknown, never clean', () => {
+    expect(parseReputation('malwarebazaar', 200, '{"query_status":"hash_not_found"}')).toEqual({
+      verdict: 'unknown',
+      summary: 'not listed in MalwareBazaar'
+    })
+    expect(parseReputation('urlhaus', 200, '{"query_status":"no_results"}')).toEqual({
+      verdict: 'unknown',
+      summary: 'not listed in URLhaus'
+    })
+    expect(parseReputation('threatfox', 200, '{"query_status":"no_result"}')).toEqual({
+      verdict: 'unknown',
+      summary: 'not listed in ThreatFox'
+    })
+  })
+
+  it('degrades honestly on auth, rate-limit and junk responses', () => {
+    expect(parseReputation('malwarebazaar', 401, '')).toEqual({ verdict: 'unknown', summary: 'key rejected' })
+    expect(parseReputation('threatfox', 429, '').summary).toContain('rate limited')
+    expect(parseReputation('urlhaus', 200, 'not json').verdict).toBe('unknown')
+    expect(parseReputation('threatfox', 200, '{"query_status":"ok","data":"error"}').verdict).toBe('unknown')
+    expect(parseReputation('malwarebazaar', 200, '{"query_status":"illegal_hash"}').verdict).toBe('unknown')
+  })
+})
+
 describe('skippedProviders', () => {
-  it('names the keyless provider an ip would have used', () => {
-    expect(skippedProviders('ip', { virustotal: 'vt-key' })).toEqual(['abuseipdb'])
-    expect(skippedProviders('ip', { abuseipdb: 'ab-key' })).toEqual(['virustotal'])
-    expect(skippedProviders('ip', {})).toEqual(['virustotal', 'abuseipdb'])
+  it('names the keyless providers an ip would have used', () => {
+    expect(skippedProviders('ip', { virustotal: 'vt-key', abusech: 'ac-key' })).toEqual(['abuseipdb'])
+    expect(skippedProviders('ip', { abuseipdb: 'ab-key' })).toEqual(['virustotal', 'threatfox'])
+    expect(skippedProviders('ip', {})).toEqual(['virustotal', 'abuseipdb', 'threatfox'])
+  })
+
+  it('names the one abuse.ch platform covering each type', () => {
+    expect(skippedProviders('hash', { virustotal: 'vt-key' })).toEqual(['malwarebazaar'])
+    expect(skippedProviders('domain', { virustotal: 'vt-key' })).toEqual(['urlhaus'])
+    expect(skippedProviders('url', { virustotal: 'vt-key' })).toEqual(['urlhaus'])
+    expect(skippedProviders('hash', { virustotal: 'vt-key', abusech: 'ac-key' })).toEqual([])
+    expect(skippedProviders('hash', {})).toEqual(['virustotal', 'malwarebazaar'])
   })
 
   it('never blames a provider that does not cover the type', () => {
-    expect(skippedProviders('domain', { virustotal: 'vt-key' })).toEqual([])
-    expect(skippedProviders('hash', { virustotal: 'vt-key' })).toEqual([])
-    expect(skippedProviders('hash', {})).toEqual(['virustotal'])
+    expect(skippedProviders('email', { abusech: 'ac-key' })).toEqual(['virustotal'])
+    expect(skippedProviders('email', {})).toEqual(['virustotal'])
   })
 })

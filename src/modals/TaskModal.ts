@@ -398,7 +398,8 @@ export class TaskModal extends Modal {
         onChange: () => {},
         reputationKeys: {
           virustotal: this.plugin.settings.virusTotalApiKey,
-          abuseipdb: this.plugin.settings.abuseIpdbApiKey
+          abuseipdb: this.plugin.settings.abuseIpdbApiKey,
+          abusech: this.plugin.settings.abuseChApiKey
         },
         findSightings: (value) => iocSightings(value, this.project.tasks, this.task.id),
         onPivot: (value) => {

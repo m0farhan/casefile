@@ -45,6 +45,25 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.20.0] - 2026-09-15
+
+### Added
+
+- **Playbook progress on cards.** A case whose description carries a
+  checklist (the incident templates ship one) shows a quiet "2/6" counter
+  on its board card — the same checkboxes you tick in the editor.
+- **abuse.ch reputation checks.** One free auth key (from auth.abuse.ch)
+  adds MalwareBazaar for hashes, URLhaus for URLs and domains, and
+  ThreatFox for IPs next to the VirusTotal and AbuseIPDB chips. A value
+  the platforms don't know stays "unknown" — absence is never reported
+  as clean. As before, nothing is sent anywhere until you click a check
+  button.
+- **Case timeline.** Right-click a case → "Open case timeline" for the
+  chronological story of the investigation in a side panel: created,
+  detected, responded, contained, resolved, every recorded field change
+  and comment, in order. Read-only, built only from what the case
+  actually recorded.
+
 ## [2.19.2] - 2026-09-15
 
 ### Changed

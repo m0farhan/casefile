@@ -7,6 +7,7 @@ import { PMSettingTab } from './settings'
 import { ProjectView, PM_PROJECT_VIEW_TYPE } from './views/ProjectView'
 import { DashboardView, PM_DASHBOARD_VIEW_TYPE } from './views/DashboardView'
 import { TaskDetailView, CASEFILE_TASK_DETAIL_VIEW_TYPE } from './views/TaskDetailView'
+import { TimelineView, CASEFILE_TIMELINE_VIEW_TYPE } from './views/TimelineView'
 import { registerStyleguide } from './views/styleguide/StyleguideView'
 import { PMViewRouter } from './views/PMViewRouter'
 import {
@@ -68,6 +69,7 @@ export default class PMPlugin extends Plugin {
     this.registerView(PM_PROJECT_VIEW_TYPE, (leaf) => new ProjectView(leaf, this))
     this.registerView(PM_DASHBOARD_VIEW_TYPE, (leaf) => new DashboardView(leaf, this))
     this.registerView(CASEFILE_TASK_DETAIL_VIEW_TYPE, (leaf) => new TaskDetailView(leaf, this))
+    this.registerView(CASEFILE_TIMELINE_VIEW_TYPE, (leaf) => new TimelineView(leaf, this))
     if (__STYLEGUIDE__) registerStyleguide(this)
 
     this.app.workspace.onLayoutReady(
@@ -399,6 +401,21 @@ export default class PMPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
       if (leaf.view instanceof ProjectView) void leaf.view.refreshProject()
     }
+  }
+
+  /** Reveal the right-leaf case timeline for a task, reusing its leaf when one is open (openTaskDetailPanel idiom). */
+  openCaseTimeline(project: Project, task: Task): void {
+    void (async () => {
+      const leaf =
+        this.app.workspace.getLeavesOfType(CASEFILE_TIMELINE_VIEW_TYPE)[0] ?? this.app.workspace.getRightLeaf(false)
+      if (!leaf) return
+      await leaf.setViewState({
+        type: CASEFILE_TIMELINE_VIEW_TYPE,
+        active: true,
+        state: { projectPath: project.filePath, taskId: task.id }
+      })
+      await this.app.workspace.revealLeaf(leaf)
+    })()
   }
 
   /** Global case switcher over every task (keys shown when present); empty query lists recent cases. */

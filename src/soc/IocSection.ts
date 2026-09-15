@@ -53,7 +53,7 @@ export function renderIocSection(
     onChange: () => void
     onPivot?: (value: string) => void
     /** Provider API keys for the live reputation button; absent/empty = provider off. */
-    reputationKeys?: { virustotal?: string; abuseipdb?: string }
+    reputationKeys?: { virustotal?: string; abuseipdb?: string; abusech?: string }
     /**
      * Cross-case sightings of a (refanged) value — cases other than this one
      * holding the same indicator. Absent = no seen-before hints render.
@@ -167,7 +167,13 @@ export function renderIocSection(
       reqs.map(async (req): Promise<RepChip> => {
         const base = { provider: req.provider, link: req.link, queried: req.queried }
         try {
-          const res = await requestUrl({ url: req.url, headers: req.headers, throw: false })
+          const res = await requestUrl({
+            url: req.url,
+            method: req.method,
+            body: req.body,
+            headers: req.headers,
+            throw: false
+          })
           return { ...base, ...parseReputation(req.provider, res.status, res.text) }
         } catch {
           return { ...base, verdict: 'unknown', summary: 'network error' }
@@ -188,7 +194,7 @@ export function renderIocSection(
   const runCheckAll = async () => {
     if (checkingAll || !task.iocs.length) return
     const keys = opts.reputationKeys ?? {}
-    if (!keys.virustotal?.trim() && !keys.abuseipdb?.trim()) {
+    if (!keys.virustotal?.trim() && !keys.abuseipdb?.trim() && !keys.abusech?.trim()) {
       new Notice('No reputation provider covers this indicator — add keys in the plugin settings')
       return
     }

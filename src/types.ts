@@ -286,6 +286,7 @@ export interface PMSettings {
   /** Live IOC reputation checks — keys stay local in this vault's data.json; '' disables the provider. */
   virusTotalApiKey: string
   abuseIpdbApiKey: string
+  abuseChApiKey: string
   globalTeamMembers: string[]
   /** Matches `assignee:me` in the query bar. */
   currentUser: string
@@ -441,6 +442,7 @@ export const DEFAULT_SETTINGS: PMSettings = {
   handoverWindowHours: 12,
   virusTotalApiKey: '',
   abuseIpdbApiKey: '',
+  abuseChApiKey: '',
   globalTeamMembers: [],
   currentUser: '',
   openTaskIn: 'modal',

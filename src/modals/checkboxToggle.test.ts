@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toggleRenderedCheckbox } from './checkboxToggle'
+import { checklistProgress, toggleRenderedCheckbox } from './checkboxToggle'
 
 // Mixed content: the renderer shows checkboxes for indices 0 "first"
 // (bullet), 1 "second" (ordered, capital X) and 2 "third" (custom state),
@@ -39,5 +39,22 @@ describe('toggleRenderedCheckbox', () => {
   it('returns the source unchanged for an out-of-range index', () => {
     expect(toggleRenderedCheckbox(MIXED, 3)).toBe(MIXED)
     expect(toggleRenderedCheckbox('no checkboxes here', 0)).toBe('no checkboxes here')
+  })
+})
+
+describe('checklistProgress', () => {
+  it('counts the same rendered set the toggle walks, fences excluded', () => {
+    expect(checklistProgress(MIXED)).toEqual({ done: 1, total: 3 })
+    const fenced = ['```', '- [ ] in fence', '```', '- [x] real'].join('\n')
+    expect(checklistProgress(fenced)).toEqual({ done: 1, total: 1 })
+  })
+
+  it('treats x and X as done and any other state as open', () => {
+    expect(checklistProgress(['- [X] a', '- [-] b', '- [ ] c'].join('\n'))).toEqual({ done: 1, total: 3 })
+  })
+
+  it('is null when the text has no checkboxes', () => {
+    expect(checklistProgress('no checkboxes here')).toBeNull()
+    expect(checklistProgress('')).toBeNull()
   })
 })
