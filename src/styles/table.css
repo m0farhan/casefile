@@ -418,11 +418,6 @@ button.pm-chip-rm {
 
 /* ─ Casefile SOC ambient ─ */
 /* The sla chip rides in the severity cell (severity is what starts the clock) */
-.pm-table-cell .pm-sev-badge,
-.pm-table-cell .pm-sla {
-  margin-left: 6px;
-  vertical-align: middle;
-}
 
 /* Impediment flag marker (shared class with kanban.css). */
 .pm-flag-icon {
@@ -434,4 +429,9 @@ button.pm-chip-rm {
 .pm-flag-icon svg {
   width: 12px;
   height: 12px;
+}
+
+.pm-table-cell .pm-sla {
+  margin-left: 6px;
+  vertical-align: middle;
 }

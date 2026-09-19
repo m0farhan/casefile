@@ -355,17 +355,17 @@ export class PMSettingTab extends PluginSettingTab {
       .setName('VirusTotal key')
       .setDesc(
         'Enables the reputation button on indicator rows (IP, domain, hash, URL; ' +
-          'for an email its domain is checked). The key stays in this vault; the ' +
-          'indicator value is sent to VirusTotal only when you click the button.'
+          'for an email its domain is checked). The key is stored on this device ' +
+          'only (not synced, not in the vault); the indicator value is sent to ' +
+          'VirusTotal only when you click the button.'
       )
     repDesc.addText((text) => {
       text.inputEl.type = 'password'
       text
         .setPlaceholder('None — checks disabled')
-        .setValue(this.plugin.settings.virusTotalApiKey)
-        .onChange(async (v) => {
-          this.plugin.settings.virusTotalApiKey = v.trim()
-          await this.plugin.saveSettings()
+        .setValue(this.plugin.getSecret('virustotal'))
+        .onChange((v) => {
+          this.plugin.setSecret('virustotal', v)
         })
     })
 
@@ -373,16 +373,15 @@ export class PMSettingTab extends PluginSettingTab {
       .setName('AbuseIPDB key')
       .setDesc(
         'Adds a second opinion for IP indicators (AbuseIPDB checks IP addresses ' +
-          'only). Same rules: local key, sent only on click.'
+          'only). Same rules: device-local key, sent only on click.'
       )
     abDesc.addText((text) => {
       text.inputEl.type = 'password'
       text
         .setPlaceholder('None — checks disabled')
-        .setValue(this.plugin.settings.abuseIpdbApiKey)
-        .onChange(async (v) => {
-          this.plugin.settings.abuseIpdbApiKey = v.trim()
-          await this.plugin.saveSettings()
+        .setValue(this.plugin.getSecret('abuseipdb'))
+        .onChange((v) => {
+          this.plugin.setSecret('abuseipdb', v)
         })
     })
 
@@ -391,16 +390,15 @@ export class PMSettingTab extends PluginSettingTab {
       .setDesc(
         'Adds MalwareBazaar (hashes), URLhaus (URLs and domains) and ThreatFox ' +
           '(IPs) — one free key from auth.abuse.ch covers all three. Same rules: ' +
-          'local key, sent only on click.'
+          'device-local key, sent only on click.'
       )
     acDesc.addText((text) => {
       text.inputEl.type = 'password'
       text
         .setPlaceholder('None — checks disabled')
-        .setValue(this.plugin.settings.abuseChApiKey)
-        .onChange(async (v) => {
-          this.plugin.settings.abuseChApiKey = v.trim()
-          await this.plugin.saveSettings()
+        .setValue(this.plugin.getSecret('abusech'))
+        .onChange((v) => {
+          this.plugin.setSecret('abusech', v)
         })
     })
 

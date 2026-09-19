@@ -2,7 +2,8 @@ import { TFile, Menu, ButtonComponent } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task, StatusConfig } from '../types'
 import { safeAsync, isTerminalStatus } from '../utils'
-import { openProjectModal } from '../ui/ModalFactory'
+import { confirmDialog, openProjectModal } from '../ui/ModalFactory'
+import { flattenTasks } from '../store/TaskTreeOps'
 import { EmptyState } from '../ui/primitives/EmptyState'
 import { ProjectCard } from '../ui/composites/ProjectCard'
 
@@ -88,6 +89,10 @@ function openProjectContextMenu(ctx: ProjectListContext, project: Project, e: Mo
       .setIcon('trash')
       .onClick(
         safeAsync(async () => {
+          // Trashes the whole case folder — confirm like every task delete does (UX-02).
+          const n = flattenTasks(project.tasks).length
+          const msg = `Delete "${project.title}" and its ${n} task${n === 1 ? '' : 's'}? Files go to the trash.`
+          if (!(await confirmDialog(ctx.plugin.app, msg))) return
           await ctx.plugin.store.deleteProject(project)
           await renderProjectListContent(ctx)
         })

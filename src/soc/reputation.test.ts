@@ -124,6 +124,11 @@ describe('parseReputation - VirusTotal', () => {
     expect(out).toEqual({ verdict: 'clean', summary: '0/90 vendors flag it' })
   })
 
+  it('reads unknown, never clean, when no vendor confirmed harmless', () => {
+    const out = parseReputation('virustotal', 200, vtBody({ malicious: 0, suspicious: 0, harmless: 0, undetected: 70 }))
+    expect(out).toEqual({ verdict: 'unknown', summary: '0/70 flagged · none confirmed harmless' })
+  })
+
   it('degrades honestly on 404, 401, 429 and junk bodies', () => {
     expect(parseReputation('virustotal', 404, '')).toEqual({
       verdict: 'unknown',
@@ -146,7 +151,7 @@ describe('parseReputation - AbuseIPDB', () => {
       summary: '97% confidence · 23 reports'
     })
     expect(parseReputation('abuseipdb', 200, abBody(40, 2)).verdict).toBe('suspicious')
-    expect(parseReputation('abuseipdb', 200, abBody(0, 0))).toEqual({ verdict: 'clean', summary: 'no reports' })
+    expect(parseReputation('abuseipdb', 200, abBody(0, 0))).toEqual({ verdict: 'unknown', summary: 'no reports' })
     expect(parseReputation('abuseipdb', 200, abBody(10, 1))).toEqual({
       verdict: 'clean',
       summary: '10% confidence · 1 report'

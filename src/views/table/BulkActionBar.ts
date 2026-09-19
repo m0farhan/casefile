@@ -1,8 +1,9 @@
+import { guardVerdictOnClose } from '../../soc/verdictGuard'
 import { ButtonComponent, ExtraButtonComponent, Menu, Notice } from 'obsidian'
 import type { Task, TaskStatus } from '../../types'
 import { flattenTasks, collectAllAssignees, collectAllTags } from '../../store'
 import { findTaskById } from '../../store/TaskIndex'
-import { formatBadgeText } from '../../utils'
+import { formatBadgeText, isTerminalStatus } from '../../utils'
 import { today } from '../../dates'
 import { promptText } from '../../ui/ModalFactory'
 import { showUndoNotice } from '../../ui/undoNotice'
@@ -75,21 +76,40 @@ function updateBarContent(bar: HTMLElement, ctx: TableContext, onAction: (a: Bul
   // store.updateTasks (the same batch path TableView's BulkAction handler
   // uses; it activity-stamps severity and verdict) instead of via onAction,
   // so the BulkAction union stays as-is and the undo can restore each task's
-  // captured prior values through that same path. The bulk path never runs
-  // the verdict guard, and restoring prior values never moves a task INTO
-  // terminal without a verdict it already had — no re-prompt on undo.
+  // captured prior values through that same path. A bulk close runs the
+  // verdict guard ONCE for all selected incidents without a verdict (CP-01);
+  // restoring prior values never moves a task INTO terminal without a
+  // verdict it already had — no re-prompt on undo.
   const runBulkPatch = async (patch: Partial<Task>): Promise<void> => {
     const ids = [...ctx.state.selectedTaskIds]
     if (!ids.length) return
     try {
+      let verdict: string | undefined
+      if (patch.status !== undefined && isTerminalStatus(patch.status, ctx.statuses)) {
+        const unverdicted = ids
+          .map((id) => findTaskById(ctx.project, id))
+          .filter((t): t is Task => !!t && t.issueType === 'incident' && !t.verdict)
+        if (unverdicted.length) {
+          const extra = await guardVerdictOnClose(ctx.plugin, ctx.project, unverdicted[0], patch.status)
+          if (extra === null) return // cancelled: the whole bulk change is dropped
+          verdict = extra.verdict
+        }
+      }
       // Capture each task's prior values of the patched fields BEFORE the write.
-      const keys = Object.keys(patch) as (keyof Task)[]
+      const keys = [...Object.keys(patch), ...(verdict ? ['verdict'] : [])] as (keyof Task)[]
       const prior = new Map<string, Partial<Task>>()
       for (const id of ids) {
         const t = findTaskById(ctx.project, id)
         if (t) prior.set(id, Object.fromEntries(keys.map((k) => [k, t[k]])))
       }
-      await ctx.plugin.store.updateTasks(ctx.project, ids, patch)
+      if (verdict) {
+        const v = verdict
+        await ctx.plugin.store.updateTasks(ctx.project, ids, (t) =>
+          t.issueType === 'incident' && !t.verdict ? { ...patch, verdict: v } : patch
+        )
+      } else {
+        await ctx.plugin.store.updateTasks(ctx.project, ids, patch)
+      }
       ctx.state.selectedTaskIds.clear()
       await ctx.onRefresh()
       const n = prior.size

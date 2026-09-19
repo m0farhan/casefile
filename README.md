@@ -26,7 +26,8 @@ trail, hand over cleanly.
 **SOC pack**
 
 - Severity (the single urgency dial, on any task type) and verdict, with a
-  close-guard so incidents can't be closed without a verdict
+  close-guard that prompts for a verdict whenever an incident is closed —
+  on every path, bulk close included
 - Per-severity SLA policies with live countdown chips (board, table, detail
   panel and modal) and breach notices
 - IOC table: bulk paste straight from a report (defanged values are refanged,
@@ -38,9 +39,13 @@ trail, hand over cleanly.
   abuse.ch platforms, which share one free auth key from auth.abuse.ch:
   MalwareBazaar (hashes, via mb-api.abuse.ch), URLhaus (URLs and domains, via
   urlhaus-api.abuse.ch) and ThreatFox (IPs, via threatfox-api.abuse.ch). Off
-  until you add your own API keys in settings; the indicator value is sent to
-  the provider only when you click the check button, never automatically.
-  This is the plugin's only network use.
+  until you add your own API keys in settings (stored on this device only,
+  never in the vault or `data.json`); the indicator value is sent to the
+  provider only when you click the check button, never automatically.
+  Casefile itself makes exactly that one kind of request. Its case views
+  never open links or load remote images from case text — a click on a link
+  copies it defanged instead; opening the same note directly in Obsidian
+  follows Obsidian's normal behaviour.
 - Incident lifecycle stamps (detected / responded / contained / resolved) with
   an append-only, per-task activity timeline — nothing edits history
 - Comments, kept structurally separate from factual fields

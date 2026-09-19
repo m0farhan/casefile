@@ -1,3 +1,4 @@
+import { neutralizeExternalLinks, scrubRemoteEmbeds } from '../soc/safeRender'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import type { Range } from '@codemirror/state'
 import {
@@ -390,26 +391,13 @@ export function renderDescriptionEditor(
     })
   }
 
-  // MarkdownRenderer emits external anchors with target="_blank"; Electron
-  // silently drops file:// under that, so route file:// clicks through window.open.
-  const attachFileLinkHandlers = () => {
-    descPreview.querySelectorAll<HTMLAnchorElement>('a.external-link').forEach((a) => {
-      if (!a.href.startsWith('file://')) return
-      a.addEventListener('click', (e) => {
-        e.preventDefault()
-        activeWindow.open(a.href)
-      })
-    })
-  }
-
   const renderPreview = async () => {
     descComp.unload()
     descComp = new Component()
     descComp.load()
     descPreview.empty()
-    await MarkdownRenderer.render(app, task.description, descPreview, sourcePath, descComp)
+    await MarkdownRenderer.render(app, scrubRemoteEmbeds(task.description), descPreview, sourcePath, descComp)
     attachCheckboxListeners()
-    attachFileLinkHandlers()
   }
 
   const showEdit = (caret?: number) => {
@@ -476,6 +464,7 @@ export function renderDescriptionEditor(
     return current ? sourceOffsetOf(rendered + caret.offset) : undefined
   }
 
+  neutralizeExternalLinks(descPreview)
   descPreview.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
     if (target.instanceOf(HTMLInputElement) && target.type === 'checkbox') return
@@ -492,7 +481,8 @@ export function renderDescriptionEditor(
         void app.workspace.openLinkText(href, sourcePath)
         return
       }
-      // External link - let browser handle it
+      // External links never open from here — the capture-phase handler
+      // (neutralizeExternalLinks) already copied it defanged.
       return
     }
 

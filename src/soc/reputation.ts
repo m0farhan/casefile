@@ -276,7 +276,11 @@ export function parseReputation(provider: RepProvider, status: number, bodyText:
     if (total === 0) return { verdict: 'unknown', summary: 'no analysis available' }
     if (malicious > 0) return { verdict: 'malicious', summary: `${malicious}/${total} vendors flag malicious` }
     if (suspicious > 0) return { verdict: 'suspicious', summary: `${suspicious}/${total} vendors flag suspicious` }
-    return { verdict: 'clean', summary: `0/${total} vendors flag it` }
+    // Absence is unknown, never clean: 'undetected' means no vendor has a
+    // detection for it, not that anyone examined and cleared it. Clean needs
+    // at least one vendor positively saying harmless (SD-01).
+    if ((stats.harmless ?? 0) > 0) return { verdict: 'clean', summary: `0/${total} vendors flag it` }
+    return { verdict: 'unknown', summary: `0/${total} flagged · none confirmed harmless` }
   }
 
   const score = typeof data.abuseConfidenceScore === 'number' ? data.abuseConfidenceScore : null
@@ -285,5 +289,6 @@ export function parseReputation(provider: RepProvider, status: number, bodyText:
   const detail = `${score}% confidence · ${reports} report${reports === 1 ? '' : 's'}`
   if (score >= 75) return { verdict: 'malicious', summary: detail }
   if (score >= 25) return { verdict: 'suspicious', summary: detail }
-  return { verdict: 'clean', summary: reports === 0 ? 'no reports' : detail }
+  if (reports === 0) return { verdict: 'unknown', summary: 'no reports' } // nobody looked ≠ clean (SD-01)
+  return { verdict: 'clean', summary: detail }
 }

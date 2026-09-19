@@ -1,5 +1,6 @@
 import type { SeverityConfig, SlaPolicy, Task } from '../types'
 import { formatSlaRemaining, slaAtRisk, slaState } from './sla'
+import { Chip } from '../ui/primitives/Chip'
 
 export interface SlaChipView {
   text: string
@@ -97,6 +98,7 @@ export function tickAllSlaChips(): void {
  */
 export function renderSeverityBadge(el: HTMLElement, cfg: SeverityConfig | undefined): void {
   if (!cfg) return
-  const badge = el.createSpan({ cls: 'pm-sev-badge', text: cfg.label })
-  badge.setCssStyles({ color: cfg.color, background: `color-mix(in srgb, ${cfg.color} 15%, transparent)` })
+  // One label primitive for severity everywhere (VD-03): the table cell
+  // already used Chip; cards/modal/panel had a parallel hand-rolled span.
+  new Chip(el).setLabel(cfg.label).setColor(cfg.color).setVariant('solid').setSize('sm')
 }

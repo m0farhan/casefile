@@ -133,6 +133,9 @@
     background 150ms ease-out,
     border-color 150ms ease-out;
   position: relative;
+  /* Off-screen cards skip layout and paint (PS-03); the estimate only sizes the placeholder. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 .pm-kanban-card:hover {
   background: var(--gs-surface-3);
@@ -489,16 +492,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-}
-.pm-sev-badge {
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: 0.02em;
-  padding: 2px 5px;
-  border-radius: 3px;
-  white-space: nowrap;
-  /* color + tint background set inline from the severity config */
 }
 .pm-sla {
   font-family: var(--gs-font-mono);

@@ -45,6 +45,62 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.21.0] - 2026-09-16
+
+Safety release from a full audit of 2.20. Nothing here changes the file
+format. Requires Obsidian 1.8.7 (device-local key storage).
+
+### Fixed
+
+- **The editor's X button and its Archive/Unarchive items no longer throw
+  away edits.** X now saves on close exactly like Esc; Archive persists the
+  open edits first; only the footer Cancel discards — and it asks when there
+  is something to lose.
+- **Delete project asks first.** It trashes the whole case folder and had no
+  confirmation; every task delete already did.
+- **Bulk "Set status" runs the verdict guard.** One prompt covers every
+  selected incident without a verdict; Cancel drops the whole bulk change.
+  The README's promise is now true on every path.
+- **Absence is never clean.** VirusTotal with nothing but "undetected" and
+  AbuseIPDB with zero reports both read "unknown"; "clean" needs a vendor to
+  have positively said so.
+- **SLA breaches are logged at the deadline**, not at the moment the
+  background check happened to notice (which could be the next morning).
+- **The editor saves only what you changed** (the side panel already did):
+  an edit that landed on disk while the dialog was open — Sync, git, another
+  device — is no longer reverted by the dialog's stale copy.
+- **Shift+Enter inside the journal composer is a newline**, not
+  save-and-close.
+- **Commands that act on "the open board" use the active one**, not the
+  first tab that happens to be open.
+- **SLA countdown chips tick everywhere.** The tick was owned by the board
+  view, so a chip in a dialog opened with no board open never moved.
+
+### Changed (trust)
+
+- **Case views never open links.** Clicking an external link in a
+  description or journal — `file://` included — copies it defanged instead;
+  the special-case `file://` launcher is gone. Remote images and iframes in
+  pasted text are not loaded in the preview (the note on disk is untouched).
+- **API keys moved out of `data.json`** into device-local storage, so they no
+  longer travel with Sync, iCloud or a committed `.obsidian/`. Keys typed
+  into an older build migrate on first load.
+- **One toast instead of a storm** when more than three tasks are overdue or
+  due soon on launch.
+
+### Changed (performance)
+
+- Search on the board is debounced; off-screen cards skip layout and paint.
+- "Open case…" and the indicator search cap their lists at 50 rows and
+  resolve each project's config once instead of per row.
+- Config resolution walks the task index instead of re-flattening the tree
+  (it ran on every scroll frame and keystroke in the table).
+
+### Changed (look)
+
+- Severity is one `Chip` everywhere — cards, dialog, panel and table used to
+  render the same value three different ways.
+
 ## [2.20.0] - 2026-09-15
 
 ### Added

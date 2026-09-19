@@ -1,3 +1,4 @@
+import { neutralizeExternalLinks, scrubRemoteEmbeds } from './safeRender'
 import { MarkdownRenderer, Component, setIcon } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
@@ -46,8 +47,9 @@ export function renderCommentsSection(
     const entry = list.createDiv('pm-comment')
     if (c.at) entry.createDiv({ cls: 'pm-comment-at', text: c.at })
     const body = entry.createDiv('pm-comment-body')
-    void MarkdownRenderer.render(plugin.app, c.text, body, sourcePath, comp)
+    void MarkdownRenderer.render(plugin.app, scrubRemoteEmbeds(c.text), body, sourcePath, comp)
   }
+  neutralizeExternalLinks(list)
 
   const composer = section.createDiv('pm-comment-composer')
   const input = composer.createEl('textarea', { cls: 'pm-comment-input' })

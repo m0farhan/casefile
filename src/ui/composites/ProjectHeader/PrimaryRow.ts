@@ -59,9 +59,16 @@ export class PrimaryRow {
       cls: 'pm-project-header-search'
     })
     input.value = this.props.filter.text
+    // Debounced (PS-03): each keystroke used to rebuild the whole board, run a
+    // second filter pass for the match count and write data.json.
+    let timer: number | null = null
     input.addEventListener('input', () => {
       this.props.filter.text = input.value
-      this.props.onSearchChange()
+      if (timer !== null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = null
+        this.props.onSearchChange()
+      }, 150)
     })
   }
 

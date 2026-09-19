@@ -14,7 +14,7 @@ import { renderLifecyclePanel } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
-import { renderActivitySection } from '../views/TaskDetailView'
+import { renderActivitySection, diffTaskPatch } from '../views/TaskDetailView'
 import { renderTimeTrackingPanel } from './TimeTrackingPanel'
 import { renderSubtasksPanel } from './SubtasksPanel'
 import { renderLinksPanel } from './LinksPanel'
@@ -38,6 +38,9 @@ export class TaskModal extends Modal {
   private removedSubtaskIds: string[] = []
   private cancelled = false
   private saved = false
+  /** Pristine clone of the opened task (existing tasks only) — the diff base for save. */
+  private original: Task | null = null
+  private originalJson: string | null = null
   private persistPromise: Promise<void> | null = null
   private descEditor: DescriptionEditorHandle | null = null
   private commentsSection: CommentsSectionHandle | null = null
@@ -63,6 +66,10 @@ export class TaskModal extends Modal {
     super(app)
     if (task) {
       this.task = JSON.parse(JSON.stringify(task)) as Task
+      // Pristine copy for diff-patching on save (A2): only fields the modal
+      // changed reach the store, so a Sync/git edit that landed while the
+      // modal was open is never reverted by the stale clone.
+      this.original = JSON.parse(JSON.stringify(task)) as Task
       this.isNew = false
       // Compute current parentId from tree if not explicitly provided
       if (parentId == null) {
@@ -94,7 +101,13 @@ export class TaskModal extends Modal {
     contentEl.empty()
     contentEl.addClass('pm-task-modal')
     this.modalEl.addClass('pm-modal', 'pm-modal--task')
+    this.originalJson ??= JSON.stringify(this.task)
     this.render()
+  }
+
+  /** True when anything on the clone differs from what the modal opened with. */
+  private isDirty(): boolean {
+    return JSON.stringify(this.task) !== this.originalJson
   }
 
   onClose(): void {
@@ -162,11 +175,12 @@ export class TaskModal extends Modal {
     const opts = { removedSubtaskIds: this.removedSubtaskIds }
     if (this.isNew) {
       await this.plugin.store.insertTask(this.project, this.task, this.parentId)
-    } else if (this.parentId !== this.originalParentId) {
-      await this.plugin.store.updateTask(this.project, this.task.id, this.task, opts)
-      await this.plugin.store.moveTask(this.project, this.task.id, this.parentId)
     } else {
-      await this.plugin.store.updateTask(this.project, this.task.id, this.task, opts)
+      const patch = this.original ? diffTaskPatch(this.original, this.task) : this.task
+      await this.plugin.store.updateTask(this.project, this.task.id, patch, opts)
+      if (this.parentId !== this.originalParentId) {
+        await this.plugin.store.moveTask(this.project, this.task.id, this.parentId)
+      }
     }
     this.removedSubtaskIds = []
     await this.plugin.store.scheduleAfterChange(this.project, this.task.id)
@@ -197,6 +211,7 @@ export class TaskModal extends Modal {
           .setIcon('archive-restore')
           .onClick(
             safeAsync(async () => {
+              await this.persistTask() // UX-01: never drop edits on the way out
               await this.plugin.store.unarchiveTask(this.project, this.task.id)
               new Notice('Task unarchived')
               await this.onSave(this.task)
@@ -212,6 +227,7 @@ export class TaskModal extends Modal {
           .setIcon('archive')
           .onClick(
             safeAsync(async () => {
+              await this.persistTask() // UX-01: never drop edits on the way out
               await this.plugin.store.archiveTask(this.project, this.task.id)
               new Notice('Task archived')
               await this.onSave(this.task)
@@ -307,8 +323,9 @@ export class TaskModal extends Modal {
     }
     const closeBtn = new ExtraButtonComponent(header).setIcon('x').setTooltip('Close')
     closeBtn.extraSettingsEl.addClass('pm-te-header-btn')
+    // Same as Esc / click-out: save-on-close applies (UX-01). Only the
+    // footer Cancel discards, and it asks first when there is something to lose.
     closeBtn.onClick(() => {
-      this.cancelled = true
       this.close()
     })
 
@@ -397,9 +414,7 @@ export class TaskModal extends Modal {
       renderIocSection(body, this.task, {
         onChange: () => {},
         reputationKeys: {
-          virustotal: this.plugin.settings.virusTotalApiKey,
-          abuseipdb: this.plugin.settings.abuseIpdbApiKey,
-          abusech: this.plugin.settings.abuseChApiKey
+          ...this.plugin.reputationKeys()
         },
         findSightings: (value) => iocSightings(value, this.project.tasks, this.task.id),
         onPivot: (value) => {
@@ -490,10 +505,13 @@ export class TaskModal extends Modal {
 
     footer.createDiv('pm-footer-spacer')
 
-    new ButtonComponent(footer).setButtonText('Cancel').onClick(() => {
-      this.cancelled = true
-      this.close()
-    })
+    new ButtonComponent(footer).setButtonText('Cancel').onClick(
+      safeAsync(async () => {
+        if (this.isDirty() && !(await confirmDialog(this.app, 'Discard unsaved changes?', 'Discard'))) return
+        this.cancelled = true
+        this.close()
+      })
+    )
 
     const saveBtn = new ButtonComponent(footer)
       .setButtonText(this.isNew ? 'Create (Shift+Enter)' : 'Save (Shift+Enter)')
@@ -534,6 +552,10 @@ export class TaskModal extends Modal {
 
     if (this.saveKeyHandler) this.modalEl.removeEventListener('keydown', this.saveKeyHandler)
     this.saveKeyHandler = (e: KeyboardEvent) => {
+      // Inside a multi-line field (journal composer, description editor)
+      // Shift+Enter is a newline, never save-and-close (CP-11).
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault()
         void doSave()

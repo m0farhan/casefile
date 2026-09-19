@@ -25,6 +25,8 @@ This produces `dist/casefile-<version>.zip`.
 Settings (statuses, issue types, severities, SLA policies, templates) live in
 `.obsidian/plugins/casefile/data.json`. Copy that file alongside the three
 bundle files to reproduce your setup; omit it to start from defaults.
+Reputation API keys are per-device (Obsidian's local storage) and are NOT
+carried by `data.json` — re-enter them in settings on the new machine.
 
 Project and task data is **not** in the plugin — it's plain markdown in the
 vault (default folder: `Projects/`, configurable in settings), so syncing the

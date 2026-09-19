@@ -54,7 +54,10 @@ function withInUseExtras<T extends { id: string }>(
 ): T[] {
   const known = new Set(own.map((entry) => entry.id))
   let extras: T[] | null = null
-  for (const { task } of flattenTasks(project.tasks)) {
+  // The O(1) index is maintained by every mutator; walking it allocates
+  // nothing, unlike flattenTasks, and this runs on scroll/keydown paths (PS-04).
+  const entries = project.taskIndex.size ? project.taskIndex.values() : flattenTasks(project.tasks)
+  for (const { task } of entries) {
     const id = valueOf(task)
     if (known.has(id)) continue
     known.add(id)

@@ -44,6 +44,8 @@ export class Notifier {
       return
     }
 
+    const overdueMsgs: string[] = []
+    const soonMsgs: string[] = []
     for (const project of projects) {
       const statuses = this.plugin.store.configFor(project).statuses
       const flat = flattenTasks(project.tasks)
@@ -61,7 +63,7 @@ export class Notifier {
         if (isOverdue && !this.notifiedIds.has(notifKey + '-overdue')) {
           this.notifiedIds.add(notifKey + '-overdue')
           const daysAgo = now.since(due, { largestUnit: 'days' }).days
-          new Notice(`⚠️ Overdue: "${task.title}" in ${project.title} was due ${daysAgo}d ago`, 8000)
+          overdueMsgs.push(`⚠️ Overdue: "${task.title}" in ${project.title} was due ${daysAgo}d ago`)
         } else if (isDueSoon && !this.notifiedIds.has(notifKey + '-soon')) {
           this.notifiedIds.add(notifKey + '-soon')
           const daysLeft = due.since(now, { largestUnit: 'days' }).days
@@ -69,7 +71,7 @@ export class Notifier {
             daysLeft === 0
               ? `📅 Due today: "${task.title}" in ${project.title}`
               : `📅 Due in ${daysLeft}d: "${task.title}" in ${project.title}`
-          new Notice(msg, 6000)
+          soonMsgs.push(msg)
         }
       }
 
@@ -78,6 +80,15 @@ export class Notifier {
       for (const { task } of flat) {
         await this.checkSlaBreach(project, task, statuses)
       }
+    }
+
+    // One summary instead of a toast storm (OB-4): installing into a vault
+    // with many overdue tasks used to stack N eight-second notices per launch.
+    if (overdueMsgs.length + soonMsgs.length > 3) {
+      new Notice(`${overdueMsgs.length} overdue, ${soonMsgs.length} due soon — open the board`, 8000)
+    } else {
+      for (const m of overdueMsgs) new Notice(m, 8000)
+      for (const m of soonMsgs) new Notice(m, 6000)
     }
   }
 
@@ -104,8 +115,10 @@ export class Notifier {
     const phaseLabel = state.phase === 'response' ? 'Response' : 'Resolution'
     const ref = task.key ? `${task.key} ${task.title}` : task.title
     new Notice(`${phaseLabel} target breached: ${ref}`, 8000)
+    // Logged at the deadline itself, not at the moment Obsidian noticed —
+    // the walk runs every 5 minutes and only while the vault is open (SD-07).
     await this.plugin.store.appendActivity(project, task.id, {
-      at: new Date().toISOString(),
+      at: new Date(state.deadline).toISOString(),
       field: 'sla',
       from: state.phase,
       to: logged

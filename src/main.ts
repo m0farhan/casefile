@@ -28,6 +28,14 @@ import { ensureFolder } from './store/vaultFs'
 import { migrateProjects } from './migration'
 import { isCasesLayout, isProjectFolderLayout, projectFileName, taskFolderForProjectPath } from './store/layout'
 import { safeAsync } from './utils'
+import { tickAllSlaChips } from './soc/slaTicker'
+
+type SecretName = 'virustotal' | 'abuseipdb' | 'abusech'
+const SECRET_FIELDS: Record<SecretName, 'virusTotalApiKey' | 'abuseIpdbApiKey' | 'abuseChApiKey'> = {
+  virustotal: 'virusTotalApiKey',
+  abuseipdb: 'abuseIpdbApiKey',
+  abusech: 'abuseChApiKey'
+}
 
 export default class PMPlugin extends Plugin {
   settings: PMSettings = { ...DEFAULT_SETTINGS }
@@ -264,6 +272,11 @@ export default class PMPlugin extends Plugin {
     this.applyMotionPreference()
     this.addSettingTab(new PMSettingTab(this.app, this))
     this.notifier.start()
+    // One plugin-level 30s tick for every SLA chip, wherever it was rendered
+    // (board, table, modal, panel). Was per ProjectView, so a chip in a modal
+    // opened with no board open never ticked (PS-08).
+    const slaTickId = window.setInterval(() => tickAllSlaChips(), 30_000)
+    this.registerInterval(slaTickId)
   }
 
   onunload(): void {
@@ -291,6 +304,18 @@ export default class PMPlugin extends Plugin {
       this.settings.slaPolicies = DEFAULT_SETTINGS.slaPolicies
     }
     if (!saved?.incidentTemplates?.length) this.settings.incidentTemplates = DEFAULT_SETTINGS.incidentTemplates
+    // Keys saved by builds before 2.21 move to device-local storage and are
+    // blanked in data.json (ST-5); an existing device-local key is never
+    // overwritten by a stale data.json copy.
+    let movedKeys = false
+    for (const [name, field] of Object.entries(SECRET_FIELDS) as [SecretName, (typeof SECRET_FIELDS)[SecretName]][]) {
+      const inData = this.settings[field]
+      if (!inData) continue
+      if (!this.getSecret(name)) this.setSecret(name, inData)
+      this.settings[field] = ''
+      movedKeys = true
+    }
+    if (movedKeys) await this.saveSettings()
     if (!this.settings.projectFilters) this.settings.projectFilters = {}
     if (!this.settings.collapsedTasks) this.settings.collapsedTasks = {}
     if (!this.settings.collapsedKanbanColumns) this.settings.collapsedKanbanColumns = {}
@@ -390,6 +415,28 @@ export default class PMPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings)
+  }
+
+  /**
+   * Provider API keys live in device-local storage, never in data.json —
+   * data.json is exactly the file Sync, iCloud and git-committed vaults
+   * replicate (ST-5). Keys typed into an older build are migrated on load.
+   */
+  getSecret(name: SecretName): string {
+    const v: unknown = this.app.loadLocalStorage(`casefile:secret:${name}`)
+    return typeof v === 'string' ? v : ''
+  }
+
+  setSecret(name: SecretName, value: string): void {
+    this.app.saveLocalStorage(`casefile:secret:${name}`, value.trim() || null)
+  }
+
+  reputationKeys(): { virustotal?: string; abuseipdb?: string; abusech?: string } {
+    return {
+      virustotal: this.getSecret('virustotal'),
+      abuseipdb: this.getSecret('abuseipdb'),
+      abusech: this.getSecret('abusech')
+    }
   }
 
   showNotice(msg: string, duration = 3000): void {
@@ -719,8 +766,10 @@ export default class PMPlugin extends Plugin {
     })
   }
 
-  /** The project of the first open project view, for commands scoped to an open project. */
+  /** The ACTIVE project view's project (UX-03), else the first open one, for commands scoped to a board. */
   private activeProjectViewProject(): Project | null {
+    const active = this.app.workspace.getActiveViewOfType(ProjectView)
+    if (active?.project) return active.project
     for (const leaf of this.app.workspace.getLeavesOfType(PM_PROJECT_VIEW_TYPE)) {
       if (leaf.view instanceof ProjectView && leaf.view.project) return leaf.view.project
     }

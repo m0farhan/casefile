@@ -13,7 +13,6 @@ import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { AlertIntakeModal } from '../modals/AlertIntakeModal'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
-import { tickAllSlaChips } from '../soc/slaTicker'
 import { setQuerySlaPolicies } from '../store/QueryParser'
 import { taskFolderForProjectPath } from '../store/layout'
 
@@ -115,11 +114,7 @@ export class ProjectView extends ItemView {
     this.headerEl = root.createDiv('pm-project-header-mount')
     this.bodyEl = root.createDiv('pm-content')
 
-    // One shared 30s tick advances every registered SLA chip (text/class only,
-    // no re-render). Obsidian clears registered intervals when the view closes.
-    // Two-line form (Notifier precedent): the inline shape crashes obsidianmd/no-sample-code.
-    const slaTickId = window.setInterval(() => tickAllSlaChips(), 30_000)
-    this.registerInterval(slaTickId)
+    // The SLA chip tick is plugin-level (main.ts) since 2.21 — see PS-08.
 
     this.keydownHandler = (e: KeyboardEvent) => {
       this.subview?.handleKeyDown?.(e)

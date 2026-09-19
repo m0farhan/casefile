@@ -7,8 +7,8 @@ import { isTerminalStatus } from '../utils'
  * Soft workflow rule: closing an incident without a verdict prompts for one.
  * Returns extra patch fields to merge ({ verdict } or {} for "close without"),
  * or null when the user cancels the close entirely. UI-layer only — the store
- * never blocks a write. Bulk close is exempt (documented; bulk-set verdict
- * exists instead).
+ * never blocks a write. The bulk status change runs it too, once for every
+ * selected incident without a verdict (see BulkActionBar).
  */
 export async function guardVerdictOnClose(
   plugin: PMPlugin,

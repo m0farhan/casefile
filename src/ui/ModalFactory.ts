@@ -328,9 +328,13 @@ export function openCasePicker(plugin: PMPlugin, projects: Project[]): void {
   new CasePickerModal(plugin, projects).open()
 }
 
+/** SuggestModal renders every returned row — cap or a 20k-task vault freezes (PS-02). */
+const PICKER_LIMIT = 50
+
 class CasePickerModal extends SuggestModal<CaseEntry> {
   private entries: CaseEntry[]
   private recents: CaseEntry[]
+  private configs: Map<Project, ReturnType<PMPlugin['store']['configFor']>>
 
   constructor(
     private plugin: PMPlugin,
@@ -339,6 +343,7 @@ class CasePickerModal extends SuggestModal<CaseEntry> {
     super(plugin.app)
     this.setPlaceholder('Open case…')
     this.entries = projects.flatMap((project) => flattenTasks(project.tasks).map(({ task }) => ({ project, task })))
+    this.configs = new Map(projects.map((p) => [p, plugin.store.configFor(p)]))
     const byPath = new Map(projects.map((p) => [p.filePath, p]))
     this.recents = (plugin.settings.recentCases ?? []).flatMap((r) => {
       const project = byPath.get(r.path)
@@ -349,11 +354,15 @@ class CasePickerModal extends SuggestModal<CaseEntry> {
 
   getSuggestions(query: string): CaseEntry[] {
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean)
-    if (!tokens.length) return this.recents.length ? this.recents : this.entries
-    return this.entries.filter((e) => {
+    if (!tokens.length) return (this.recents.length ? this.recents : this.entries).slice(0, PICKER_LIMIT)
+    const out: CaseEntry[] = []
+    for (const e of this.entries) {
       const hay = `${e.task.key ?? ''} ${e.task.title}`.toLowerCase()
-      return tokens.every((t) => hay.includes(t))
-    })
+      if (!tokens.every((t) => hay.includes(t))) continue
+      out.push(e)
+      if (out.length >= PICKER_LIMIT) break
+    }
+    return out
   }
 
   renderSuggestion(entry: CaseEntry, el: HTMLElement): void {
@@ -361,7 +370,7 @@ class CasePickerModal extends SuggestModal<CaseEntry> {
     el.addClass('mod-complex')
     const content = el.createDiv({ cls: 'suggestion-content' })
     content.createDiv({ cls: 'suggestion-title', text: task.key ? `${task.key} · ${task.title}` : task.title })
-    const config = this.plugin.store.configFor(project)
+    const config = this.configs.get(project) ?? this.plugin.store.configFor(project)
     const status = config.statuses.find((s) => s.id === task.status)?.label ?? task.status
     const severity = task.severity
       ? (config.severities.find((s) => s.id === task.severity)?.label ?? task.severity)
@@ -409,6 +418,7 @@ interface IndicatorHit {
 class IndicatorSearchModal extends SuggestModal<IndicatorHit> {
   private hits: IndicatorHit[]
   private initial: string
+  private configs: Map<Project, ReturnType<PMPlugin['store']['configFor']>>
 
   constructor(
     private plugin: PMPlugin,
@@ -421,19 +431,26 @@ class IndicatorSearchModal extends SuggestModal<IndicatorHit> {
     this.hits = projects.flatMap((project) =>
       flattenTasks(project.tasks).flatMap(({ task }) => task.iocs.map((ioc) => ({ project, task, ioc })))
     )
+    this.configs = new Map(projects.map((p) => [p, plugin.store.configFor(p)]))
   }
 
   getSuggestions(query: string): IndicatorHit[] {
     const q = (refangIoc(query).toLowerCase() || this.initial).trim()
     if (!q) return []
-    return this.hits.filter((h) => refangIoc(h.ioc.value).toLowerCase().includes(q))
+    const out: IndicatorHit[] = []
+    for (const h of this.hits) {
+      if (!refangIoc(h.ioc.value).toLowerCase().includes(q)) continue
+      out.push(h)
+      if (out.length >= PICKER_LIMIT) break
+    }
+    return out
   }
 
   renderSuggestion(hit: IndicatorHit, el: HTMLElement): void {
     el.addClass('mod-complex')
     const content = el.createDiv({ cls: 'suggestion-content' })
     content.createDiv({ cls: 'suggestion-title', text: defangIoc(hit.ioc.value, hit.ioc.type) })
-    const config = this.plugin.store.configFor(hit.project)
+    const config = this.configs.get(hit.project) ?? this.plugin.store.configFor(hit.project)
     const status = config.statuses.find((st) => st.id === hit.task.status)?.label ?? hit.task.status
     const note = hit.ioc.note ? ` · ${hit.ioc.note}` : ''
     content.createDiv({
