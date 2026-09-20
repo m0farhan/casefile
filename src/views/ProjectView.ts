@@ -1,4 +1,13 @@
-import { ButtonComponent, ExtraButtonComponent, ItemView, WorkspaceLeaf, TFile, type EventRef } from 'obsidian'
+import {
+  ButtonComponent,
+  ExtraButtonComponent,
+  ItemView,
+  Menu,
+  WorkspaceLeaf,
+  TFile,
+  setTooltip,
+  type EventRef
+} from 'obsidian'
 import type PMPlugin from '../main'
 import { type Project, type ViewMode, type FilterState, type SavedView, makeDefaultFilter, makeId } from '../types'
 import { truncateTitle, safeAsync } from '../utils'
@@ -32,6 +41,71 @@ export class ProjectView extends ItemView {
   filter: FilterState = makeDefaultFilter()
   activeSavedViewId: string | null = null
   private subview: SubView | null = null
+
+  /**
+   * Every board, in one menu, switching in this leaf. The board you are on is
+   * ticked rather than hidden, so the menu always shows the whole set and you
+   * can see where you are. Edit and New are here too, because this is now the
+   * only control on the board that is about the board itself.
+   */
+  async showBoardMenu(anchor?: MouseEvent): Promise<void> {
+    const here = this.project
+    const menu = new Menu()
+    let projects: Project[] = []
+    try {
+      projects = await this.plugin.store.loadAllProjects(this.plugin.settings.projectsFolder)
+    } catch {
+      // Say so rather than showing an empty menu that reads as "no other boards".
+      menu.addItem((i) => i.setTitle('Could not read your boards').setDisabled(true))
+    }
+    for (const p of [...projects].sort((a, b) => a.title.localeCompare(b.title))) {
+      menu.addItem((item) =>
+        item
+          .setTitle(`${p.icon} ${p.title}`)
+          .setChecked(p.filePath === here?.filePath)
+          .onClick(
+            safeAsync(async () => {
+              if (p.filePath === here?.filePath) return
+              const file = this.app.vault.getAbstractFileByPath(p.filePath)
+              if (file instanceof TFile) await this.plugin.router.switchToBoard(this.leaf, file)
+            })
+          )
+      )
+    }
+    menu.addSeparator()
+    menu.addItem((item) =>
+      item
+        .setTitle('New board…')
+        .setIcon('plus')
+        .onClick(() => {
+          openProjectModal(this.plugin, {
+            onSave: async (project) => {
+              await this.plugin.router.openProjectByPath(project.filePath)
+            }
+          })
+        })
+    )
+    if (here) {
+      menu.addItem((item) =>
+        item
+          .setTitle('Edit this board')
+          .setIcon('settings')
+          .onClick(() => {
+            openProjectModal(this.plugin, {
+              project: here,
+              onSave: (updated) => {
+                this.project = updated
+                this.renderProjectToolbar()
+              }
+            })
+          })
+      )
+    }
+    // From the palette there is no pointer to anchor to, so it opens where the
+    // analyst is looking rather than in the window corner.
+    if (anchor && (anchor.clientX || anchor.clientY)) menu.showAtMouseEvent(anchor)
+    else menu.showAtPosition({ x: activeWindow.innerWidth / 2 - 120, y: activeWindow.innerHeight / 4 })
+  }
 
   /** The project this leaf is showing, for palette commands that act on it. */
   projectRef(): Project | null {
@@ -68,7 +142,7 @@ export class ProjectView extends ItemView {
     return PM_PROJECT_VIEW_TYPE
   }
   getDisplayText(): string {
-    return truncateTitle(this.project?.title ?? 'Project', 10)
+    return truncateTitle(this.project?.title ?? 'Board', 10)
   }
   getIcon(): string {
     return 'chart-gantt'
@@ -215,7 +289,7 @@ export class ProjectView extends ItemView {
     this.header = null
     this.bodyEl.empty()
     const msg = this.bodyEl.createDiv('pm-empty-state')
-    msg.createEl('h3', { text: 'Project not found' })
+    msg.createEl('h3', { text: 'Board not found' })
     msg.createEl('p', { text: `No project at ${this.filePath}. It may have been deleted or renamed.` })
   }
 
@@ -341,19 +415,23 @@ export class ProjectView extends ItemView {
     this.toolbarEl.empty()
 
     const left = this.toolbarEl.createDiv('pm-toolbar-left')
+    // The icon was a second way to open the board settings the gear already
+    // opens two controls away. It is the board menu now: the one control on the
+    // board that says the word "board", and the one-click way to another one.
     const iconEl = left.createSpan({
       text: this.project.icon,
       cls: 'pm-toolbar-icon',
-      attr: { 'aria-label': 'Edit project', role: 'button', tabindex: '0' }
+      attr: { 'aria-label': 'Switch board', role: 'button', tabindex: '0' }
     })
-    iconEl.addEventListener('click', () => {
-      openProjectModal(this.plugin, {
-        project: this.project,
-        onSave: (updated) => {
-          this.project = updated
-          this.renderProjectToolbar()
-        }
-      })
+    setTooltip(iconEl, 'Switch board')
+    iconEl.addEventListener('click', (e) => {
+      void this.showBoardMenu(e)
+    })
+    iconEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        void this.showBoardMenu()
+      }
     })
 
     this.titleEl2 = left.createEl('h2', { text: this.project.title, cls: 'pm-toolbar-title' })
@@ -439,7 +517,7 @@ export class ProjectView extends ItemView {
 
     new ExtraButtonComponent(right)
       .setIcon('settings')
-      .setTooltip('Project settings')
+      .setTooltip('Board settings')
       .onClick(() => {
         openProjectModal(this.plugin, {
           project: this.project,

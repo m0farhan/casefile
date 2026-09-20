@@ -502,3 +502,38 @@ describe('user-added frontmatter keys round-trip', () => {
     expect(task.extraFrontmatter).toBeUndefined()
   })
 })
+
+describe('boardType round trip', () => {
+  it('round-trips a plain board and writes no key for a case board', () => {
+    const plain = makeProject('Goals', 'Projects/Goals.md')
+    plain.config = { boardType: 'plain' }
+    expect(roundTripProject(plain).project.config?.boardType).toBe('plain')
+
+    // A board that never declared a type writes nothing, so every board note
+    // that exists today stays byte-identical.
+    const plainMd = serializeProject(makeProject('LetsDefend', 'Projects/LetsDefend.md'))
+    expect(plainMd).not.toContain('boardType')
+  })
+
+  it('drops a boardType it does not recognise, so the board resolves to case', () => {
+    const p = makeProject('Odd', 'Projects/Odd.md')
+    p.config = { boardType: 'kanban' as unknown as 'plain' }
+    expect(roundTripProject(p).project.config?.boardType).toBeUndefined()
+  })
+
+  it('keeps severity, verdict and indicators in task frontmatter whatever the board is', () => {
+    // The whole promise of board types: a plain board HIDES the SOC fields, it
+    // never strips them, so switching back shows them again.
+    const task = makeTask({
+      id: 'gs-9',
+      issueType: 'incident',
+      severity: 'sev2',
+      verdict: 'true-positive',
+      iocs: [{ type: 'ip', value: '203.0.113.9' }]
+    })
+    const { task: back } = roundTripTask(task)
+    expect(back.severity).toBe('sev2')
+    expect(back.verdict).toBe('true-positive')
+    expect(back.iocs).toEqual(task.iocs)
+  })
+})

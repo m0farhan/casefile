@@ -409,7 +409,10 @@ export class TaskModal extends Modal {
 
     // ── Incident sections (timeline + indicators) ───────────────────────────
     // onChange is a no-op here: the modal persists the whole clone on Save.
-    if (this.task.issueType === 'incident') {
+    // A plain board has no incident kit at all, whatever the task's issue type
+    // says — a task imported or moved with issueType 'incident' must not drag
+    // the SOC panels onto a Goals board.
+    if (config.boardType !== 'plain' && this.task.issueType === 'incident') {
       renderLifecyclePanel(body, this.task, { onChange: () => {}, slaPolicies: this.plugin.settings.slaPolicies })
       renderIocSection(body, this.task, {
         onChange: () => {},

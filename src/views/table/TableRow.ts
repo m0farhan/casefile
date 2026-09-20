@@ -129,16 +129,19 @@ export function renderTaskRow(
     })
   })
 
-  const severityCell = new SeverityCell(row, {
-    task,
-    severities: cfg?.severities ?? [],
-    onChange: safeAsync(async (severity) => {
-      await ctx.plugin.store.updateTask(ctx.project, task.id, { severity })
-      await ctx.onRefresh()
+  // A plain board has no severity column; the value stays on the note.
+  if (ctx.boardType !== 'plain') {
+    const severityCell = new SeverityCell(row, {
+      task,
+      severities: cfg?.severities ?? [],
+      onChange: safeAsync(async (severity) => {
+        await ctx.plugin.store.updateTask(ctx.project, task.id, { severity })
+        await ctx.onRefresh()
+      })
     })
-  })
-  // The SLA countdown rides in the severity cell — severity is what starts the clock.
-  renderSlaChip(severityCell.el, task, ctx.plugin.settings.slaPolicies)
+    // The SLA countdown rides in the severity cell — severity is what starts the clock.
+    renderSlaChip(severityCell.el, task, ctx.plugin.settings.slaPolicies)
+  }
 
   new AssigneesCell(row, task.assignees)
 

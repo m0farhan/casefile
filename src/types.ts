@@ -195,7 +195,21 @@ export interface StatusConfig {
  * The settings a project may override in its own file. Every field is
  * optional; an absent field falls back to the global plugin settings.
  */
+/**
+ * What kind of board this is. 'case' is the full SOC kit — severity, SLA,
+ * verdict, indicators, incident timeline, alert intake. 'plain' is columns,
+ * titles, tags, assignees, dates and notes, for work that is not a case queue.
+ *
+ * ABSENT MEANS 'case', deliberately: every board written before board types
+ * existed keeps behaving exactly as it did, with no migration and no rewrite.
+ * The type only decides what is SHOWN — a task's severity, verdict and
+ * indicators stay in its frontmatter on a plain board and come straight back
+ * if the board is switched to case.
+ */
+export type BoardType = 'case' | 'plain'
+
 export interface ProjectConfig {
+  boardType?: BoardType
   statuses?: StatusConfig[]
   priorities?: PriorityConfig[]
   issueTypes?: IssueTypeConfig[]
@@ -211,6 +225,8 @@ export interface ProjectConfig {
  * settings so alternative task sources can supply their own catalogs.
  */
 export interface ResolvedProjectConfig {
+  /** Resolved board kind; absent on the project means 'case'. */
+  boardType: BoardType
   statuses: StatusConfig[]
   priorities: PriorityConfig[]
   issueTypes: IssueTypeConfig[]

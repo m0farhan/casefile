@@ -389,6 +389,7 @@ export class KanbanView implements SubView {
       parentTitle,
       parentKey,
       issueTypes: this.config.issueTypes,
+      boardType: this.config.boardType,
       epic,
       subtaskProgress,
       loggedHours: totalLoggedHours(task),

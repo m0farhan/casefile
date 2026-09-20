@@ -14,6 +14,9 @@ import {
 function serializeProjectConfig(config: ProjectConfig | undefined): Record<string, unknown> | null {
   if (!config) return null
   const out: Record<string, unknown> = {}
+  // Written only when it is 'plain'. A case board writes no key, so every board
+  // note that exists today stays byte-identical (the keyPrefix precedent below).
+  if (config.boardType === 'plain') out.boardType = config.boardType
   if (config.statuses?.length) out.statuses = config.statuses
   if (config.priorities?.length) out.priorities = config.priorities
   if (config.issueTypes?.length) out.issueTypes = config.issueTypes

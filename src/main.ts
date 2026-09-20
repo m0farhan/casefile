@@ -99,7 +99,7 @@ export default class PMPlugin extends Plugin {
 
     this.addCommand({
       id: 'open-projects',
-      name: 'Open projects pane',
+      name: 'Open boards pane',
       callback: () => {
         void this.router.openDashboard()
       }
@@ -115,7 +115,7 @@ export default class PMPlugin extends Plugin {
 
     this.addCommand({
       id: 'new-project',
-      name: 'Create new project',
+      name: 'Create new board',
       callback: () => {
         openProjectModal(this, {
           onSave: async (project) => {
@@ -142,8 +142,19 @@ export default class PMPlugin extends Plugin {
     })
 
     this.addCommand({
+      id: 'switch-board',
+      name: 'Switch board',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(ProjectView)
+        if (!view) return false
+        if (!checking) void view.showBoardMenu()
+        return true
+      }
+    })
+
+    this.addCommand({
       id: 'tag-alert-kinds',
-      name: 'Tag alert kinds on this project',
+      name: 'Tag alert kinds on this board',
       checkCallback: (checking) => {
         const view = this.app.workspace.getActiveViewOfType(ProjectView)
         if (!view) return false
@@ -215,7 +226,7 @@ export default class PMPlugin extends Plugin {
 
     this.addCommand({
       id: 'adopt-issue-keys',
-      name: 'Adopt issue keys for a project',
+      name: 'Adopt issue keys for a board',
       callback: () => {
         void this.adoptIssueKeysFlow()
       }
@@ -286,7 +297,7 @@ export default class PMPlugin extends Plugin {
 
     this.addCommand({
       id: 'open-current-as-project',
-      name: 'Open current file as project',
+      name: 'Open current file as a board',
       checkCallback: (checking: boolean) => {
         const md = this.app.workspace.getActiveViewOfType(MarkdownView)
         const file = md?.file

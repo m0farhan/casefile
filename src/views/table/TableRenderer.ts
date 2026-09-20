@@ -1,5 +1,5 @@
 import type PMPlugin from '../../main'
-import type { Project, FilterState, StatusConfig, Task } from '../../types'
+import type { Project, FilterState, StatusConfig, Task, BoardType } from '../../types'
 import { formatDateLong } from '../../utils'
 import { type FlatTask, flattenTasks } from '../../store/TaskTreeOps'
 import { findTaskById } from '../../store/TaskIndex'
@@ -46,6 +46,10 @@ export interface TableContext {
   plugin: PMPlugin
   /** Status definitions in effect for this project, computed once per render pass. */
   statuses: StatusConfig[]
+  /** Resolved once per render pass, beside statuses: a plain board drops the
+   *  Severity column from the header, the rows AND the spacer colspan, and all
+   *  three have to agree or the virtual scroll misaligns. */
+  boardType: BoardType
   state: TableState
   onRefresh: () => Promise<void>
   onSelectionChange: () => void
@@ -90,11 +94,12 @@ export function renderTable(ctx: TableContext): void {
     ctx.onSelectionChange()
   })
 
+  const socBoard = ctx.boardType !== 'plain'
   const cols: { key: SortKey | null; label: string; width?: string }[] = [
     { key: null, label: '', width: '32px' },
     { key: 'title', label: 'Task', width: 'auto' },
     { key: 'status', label: 'Status', width: '130px' },
-    { key: 'severity', label: 'Severity', width: '110px' },
+    ...(socBoard ? [{ key: 'severity' as SortKey, label: 'Severity', width: '110px' }] : []),
     { key: 'assignees', label: 'Assignees', width: '140px' },
     { key: 'due', label: 'Due', width: '110px' },
     { key: 'progress', label: 'Progress', width: '120px' },
@@ -283,7 +288,9 @@ function renderWindowRows(ctx: TableContext): void {
 
   const rows = state.visibleRows
   // 10 fixed cells + custom fields + the Updated column.
-  const colCount = 11 + ctx.project.customFields.length
+  // Must track the column list above: drop the Severity column and the spacer
+  // rows have to shrink with it, or a long board's virtual scroll misaligns.
+  const colCount = (ctx.boardType === 'plain' ? 10 : 11) + ctx.project.customFields.length
   const { start, end } = computeWindow(state)
   state.windowStart = start
   state.windowEnd = end

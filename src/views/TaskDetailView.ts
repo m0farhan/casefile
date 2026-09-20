@@ -315,7 +315,7 @@ export class TaskDetailView extends ItemView {
       header,
       config.severities.find((s) => s.id === task.severity)
     )
-    if (task.issueType === 'incident') {
+    if (this.plugin.store.configFor(project).boardType !== 'plain' && task.issueType === 'incident') {
       // Registered chips unregister themselves: the shared 30s tick drops any
       // chip whose element left the DOM, and both onClose and every render()
       // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).

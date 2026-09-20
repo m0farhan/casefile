@@ -5,6 +5,7 @@ import {
   DEFAULT_SEVERITIES,
   DEFAULT_SLA_POLICIES,
   type AlertCategoryConfig,
+  type BoardType,
   type IssueTypeConfig,
   type Recurrence,
   type SeverityConfig,
@@ -23,6 +24,11 @@ import { renderTimeChip } from './timeChip'
 
 export interface KanbanCardProps {
   task: Task
+  /** 'plain' hides the SOC chips. Per-board, so it rides on the card data and
+   *  never on the module-level socConfig bridge: in a split, the last board to
+   *  repaint would own a global, and a case board would silently lose its
+   *  severity badge. */
+  boardType?: BoardType
   descriptionPreview?: string
   parentTitle?: string
   parentKey?: string
@@ -125,16 +131,21 @@ export class KanbanCard {
       { alert: { tags: task.tags, categories: socConfig?.alertCategories ?? DEFAULT_ALERT_CATEGORIES } }
     )
     if (task.key) renderKeyChip(chips, task.key, { plain: true })
-    renderSeverityBadge(
-      chips,
-      (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
-    )
-    // SLA chip stays incident-only (slaState also gates on issueType, so this
-    // is belt and braces).
-    if (task.issueType === 'incident') {
-      renderSlaChip(chips, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
+    // A plain board has no severity and no clocks. The values stay on the note;
+    // only the chips go.
+    const socBoard = props.boardType !== 'plain'
+    if (socBoard) {
+      renderSeverityBadge(
+        chips,
+        (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
+      )
+      // SLA chip stays incident-only (slaState also gates on issueType, so this
+      // is belt and braces).
+      if (task.issueType === 'incident') {
+        renderSlaChip(chips, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
+      }
     }
-    if (task.iocs.length) {
+    if (socBoard && task.iocs.length) {
       const iocChip = chips.createSpan({ cls: 'pm-ioc-count' })
       setIcon(iocChip.createSpan({ cls: 'pm-ioc-count-icon' }), 'crosshair')
       iocChip.createSpan({ text: String(task.iocs.length) })

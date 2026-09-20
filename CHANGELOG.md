@@ -45,6 +45,46 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.28.0] - 2026-09-20
+
+### Added (board types)
+
+- A board now declares what kind it is when you create it.
+  - **Case board** — the full kit: severity, response clocks, verdicts,
+    indicators, the incident timeline and alert intake.
+  - **Plain board** — columns and cards only. Use it for goals, investigations
+    and anything that is not a case queue.
+- **Hiding is not deleting.** A plain board hides the SOC fields; it never
+  strips them. A note that already carries a severity, a verdict or indicators
+  keeps them in its frontmatter, and switching the board back to Case shows
+  them again. There is a test for exactly this.
+- Every board that already exists is a Case board. No key is written for one,
+  so existing board notes are byte-identical and nothing is migrated.
+- A plain board also drops the Severity column from the table, the four
+  incident charts from Reports, and refuses alert intake and case reports with
+  a sentence saying why rather than producing an artifact full of
+  "not recorded".
+- The shift handover leaves plain boards out of **Open incidents** only, and
+  says so inside that section. Every other section still walks every board,
+  because "Waiting" and "Changed in the last Nh" are not SOC-specific.
+
+### Added (switching boards)
+
+- The board icon in the toolbar is now the **board menu**: every board, the one
+  you are on ticked, switching in the leaf you are already standing in. New
+  board and Edit this board are in the same menu. It used to open the settings
+  dialog that the gear two controls away already opened.
+- **Switch board** is also a palette command.
+
+### Changed (a board is called a board)
+
+- The palette, the boards pane, the create dialog and the board toolbar now say
+  "board" instead of "project". Command IDs, folder names and frontmatter keys
+  are unchanged, so hotkeys, saved views and existing notes are unaffected.
+- The new-board dialog no longer pre-fills the name with "New Project", which
+  had the side effect of creating a vault folder literally called that if you
+  clicked straight through.
+
 ## [2.27.1] - 2026-09-20
 
 ### Changed

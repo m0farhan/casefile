@@ -211,6 +211,13 @@ export async function writeCaseReportNote(app: App, task: Task, md: string): Pro
 export async function loadAndComposeCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<string> {
   await plugin.store.loadTaskBody(task)
   const cfg = plugin.store.configFor(project)
+  // A case report is a SOC artifact: incident timeline, response targets,
+  // indicators, verdict. On a plain board every one of those sections would
+  // print "not recorded", which reads as a case with nothing found rather than
+  // a board that never recorded any of it.
+  if (cfg.boardType === 'plain') {
+    throw new Error(`${project.title} is a plain board — case reports are for case boards.`)
+  }
   return composeCaseReport(task, {
     project,
     statuses: cfg.statuses,

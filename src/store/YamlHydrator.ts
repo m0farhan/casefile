@@ -270,6 +270,10 @@ function hydrateProjectConfig(raw: unknown): ProjectConfig | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const r = raw as Record<string, unknown>
   const config: ProjectConfig = {}
+  // Only 'plain' is read. Anything else — absent, misspelt, a number — leaves the
+  // key off, and resolveProjectConfig then reads it as a case board. Fail-open is
+  // right here: the worst case is a board showing more than it needs, never less.
+  if (r.boardType === 'plain') config.boardType = 'plain'
   const statuses = hydrateStatusList(r.statuses)
   if (statuses) config.statuses = statuses
   const priorities = hydratePriorityList(r.priorities)

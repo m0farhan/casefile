@@ -77,7 +77,10 @@ const REPEAT_OPTIONS: SelectItem[] = [
  */
 export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFieldsContext): void {
   const { task, project, plugin, rerender, shownExtras } = ctx
-  const { statuses, issueTypes, severities, verdicts } = plugin.store.configFor(project)
+  const { statuses, issueTypes, severities, verdicts, boardType } = plugin.store.configFor(project)
+  // A plain board records no severity and no verdict; the values stay on any
+  // note that already has them and return if the board is switched back.
+  const socBoard = boardType !== 'plain'
   const grid = container.createDiv('pm-prop-grid')
 
   // Type — one merged control: the issue types plus the structural kinds.
@@ -171,30 +174,37 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     },
     'circle-dot'
   )
-  renderPropRow(
-    grid,
-    'Severity',
-    () => {
-      const cell = createDiv('pm-prop-value')
-      renderSelectControl({
-        container: cell,
-        value: task.severity,
-        options: [
-          { id: '', label: 'None' },
-          ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
-        ],
-        onChange: (id) => {
-          task.severity = id
-          rerender()
-        }
-      })
-      return cell
-    },
-    'shield-alert'
-  )
+  if (socBoard) {
+    renderPropRow(
+      grid,
+      'Severity',
+      () => {
+        const cell = createDiv('pm-prop-value')
+        renderSelectControl({
+          container: cell,
+          value: task.severity,
+          options: [
+            { id: '', label: 'None' },
+            ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
+          ],
+          onChange: (id) => {
+            task.severity = id
+            rerender()
+          }
+        })
+        return cell
+      },
+      'shield-alert'
+    )
+  } else {
+    // The grid is two columns: Status took the left cell, so a spacer keeps
+    // everything below it aligned.
+    grid.createDiv()
+  }
 
-  // Verdict — incidents only; the spacer keeps the two-column grid aligned
-  if (task.issueType === 'incident') {
+  // Verdict — incidents only, and only on a case board; the spacer keeps the
+  // two-column grid aligned
+  if (socBoard && task.issueType === 'incident') {
     renderPropRow(
       grid,
       'Verdict',

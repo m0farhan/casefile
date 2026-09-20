@@ -14,6 +14,9 @@ const FALLBACK_COLOR = '#8a94a0'
 export function resolveProjectConfig(project: Project, settings: PMSettings): ResolvedProjectConfig {
   const config = project.config
   return {
+    // Absent = 'case': a board that predates board types behaves as it always has.
+    // An unrecognised value degrades the same way rather than throwing.
+    boardType: config?.boardType === 'plain' ? 'plain' : 'case',
     statuses: withInUseExtras(
       config?.statuses?.length ? config.statuses : settings.statuses,
       settings.statuses,

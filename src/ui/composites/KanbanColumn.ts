@@ -1,5 +1,5 @@
 import { setIcon } from 'obsidian'
-import type { IssueTypeConfig, Task } from '../../types'
+import type { IssueTypeConfig, Task, BoardType } from '../../types'
 import { safeAsync } from '../../utils'
 import { IconButton } from '../primitives/IconButton'
 import { KanbanCard } from './KanbanCard'
@@ -23,6 +23,7 @@ export interface KanbanCardData {
   /** Subtask rendering directly under its parent (or a same-parent sibling run) in this column. */
   nested?: boolean
   issueTypes?: IssueTypeConfig[]
+  boardType?: BoardType
   epic?: { label: string; color?: string }
   subtaskProgress?: { done: number; total: number }
   loggedHours: number
@@ -103,6 +104,7 @@ export class KanbanColumn {
         parentKey: card.parentKey,
         nested: card.nested,
         issueTypes: card.issueTypes,
+        boardType: card.boardType,
         epic: card.epic,
         subtaskProgress: card.subtaskProgress,
         loggedHours: card.loggedHours,

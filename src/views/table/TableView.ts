@@ -189,6 +189,7 @@ export class TableView implements SubView {
       project: this.project,
       plugin: this.plugin,
       statuses: config.statuses,
+      boardType: config.boardType,
       state: this.state,
       onRefresh: this.onRefresh,
       onSelectionChange: () => {

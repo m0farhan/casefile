@@ -1,6 +1,6 @@
 {
   "name": "casefile",
-  "version": "2.27.1",
+  "version": "2.28.0",
   "description": "Casefile - Jira-style case and SOC incident tracking for Obsidian",
   "main": "main.js",
   "type": "module",

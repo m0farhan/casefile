@@ -57,10 +57,15 @@ export class ReportsView implements SubView {
     const grid = root.createDiv('pm-report-grid')
     this.renderOpenedClosed(grid, tasks, now)
     this.renderTimeInStatus(grid, tasks, now)
-    this.renderOpenSeverity(grid, incidents)
-    this.renderVerdicts(grid, incidents)
-    this.renderSlaCompliance(grid, incidents, now)
-    this.renderLifecycleDurations(grid, incidents)
+    // The four incident sections measure things a plain board does not record.
+    // Rendering them would print empty charts, and an empty compliance tile
+    // reads as "nothing is breaching" when the truth is "nothing is measured".
+    if (this.plugin.store.configFor(this.project).boardType !== 'plain') {
+      this.renderOpenSeverity(grid, incidents)
+      this.renderVerdicts(grid, incidents)
+      this.renderSlaCompliance(grid, incidents, now)
+      this.renderLifecycleDurations(grid, incidents)
+    }
   }
 
   private renderSummary(root: HTMLElement, tasks: Task[], incidents: Task[], now: number): void {

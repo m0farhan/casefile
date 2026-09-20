@@ -57,6 +57,17 @@ export class AlertIntakeModal extends Modal {
     contentEl.addClass('pm-alert-intake')
     this.modalEl.addClass('pm-modal')
     const config = this.plugin.store.configFor(this.project)
+    // Both the toolbar button and the palette command land here, so the refusal
+    // lives here too. Intake writes severity, indicators and an incident type —
+    // a plain board records none of those, so it would write fields nothing on
+    // that board can show or edit.
+    if (config.boardType === 'plain') {
+      this.setTitle('Alert intake is for case boards')
+      contentEl.createEl('p', {
+        text: `${this.project.title} is a plain board, so it records no severity, indicators or incident timeline. Switch to a case board, or change this board's type in its settings.`
+      })
+      return
+    }
 
     contentEl.createEl('h2', { text: 'New case from pasted alert' })
 

@@ -122,3 +122,35 @@ describe('issueTypes / severities / verdicts resolution', () => {
     expect(resolved.issueTypes[1].label).toBe('request') // fallback entry, nothing disappears
   })
 })
+
+describe('boardType', () => {
+  it('defaults an absent boardType to case, so a board written before board types is unchanged', () => {
+    const p = makeProject('LetsDefend', 'Projects/LetsDefend.md')
+    expect(p.config?.boardType).toBeUndefined()
+    expect(resolveProjectConfig(p, DEFAULT_SETTINGS).boardType).toBe('case')
+  })
+
+  it('resolves a declared plain board', () => {
+    const p = makeProject('Goals', 'Projects/Goals.md')
+    p.config = { boardType: 'plain' }
+    expect(resolveProjectConfig(p, DEFAULT_SETTINGS).boardType).toBe('plain')
+  })
+
+  it('fails open on a value it does not recognise, rather than throwing', () => {
+    const p = makeProject('Odd', 'Projects/Odd.md')
+    // A hand-edited board note is the trust boundary here.
+    p.config = { boardType: 'kanban' as unknown as 'plain' }
+    expect(resolveProjectConfig(p, DEFAULT_SETTINGS).boardType).toBe('case')
+  })
+
+  it('leaves every other resolved value alone on a plain board', () => {
+    const p = makeProject('Goals', 'Projects/Goals.md')
+    p.config = { boardType: 'plain' }
+    const cfg = resolveProjectConfig(p, DEFAULT_SETTINGS)
+    // Hiding is a render decision; the vocabularies themselves are untouched,
+    // which is what lets a board be switched back with nothing lost.
+    expect(cfg.severities).toEqual(DEFAULT_SETTINGS.severities)
+    expect(cfg.verdicts).toEqual(DEFAULT_SETTINGS.verdicts)
+    expect(cfg.statuses.map((s) => s.id)).toEqual(DEFAULT_SETTINGS.statuses.map((s) => s.id))
+  })
+})

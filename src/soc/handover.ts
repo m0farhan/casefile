@@ -49,7 +49,15 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
   ]
 
   // ── Open incidents by severity ─────────────────────────────────────────────
+  // Plain boards record no severity, so they are left out of THIS section only.
+  // The later sections walk every board: "Changed in the last Nh" and "Waiting"
+  // are board-neutral, and user-response is exactly the status a goals board
+  // uses. Skipping whole boards there would print "None." where the truth is
+  // "not looked at".
+  const plainBoards = projects.filter((p) => p.config?.boardType === 'plain')
+  const isCaseBoard = (r: Row) => r.project.config?.boardType !== 'plain'
   const openIncidents = all
+    .filter(isCaseBoard)
     .filter(isOpen)
     .filter((r) => r.task.issueType === 'incident')
     .sort((a, b) => {
@@ -59,6 +67,13 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
     })
   lines.push('## Open incidents')
   lines.push('')
+  // The exclusion is stated inside the section it applies to, so "None." here
+  // can never be read as "nothing open anywhere".
+  if (plainBoards.length) {
+    const names = plainBoards.map((p) => p.title).join(', ')
+    lines.push(`Not counted here: ${names} — plain board${plainBoards.length === 1 ? '' : 's'}, no severity recorded.`)
+    lines.push('')
+  }
   if (!openIncidents.length) {
     lines.push('None.')
   } else {

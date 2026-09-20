@@ -51,7 +51,7 @@ export class ProjectModal extends Modal {
       rebuildTaskIndex(this.project)
       this.isNew = false
     } else {
-      this.project = makeProject('New Project', '')
+      this.project = makeProject('', '')
       this.isNew = true
     }
     this.originalTitle = existingProject?.title ?? ''
@@ -74,7 +74,7 @@ export class ProjectModal extends Modal {
     const header = el.createDiv('pm-project-modal-header')
     header.createSpan({ text: '✦', cls: 'pm-project-modal-header-icon' })
     header.createEl('h2', {
-      text: this.isNew ? 'New project' : 'Project settings',
+      text: this.isNew ? 'New board' : 'Board settings',
       cls: 'pm-modal-heading'
     })
 
@@ -101,13 +101,13 @@ export class ProjectModal extends Modal {
 
     // Title
     const titleWrap = topRow.createDiv('pm-project-title-wrap')
-    titleWrap.createEl('label', { text: 'Project name', cls: 'pm-label' })
+    titleWrap.createEl('label', { text: 'Board name', cls: 'pm-label' })
     const titleInput = titleWrap.createEl('input', {
       type: 'text',
       value: this.project.title,
       cls: 'pm-input pm-input--lg'
     })
-    titleInput.placeholder = 'My awesome project'
+    titleInput.placeholder = 'Investigation, goals, alert queue…'
     titleInput.addEventListener('input', () => {
       this.project.title = titleInput.value
     })
@@ -142,11 +142,40 @@ export class ProjectModal extends Modal {
     const descSection = el.createDiv('pm-project-modal-section')
     descSection.createEl('label', { text: 'Description', cls: 'pm-label' })
     const descArea = descSection.createEl('textarea', { cls: 'pm-input pm-project-desc' })
-    descArea.placeholder = 'What is this project about?'
+    descArea.placeholder = 'What is this board for?'
     descArea.value = this.project.description
     descArea.addEventListener('input', () => {
       this.project.description = descArea.value
     })
+
+    // ── Board type ────────────────────────────────────────────────────────────
+    // Only on create. Changing a live board's type is a real decision with real
+    // consequences (a case board flipped to plain hides recorded severities), so
+    // it belongs in settings with an explanation, not behind an idle dropdown here.
+    if (this.isNew) {
+      const typeSection = el.createDiv('pm-project-modal-section')
+      typeSection.createEl('label', { text: 'Board type', cls: 'pm-label' })
+      const typeSelect = typeSection.createEl('select', { cls: 'pm-input' })
+      typeSelect.createEl('option', { text: 'Case board — for an alert or case queue', value: 'case' })
+      typeSelect.createEl('option', { text: 'Plain board — columns and cards only', value: 'plain' })
+      typeSelect.value = this.project.config?.boardType ?? 'case'
+      const typeHint = typeSection.createDiv({ cls: 'pm-modal-hint' })
+      const describe = () => {
+        typeHint.setText(
+          typeSelect.value === 'plain'
+            ? 'No severity, response clocks, verdicts, indicators or alert intake — just columns and cards. Use this for goals, projects and anything that is not a case queue.'
+            : 'Severity, response clocks, verdicts, indicators, the incident timeline and alert intake.'
+        )
+      }
+      describe()
+      typeSelect.addEventListener('change', () => {
+        const config = (this.project.config ??= {})
+        // Absent means case, so the key is only written when it is plain.
+        if (typeSelect.value === 'plain') config.boardType = 'plain'
+        else delete config.boardType
+        describe()
+      })
+    }
 
     // ── Issue keys ────────────────────────────────────────────────────────────
     const keySection = el.createDiv('pm-project-modal-section')
@@ -234,7 +263,7 @@ export class ProjectModal extends Modal {
     // ── Statuses ──────────────────────────────────────────────────────────────
     this.renderPaletteOverride(el, {
       heading: 'Statuses',
-      hint: 'The workflow for this project',
+      hint: 'The workflow for this board',
       toggleLabel: 'Use custom statuses instead of the global ones',
       addLabel: 'Add status',
       get: () => this.project.config?.statuses,
@@ -292,7 +321,7 @@ export class ProjectModal extends Modal {
     new ButtonComponent(footer).setButtonText('Cancel').onClick(() => this.close())
 
     new ButtonComponent(footer)
-      .setButtonText(this.isNew ? '+ Create project' : 'Save')
+      .setButtonText(this.isNew ? '+ Create board' : 'Save')
       .setCta()
       .onClick(
         safeAsync(async () => {

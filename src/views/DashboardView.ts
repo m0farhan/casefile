@@ -22,7 +22,7 @@ export class DashboardView extends ItemView {
     return PM_DASHBOARD_VIEW_TYPE
   }
   getDisplayText(): string {
-    return 'Projects'
+    return 'Boards'
   }
   getIcon(): string {
     return 'chart-gantt'
