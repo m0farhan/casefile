@@ -45,6 +45,29 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.27.0] - 2026-09-20
+
+### Added (closed cases file themselves away)
+
+- **Settings → Auto-archive → Archive closed cases after (days)**. A case moves
+  into its project's Archive folder that many days after the date it was
+  completed. **0 turns it off, and 0 is the default** — this moves your files,
+  so it does not start without you asking.
+- What it will never do, deliberately:
+  - move a case with no completion date, or one it cannot read, or one dated in
+    the future. The clock has to be a recorded fact.
+  - decide "closed" from the id `done`. It reads the terminal flag on your own
+    status list, so a closing status you renamed or added still counts.
+  - take a case twice. Every archive and unarchive now writes an entry in the
+    case timeline, and that entry is what disarms the sweep: **a case you
+    unarchive is never taken again**, it stays on the board until you archive
+    it by hand.
+  - drag open work into Archive. Archiving a parent carries its subtree, so a
+    case whose subtree still holds an open task is held back.
+- Every move is announced with a count and is reversible from the case menu.
+- Archiving by hand is now recorded in the case timeline too, which it never
+  was before.
+
 ## [2.26.0] - 2026-09-20
 
 ### Fixed (your alerts parse now — this was losing data on every paste)

@@ -61,7 +61,9 @@ export interface TaskSource {
   reorderTask(project: Project, taskId: string, targetId: string, position: 'before' | 'after'): Promise<void>
   deleteTask(project: Project, taskId: string): Promise<void>
   deleteTasks(project: Project, taskIds: string[]): Promise<void>
-  archiveTask(project: Project, taskId: string): Promise<void>
+  /** `reason` is recorded in the case's activity log; it also disarms the
+   *  auto-archive sweep for that case (see ArchiveOps.dueForAutoArchive). */
+  archiveTask(project: Project, taskId: string, reason?: 'manual' | 'auto'): Promise<void>
   unarchiveTask(project: Project, taskId: string): Promise<void>
 
   /** Runs dependency-based auto-scheduling; a no-op when the project's config disables it. */

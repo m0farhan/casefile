@@ -2,6 +2,7 @@ import { Notice } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, StatusConfig, Task } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
+import { archiveToday, dueForAutoArchive } from '../store/ArchiveOps'
 import { isTerminalStatus } from '../utils'
 import { Temporal, today, parsePlainDate } from '../dates'
 import { slaAnchor, slaState } from '../soc/sla'
@@ -12,13 +13,15 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000
 export class Notifier {
   private intervalId: number | null = null
   private notifiedIds = new Set<string>() // prevent repeat notifications within session
+  /** One sweep at a time: a pass can outlive the 5-minute interval on a big vault. */
+  private sweeping = false
 
   constructor(private plugin: PMPlugin) {}
 
   start(): void {
-    void this.check()
+    void this.tick()
     this.intervalId = window.setInterval(() => {
-      void this.check()
+      void this.tick()
     }, CHECK_INTERVAL_MS)
     this.plugin.registerInterval(this.intervalId)
   }
@@ -27,6 +30,69 @@ export class Notifier {
     if (this.intervalId !== null) {
       window.clearInterval(this.intervalId)
       this.intervalId = null
+    }
+  }
+
+  /**
+   * One pass of everything on the clock. The archive sweep is deliberately NOT
+   * inside check(): check() returns early when notifications are off, and
+   * whether an analyst wants toast messages has nothing to do with whether
+   * they asked for closed cases to file themselves away.
+   */
+  private async tick(): Promise<void> {
+    await this.check()
+    await this.sweepArchive()
+  }
+
+  /**
+   * Move closed cases into Archive/ once they are old enough.
+   *
+   * OFF unless the analyst sets a window (0 = off), because this moves their
+   * files. Top-level cases only: archiving a parent carries its subtree, so a
+   * case whose subtree still holds open work is held back rather than dragging
+   * it in. Every move is an activity entry, which is also what stops the timer
+   * ever taking the same case twice — see dueForAutoArchive.
+   *
+   * ponytail: no per-pass cap. The first pass after enabling this can move a
+   * lot of cases at once; add a cap if that ever visibly stalls.
+   */
+  async sweepArchive(): Promise<void> {
+    const days = this.plugin.settings.autoArchiveDays
+    if (!Number.isFinite(days) || days <= 0) return
+    if (this.sweeping) return
+    this.sweeping = true
+    try {
+      let projects: Project[]
+      try {
+        projects = await this.plugin.store.loadAllProjects(this.plugin.settings.projectsFolder)
+      } catch {
+        return
+      }
+      const now = archiveToday()
+      let moved = 0
+      for (const project of projects) {
+        const statuses = this.plugin.store.configFor(project).statuses
+        // Top-level only, and a parent waits while any descendant is still open.
+        for (const task of [...project.tasks]) {
+          if (!dueForAutoArchive(task, statuses, days, now)) continue
+          const subtreeOpen = flattenTasks([task]).some(
+            (f) => f.task.id !== task.id && !isTerminalStatus(f.task.status, statuses)
+          )
+          if (subtreeOpen) continue
+          await this.plugin.store.archiveTask(project, task.id, 'auto')
+          moved++
+        }
+      }
+      if (moved) {
+        new Notice(
+          `Casefile archived ${moved} closed case${moved === 1 ? '' : 's'} (${days}d). ` +
+            'Each one has an "archived" entry in its timeline; unarchive from the case menu.',
+          8000
+        )
+        this.plugin.refreshProjectViews()
+      }
+    } finally {
+      this.sweeping = false
     }
   }
 

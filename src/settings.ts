@@ -445,6 +445,28 @@ export class PMSettingTab extends PluginSettingTab {
         })
     })
 
+    // ── Auto-archive ──────────────────────────────────────────────────────────
+    new Setting(containerEl).setName('Auto-archive').setHeading()
+
+    new Setting(containerEl)
+      .setName('Archive closed cases after (days)')
+      .setDesc(
+        'Move a case into its project Archive folder this many days after the date it was completed. ' +
+          '0 turns it off. The case note is moved, not deleted, and the move is written into the case ' +
+          'timeline. A case you unarchive is never taken again — archive it by hand after that. ' +
+          'A case with no completion date is never moved.'
+      )
+      .addText((text) =>
+        text.setValue(String(this.plugin.settings.autoArchiveDays)).onChange(async (v) => {
+          const n = Number(v.trim())
+          // Refuse a value rather than quietly clamping it: an analyst who typed
+          // "30" and got 7 would not know their files were about to move early.
+          if (!Number.isFinite(n) || n < 0 || n > 365 || !Number.isInteger(n)) return
+          this.plugin.settings.autoArchiveDays = n
+          await this.plugin.saveSettings()
+        })
+      )
+
     // ── Shift handover ────────────────────────────────────────────────────────
     new Setting(containerEl).setName('Shift handover').setHeading()
 

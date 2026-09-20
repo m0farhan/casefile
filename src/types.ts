@@ -303,6 +303,9 @@ export interface PMSettings {
   alertCategories: AlertCategoryConfig[]
   /** Vault path of the generated shift-handover note. */
   handoverPath: string
+  /** Move a closed case into Archive/ this many days after its completion date.
+   *  0 = off, which is the default: this moves the analyst's files on a timer. */
+  autoArchiveDays: number
   handoverWindowHours: number
   /**
    * The analyst's own estate: domains and IPv4 CIDRs that are never sent to a
@@ -537,6 +540,7 @@ export const DEFAULT_SETTINGS: PMSettings = {
   incidentTemplates: DEFAULT_INCIDENT_TEMPLATES,
   alertCategories: DEFAULT_ALERT_CATEGORIES,
   handoverPath: 'SOC/Handover.md',
+  autoArchiveDays: 0,
   handoverWindowHours: 12,
   ownedAssets: [],
   virusTotalApiKey: '',

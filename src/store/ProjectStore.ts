@@ -1520,12 +1520,43 @@ export class ProjectStore implements TaskSource {
     await this.saveProject(project)
   }
 
-  async archiveTask(project: Project, taskId: string): Promise<void> {
+  /**
+   * Archive a case and record that it happened. `reason` distinguishes the
+   * analyst's own click from the timer's sweep, and the entry is what disarms
+   * auto-archive for good on this case (dueForAutoArchive) — so a case pulled
+   * back out is never taken again.
+   *
+   * Every archive path in the plugin routes through here, which is why the
+   * entry lives here and not in the caller: a file move finally shows up in the
+   * case timeline, and the count and the log are one call.
+   */
+  async archiveTask(project: Project, taskId: string, reason: 'manual' | 'auto' = 'manual'): Promise<void> {
+    const task = findTaskById(project, taskId)
+    if (!task) return
+    const from = task.completed
     await doArchiveTask(this.app, project, taskId)
+    if (!task.archived) return
+    await this.appendActivity(project, taskId, {
+      at: new Date().toISOString(),
+      field: 'archived',
+      // The closing date, not a computed age: `days` is the setting at sweep
+      // time, not a gap anyone measured, and the log is append-only.
+      from,
+      to: reason
+    })
   }
 
   async unarchiveTask(project: Project, taskId: string): Promise<void> {
+    const task = findTaskById(project, taskId)
     await doUnarchiveTask(this.app, project, taskId)
+    if (task && !task.archived) {
+      await this.appendActivity(project, taskId, {
+        at: new Date().toISOString(),
+        field: 'archived',
+        from: task.completed,
+        to: 'restored'
+      })
+    }
   }
 
   async deleteTask(project: Project, taskId: string): Promise<void> {
