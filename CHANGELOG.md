@@ -45,6 +45,26 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.22.0] - 2026-09-20
+
+### Changed (the board card is half the height, with nothing dropped)
+
+- The kanban card is two rows instead of six. It carried the same facts down a
+  stack of one-item rows — parent, title, soc chips, time, tags, progress,
+  subtasks, footer — so a routine incident card ran about 130px and a column
+  held three of them.
+- The title now shares its row with the assignee avatars and the due chip,
+  which were a row of their own in the footer.
+- Every counter is a chip in one wrapping row: issue type, key, severity, SLA,
+  indicators, checklist, subtasks, time, epic, tags, flag, repeat. The
+  "3/7 subtasks" sentence became a chip of the same shape as the checklist one,
+  with the same words kept in its tooltip.
+- Progress is a hairline on the card's own bottom edge rather than a row with
+  margins. The adjustable slider keeps an 8px hit target over a 3px track.
+- The title clamps at two lines; a third belongs in the case note.
+- Measured on the LetsDefend board: a two-line card with two chips went from
+  119px to 74px, and the busiest card on the board from 130px to 99px.
+
 ## [2.21.0] - 2026-09-16
 
 Safety release from a full audit of 2.20. Nothing here changes the file

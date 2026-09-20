@@ -135,7 +135,7 @@
   position: relative;
   /* Off-screen cards skip layout and paint (PS-03); the estimate only sizes the placeholder. */
   content-visibility: auto;
-  contain-intrinsic-size: auto 96px;
+  contain-intrinsic-size: auto 76px;
 }
 .pm-kanban-card:hover {
   background: var(--gs-surface-3);
@@ -179,21 +179,31 @@
   }
 }
 
+/* Two rows: head, chips. The extra bottom padding is the progress hairline's
+   lane — it is pinned to the card edge rather than costing a row. */
 .pm-kanban-card-body {
   flex: 1;
-  padding: 10px 12px;
+  padding: 8px 10px 9px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
 }
 .pm-kanban-card-body > .pm-chip {
   align-self: flex-start;
 }
+/* Two lines at most: a third is a case note, not a card. */
 .pm-kanban-card-title {
   margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   font-weight: 500;
-  line-height: 1.45;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 .pm-kanban-card-description {
   margin: 0;
@@ -203,35 +213,36 @@
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-}
-.pm-kanban-card-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
-.pm-kanban-card-footer {
+/* ─ The two rows ─ */
+
+/* Head: the title, with whoever owns the card and when it is due beside it.
+   The owner block is flex-none and top-aligned, so a two-line title wraps
+   against it instead of pushing it onto a row of its own. */
+.pm-kanban-card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  margin-top: auto;
-  padding-top: 2px;
 }
-.pm-kanban-card-footer-left,
-.pm-kanban-card-footer-right {
+.pm-kanban-card-owner {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  flex: 0 0 auto;
 }
 
-.pm-kanban-card-subtasks {
-  font-size: 11px;
-  color: var(--text-muted);
+/* Every counter, chip and tag the card carries, wrapping in one row. */
+.pm-kanban-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
 }
+
 .pm-kanban-card-parent {
   display: flex;
   align-items: center;
@@ -387,7 +398,17 @@
    app.css styles the thumb's :hover/:active at (0,2,1), which outranks any
    plain class chain — overriding the vars restyles every state at once
    (otherwise mid-drag you get its default 18px white thumb at top: -6px). */
-.pm-kanban-card-body .pm-kanban-progress {
+/* Progress lives on the card's bottom edge, inside its `overflow: hidden`, so
+   it reads as part of the card rather than as another row with its own margins.
+   The input is 8px tall for a real hit target; only the 3px track is painted. */
+.pm-kanban-card > .pm-kanban-progress,
+.pm-kanban-card > .pm-kanban-card-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+.pm-kanban-card > .pm-kanban-progress {
   --slider-thumb-width: 10px;
   --slider-thumb-height: 10px;
   --slider-thumb-width-active: 12px;
@@ -403,18 +424,24 @@
   display: block;
   width: 100%;
   min-width: 100%;
+  height: 8px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+.pm-kanban-card > .pm-kanban-progress::-webkit-slider-runnable-track {
   height: 3px;
-  margin: 2px 0;
+  margin-top: 5px;
   border-radius: 99px;
   background: linear-gradient(
     to right,
     var(--gs-accent) var(--pm-progress-pct, 0%),
     var(--gs-hairline-strong) var(--pm-progress-pct, 0%)
   );
-  cursor: pointer;
-  outline: none;
 }
-.pm-kanban-card-body .pm-kanban-progress::-webkit-slider-thumb {
+.pm-kanban-card > .pm-kanban-progress::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
   width: var(--slider-thumb-width);
@@ -425,11 +452,11 @@
   opacity: 0;
   transition: opacity 150ms ease-out;
 }
-.pm-kanban-card-body .pm-kanban-progress:hover::-webkit-slider-thumb,
-.pm-kanban-card-body .pm-kanban-progress:focus-visible::-webkit-slider-thumb {
+.pm-kanban-card > .pm-kanban-progress:hover::-webkit-slider-thumb,
+.pm-kanban-card > .pm-kanban-progress:focus-visible::-webkit-slider-thumb {
   opacity: 1;
 }
-.pm-kanban-card-body .pm-kanban-progress:focus-visible {
+.pm-kanban-card > .pm-kanban-progress:focus-visible {
   box-shadow: var(--gs-focus-ring);
 }
 

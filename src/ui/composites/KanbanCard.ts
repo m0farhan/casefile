@@ -80,6 +80,14 @@ export class KanbanCard {
 
     const body = card.createDiv('pm-kanban-card-body')
 
+    // Two rows, not six. Casefile's card carried the same facts down a stack of
+    // one-item rows — parent, title, soc chips, time, tags, progress, subtasks,
+    // footer — and a routine incident card ran ~130px tall, so a column held
+    // three of them. Farhan's one complaint about the old board. Nothing is
+    // dropped: the title shares its row with whoever owns the card and when it
+    // is due, every counter became a chip in one wrapping row, and progress
+    // became a hairline on the card's own bottom edge instead of a row.
+
     // Jira-style parent context for subtasks: directly under the parent (or a
     // same-parent sibling) the card indents with an elbow connector; stranded
     // in another column it carries a "↳ parent" breadcrumb instead.
@@ -92,31 +100,38 @@ export class KanbanCard {
       if (props.parentKey && props.parentTitle) setTooltip(bc, props.parentTitle)
     }
 
-    // Jira card anatomy: title first; type icon, key and severity live in the
-    // footer. The M/Sub/R letter chips are gone — the type icon and nesting
-    // already encode them.
-    body.createDiv({ text: task.title, cls: 'pm-kanban-card-title' })
+    // ── Row 1: what it is, and whose it is ───────────────────────────────────
+    const head = body.createDiv('pm-kanban-card-head')
+    head.createDiv({ text: task.title, cls: 'pm-kanban-card-title' })
+    const owner = head.createDiv('pm-kanban-card-owner')
+    new AvatarStack(owner).setNames(task.assignees).setMax(3).setSize('sm')
+    if (task.due) {
+      renderDueChip(owner, formatDateShort(task.due), props.overdue ? 'overdue' : 'normal', 'sm')
+    }
+    if (!owner.hasChildNodes()) owner.remove()
 
-    if (props.epic) {
-      const label = props.epic.label.length > 18 ? props.epic.label.slice(0, 18) + '…' : props.epic.label
-      const chip = body.createSpan({ cls: 'pm-epic-chip', text: label })
-      setTooltip(chip, props.epic.label)
-      if (props.epic.color) {
-        chip.setCssStyles({
-          color: props.epic.color,
-          background: `color-mix(in srgb, ${props.epic.color} 15%, transparent)`
-        })
-      }
+    if (props.descriptionPreview) {
+      body.createDiv({ cls: 'pm-kanban-card-description', text: props.descriptionPreview })
     }
 
-    const soc = body.createDiv('pm-kanban-card-soc')
+    // ── Row 2: every mark the card carries, one wrapping row ─────────────────
+    const chips = body.createDiv('pm-kanban-card-chips')
+    renderIssueTypeIcon(
+      chips,
+      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
+    )
+    if (task.key) renderKeyChip(chips, task.key, { plain: true })
+    renderSeverityBadge(
+      chips,
+      (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
+    )
     // SLA chip stays incident-only (slaState also gates on issueType, so this
-    // is belt and braces). Severity renders in the footer.
+    // is belt and braces).
     if (task.issueType === 'incident') {
-      renderSlaChip(soc, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
+      renderSlaChip(chips, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
     }
     if (task.iocs.length) {
-      const iocChip = soc.createSpan({ cls: 'pm-ioc-count' })
+      const iocChip = chips.createSpan({ cls: 'pm-ioc-count' })
       setIcon(iocChip.createSpan({ cls: 'pm-ioc-count-icon' }), 'crosshair')
       iocChip.createSpan({ text: String(task.iocs.length) })
       setTooltip(iocChip, `${task.iocs.length} indicator${task.iocs.length === 1 ? '' : 's'}`)
@@ -125,31 +140,55 @@ export class KanbanCard {
     // set the editor's clickable checkboxes flip).
     const checklist = checklistProgress(task.description)
     if (checklist) {
-      const chip = soc.createSpan({ cls: 'pm-checklist-count' })
+      const chip = chips.createSpan({ cls: 'pm-checklist-count' })
       setIcon(chip.createSpan({ cls: 'pm-checklist-count-icon' }), 'list-checks')
       chip.createSpan({ text: `${checklist.done}/${checklist.total}` })
       setTooltip(chip, `Checklist: ${checklist.done} of ${checklist.total} done`)
     }
-    if (!soc.hasChildNodes()) soc.remove()
-
-    if (props.descriptionPreview) {
-      body.createDiv({ cls: 'pm-kanban-card-description', text: props.descriptionPreview })
+    // Subtasks were a sentence on their own line; same count, same words in the
+    // tooltip, now the width of a chip.
+    if (props.subtaskProgress) {
+      const { done, total } = props.subtaskProgress
+      const chip = chips.createSpan({ cls: 'pm-checklist-count' })
+      setIcon(chip.createSpan({ cls: 'pm-checklist-count-icon' }), 'git-branch')
+      chip.createSpan({ text: `${done}/${total}` })
+      setTooltip(chip, `${done}/${total} subtasks`)
     }
-
-    renderTimeChip(body, props.loggedHours, task.timeEstimate ?? 0, 'sm')
-
-    if (task.tags.length) {
-      const tagsEl = body.createDiv('pm-kanban-card-tags')
-      for (const tag of task.tags.slice(0, 3)) {
-        renderTagChip(tagsEl, tag, props.showTagColors)
+    renderTimeChip(chips, props.loggedHours, task.timeEstimate ?? 0, 'sm')
+    if (props.epic) {
+      const label = props.epic.label.length > 18 ? props.epic.label.slice(0, 18) + '…' : props.epic.label
+      const chip = chips.createSpan({ cls: 'pm-epic-chip', text: label })
+      setTooltip(chip, props.epic.label)
+      if (props.epic.color) {
+        chip.setCssStyles({
+          color: props.epic.color,
+          background: `color-mix(in srgb, ${props.epic.color} 15%, transparent)`
+        })
       }
     }
+    if (task.tags.length) {
+      for (const tag of task.tags.slice(0, 3)) {
+        renderTagChip(chips, tag, props.showTagColors)
+      }
+    }
+    if (task.flagged) {
+      const flagEl = chips.createSpan({ cls: 'pm-flag-icon' })
+      setIcon(flagEl, 'flag')
+      setTooltip(flagEl, 'Flagged')
+    }
+    if (task.recurrence) {
+      const recurEl = chips.createSpan({ cls: 'pm-recur-icon' })
+      setIcon(recurEl, 'repeat')
+      setTooltip(recurEl, recurrenceLabel(task.recurrence))
+    }
+    if (!chips.hasChildNodes()) chips.remove()
 
+    // ── The card's own bottom edge, not a row ────────────────────────────────
     if (props.onProgressChange) {
       // Minimal in-card progress: the same thin track, but adjustable. The
       // slider must never start a card drag or bubble into click-to-open.
       const onProgressChange = props.onProgressChange
-      const slider = body.createEl('input', { type: 'range', cls: 'pm-kanban-progress' })
+      const slider = card.createEl('input', { type: 'range', cls: 'pm-kanban-progress' })
       slider.min = '0'
       slider.max = '100'
       slider.step = '25'
@@ -170,44 +209,7 @@ export class KanbanCard {
       slider.addEventListener('input', paint)
       slider.addEventListener('change', () => onProgressChange(Number(slider.value)))
     } else if (task.progress > 0) {
-      new ProgressBar(body).setSize('sm').setValue(task.progress)
-    }
-
-    if (props.subtaskProgress) {
-      const { done, total } = props.subtaskProgress
-      body.createSpan({
-        text: `${done}/${total} subtasks`,
-        cls: 'pm-kanban-card-subtasks'
-      })
-    }
-
-    const footer = body.createDiv('pm-kanban-card-footer')
-    const footLeft = footer.createDiv('pm-kanban-card-footer-left')
-    renderIssueTypeIcon(
-      footLeft,
-      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
-    )
-    if (task.key) renderKeyChip(footLeft, task.key, { plain: true })
-    renderSeverityBadge(
-      footLeft,
-      (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
-    )
-    if (task.flagged) {
-      const flagEl = footLeft.createSpan({ cls: 'pm-flag-icon' })
-      setIcon(flagEl, 'flag')
-      setTooltip(flagEl, 'Flagged')
-    }
-    if (task.recurrence) {
-      const recurEl = footLeft.createSpan({ cls: 'pm-recur-icon' })
-      setIcon(recurEl, 'repeat')
-      setTooltip(recurEl, recurrenceLabel(task.recurrence))
-    }
-
-    const footRight = footer.createDiv('pm-kanban-card-footer-right')
-    new AvatarStack(footRight).setNames(task.assignees).setMax(3).setSize('sm')
-
-    if (task.due) {
-      renderDueChip(footRight, formatDateShort(task.due), props.overdue ? 'overdue' : 'normal', 'sm')
+      new ProgressBar(card.createDiv('pm-kanban-card-progress')).setSize('sm').setValue(task.progress)
     }
 
     card.addEventListener('dragstart', (e) => {
