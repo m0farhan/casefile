@@ -106,3 +106,36 @@ describe('parseAlertPaste', () => {
     })
   })
 })
+
+describe('parseAlertPaste, markdown-formatted alerts', () => {
+  // Every alert in a real vault arrives already formatted, pasted from a
+  // console or a ticket. Before the emphasis strip the key came out as `**rule`
+  // and the title, the severity and the event time were all lost.
+  const BOLD = [
+    '## Alert',
+    '',
+    '**EventID :** `77`',
+    '',
+    '**Event Time :** `2024-05-13T09:22:00+03:00`',
+    '',
+    '**Rule :** `SOC138 - Detected Suspicious Xls File`',
+    '',
+    '**Severity :** `Medium`',
+    ''
+  ].join('\n')
+
+  it('reads a bolded, backticked alert the way it reads a plain one', () => {
+    const r = parseAlertPaste(BOLD, CFG)
+    expect(r.title).toBe('SOC138 - Detected Suspicious Xls File')
+    expect(r.severityId).toBe('sev3')
+    expect(r.occurredAt).toBe('2024-05-13T06:22:00.000Z')
+  })
+
+  it('reads the other emphasis shape, where the colon sits outside the bold', () => {
+    expect(parseAlertPaste('**Rule** : `SOC167 - LS Command Detected`', CFG).title).toBe('SOC167 - LS Command Detected')
+  })
+
+  it('leaves underscores alone, because they live inside real values', () => {
+    expect(parseAlertPaste('**Rule :** host_01 beaconing', CFG).title).toBe('host_01 beaconing')
+  })
+})

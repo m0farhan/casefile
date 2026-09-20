@@ -33,6 +33,11 @@ export class ProjectView extends ItemView {
   activeSavedViewId: string | null = null
   private subview: SubView | null = null
 
+  /** The project this leaf is showing, for palette commands that act on it. */
+  projectRef(): Project | null {
+    return this.project ?? null
+  }
+
   /** The board, when it is the open view — the palette's "Group board by…" needs it. */
   kanban(): KanbanView | null {
     return this.subview instanceof KanbanView ? this.subview : null

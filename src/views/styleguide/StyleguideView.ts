@@ -485,7 +485,7 @@ export class StyleguideView extends ItemView {
       {
         task: makeTask({
           title: 'Fix the overdue banner',
-          status: 'blocked',
+          status: 'user-response',
           severity: 'sev1',
           due: '2026-06-20',
           progress: 20,

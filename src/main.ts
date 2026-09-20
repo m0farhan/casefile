@@ -26,7 +26,8 @@ import { openHandoverModal } from './soc/HandoverModal'
 import { generateCaseReport } from './soc/caseReport'
 import { migrateProjects } from './migration'
 import { isCasesLayout, isProjectFolderLayout, projectFileName, taskFolderForProjectPath } from './store/layout'
-import { safeAsync } from './utils'
+import { safeAsync, withUserResponse } from './utils'
+import { categoryForTags, normalizeAlertCategories, suggestCategory } from './soc/alertCategory'
 import { tickAllSlaChips } from './soc/slaTicker'
 
 type SecretName = 'virustotal' | 'abuseipdb' | 'abusech'
@@ -137,6 +138,17 @@ export default class PMPlugin extends Plugin {
       name: 'Create new subtask',
       callback: () => {
         void this.pickProjectThenCreateTask('pick-parent')
+      }
+    })
+
+    this.addCommand({
+      id: 'tag-alert-kinds',
+      name: 'Tag alert kinds on this project',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(ProjectView)
+        if (!view) return false
+        if (!checking) void this.tagAlertKinds(view.projectRef())
+        return true
       }
     })
 
@@ -343,6 +355,11 @@ export default class PMPlugin extends Plugin {
     // renderRows and takes the whole Indicators section down. The filter also
     // detaches from DEFAULT_SETTINGS.ownedAssets, which Object.assign shares
     // by reference when data.json has no list of its own.
+    // Same trust boundary as ownedAssets: a hand-edited catalog must not throw
+    // out of categoryTerms inside every card render.
+    this.settings.alertCategories = normalizeAlertCategories(
+      (saved as { alertCategories?: unknown } | null)?.alertCategories
+    )
     this.settings.ownedAssets = Array.isArray(this.settings.ownedAssets)
       ? this.settings.ownedAssets.filter((v): v is string => typeof v === 'string')
       : []
@@ -358,6 +375,30 @@ export default class PMPlugin extends Plugin {
         s.complete = s.id === 'done' || s.id === 'cancelled'
         migrated = true
       }
+    }
+
+    // 2.26: the shipped default set became To Do / In Progress / User Response /
+    // Done. INSERT-ONLY — nothing is removed from a saved list, so a status the
+    // analyst edited or kept on purpose survives and no task is ever left on an
+    // id the list no longer defines. One-shot, keyed off the SAVED file: the
+    // merged `this.settings` carries DEFAULT_SETTINGS' `true` and would skip
+    // every existing vault, and re-running it would resurrect a User Response
+    // the analyst deleted (the retired-verdicts scar above). Runs AFTER the
+    // `complete` backfill (it inserts before the first terminal entry) and
+    // BEFORE the ganttHideDone seed, so a seeded filter includes the new status
+    // instead of hiding every case parked in it.
+    if (saved && !saved.statusDefaultsUpgraded) {
+      const upgraded = withUserResponse(this.settings.statuses)
+      if (upgraded) {
+        this.settings.statuses = upgraded
+        new Notice(
+          'Casefile: added a User Response status, between In Progress and Done. ' +
+            'Nothing was removed. Settings → Statuses to rename, reorder or delete it.',
+          8000
+        )
+      }
+      this.settings.statusDefaultsUpgraded = true
+      migrated = true
     }
 
     // ganttHideDone was a global gantt toggle; replaced by per-project filter.statuses
@@ -464,6 +505,62 @@ export default class PMPlugin extends Plugin {
       abuseipdb: this.getSecret('abuseipdb'),
       abusech: this.getSecret('abusech')
     }
+  }
+
+  /**
+   * Put a kind on every incident that has none, from its own title.
+   *
+   * The suggestion is DERIVED, so nothing is written until the analyst has read
+   * what would change and why: the confirm lists each case with the exact word
+   * that matched. Cases whose title names no kind are counted and skipped, not
+   * guessed at, and a case that already carries a kind is never overwritten.
+   * The tag is an ordinary tag, so this is reversible by removing it.
+   */
+  private async tagAlertKinds(project: Project | null): Promise<void> {
+    if (!project) return
+    const cats = this.settings.alertCategories
+    const rows: { id: string; line: string; tag: string }[] = []
+    let skipped = 0
+    for (const { task } of flattenTasks(project.tasks)) {
+      if (task.issueType !== 'incident') continue
+      if (categoryForTags(task.tags, cats)) continue
+      const hit = suggestCategory(task.title, cats)
+      if (!hit) {
+        skipped++
+        continue
+      }
+      rows.push({
+        id: task.id,
+        tag: hit.id,
+        line: `${task.key || task.title} → ${hit.label} (matched "${hit.matched}")`
+      })
+    }
+    if (!rows.length) {
+      this.showNotice(
+        skipped
+          ? `Nothing to tag — ${skipped} case(s) have titles that name no kind. Tag those by hand.`
+          : 'Nothing to tag — every incident already has a kind.'
+      )
+      return
+    }
+    const preview = rows
+      .slice(0, 12)
+      .map((r) => `• ${r.line}`)
+      .join('\n')
+    const more = rows.length > 12 ? `\n…and ${rows.length - 12} more` : ''
+    const tail = skipped ? `\n\n${skipped} case(s) name no kind and will be left alone.` : ''
+    const ok = await confirmDialog(
+      this.app,
+      `Add a kind tag to ${rows.length} case(s)?\n\n${preview}${more}${tail}`,
+      'Tag them'
+    )
+    if (!ok) return
+    const byId = new Map(rows.map((r) => [r.id, r.tag]))
+    await this.store.updateTasks(project, [...byId.keys()], (task) => {
+      const tag = byId.get(task.id)
+      return tag ? { tags: [...task.tags, tag] } : null
+    })
+    this.showNotice(`Tagged ${rows.length} case(s)`)
   }
 
   showNotice(msg: string, duration = 3000): void {

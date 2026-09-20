@@ -6,6 +6,7 @@ import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
 import { parseAlertPaste, type ParsedAlert } from '../soc/alertIntake'
 import { assetRule, iocSightings } from '../soc/ioc'
+import { suggestCategory } from '../soc/alertCategory'
 
 const EMPTY_PARSE: ParsedAlert = {
   title: '',
@@ -29,6 +30,9 @@ export class AlertIntakeModal extends Modal {
   private detectedAt = ''
   private titleInput!: HTMLInputElement
   private severitySelect!: HTMLSelectElement
+  /** Derived from the title, never stored until Create — see renderCategory. */
+  private category = ''
+  private categoryEl!: HTMLElement
   private occurredEl!: HTMLElement
   private detectedEl!: HTMLElement
   private iocCountEl!: HTMLElement
@@ -84,6 +88,8 @@ export class AlertIntakeModal extends Modal {
       this.severitySelect.createEl('option', { text: s.label, value: s.id })
     }
 
+    this.categoryEl = row('Kind')
+    this.categoryEl.addClass('pm-alert-detected')
     // Occurred first: that is the order the two things happen in.
     this.occurredEl = row('Occurred')
     this.occurredEl.addClass('pm-alert-detected')
@@ -110,6 +116,7 @@ export class AlertIntakeModal extends Modal {
   private renderPreviewValues(): void {
     this.titleInput.value = this.parsed.title
     this.severitySelect.value = this.parsed.severityId
+    this.renderCategory()
     this.renderStamp('occurredAt', this.parsed.occurredAt)
     this.renderStamp('detectedAt', this.parsed.detectedAt)
     const n = this.parsed.iocs.length
@@ -160,6 +167,32 @@ export class AlertIntakeModal extends Modal {
   }
 
   /**
+   * The kind of alert, DERIVED from the title and shown with the exact word
+   * that matched, so the analyst can see why. It is a suggestion until Create:
+   * confirming writes it as an ordinary tag on the case, which is what the card
+   * glyph reads. Nothing is written if they clear it, and a title that names no
+   * category says so rather than picking one.
+   */
+  private renderCategory(): void {
+    const hit = suggestCategory(this.titleInput.value || this.parsed.title, this.plugin.settings.alertCategories)
+    this.category = hit?.id ?? ''
+    this.categoryEl.empty()
+    if (!hit) {
+      this.categoryEl.createSpan({ cls: 'pm-alert-empty', text: 'Not recognised from the title' })
+      return
+    }
+    this.categoryEl.createSpan({ text: `${hit.label} — matched "${hit.matched}"` })
+    new ExtraButtonComponent(this.categoryEl)
+      .setIcon('x')
+      .setTooltip('Do not tag this case')
+      .onClick(() => {
+        this.category = ''
+        this.categoryEl.empty()
+        this.categoryEl.createSpan({ cls: 'pm-alert-empty', text: 'Not recorded' })
+      })
+  }
+
+  /**
    * Preview one parsed stamp. The empty text states only what is true here —
    * the paste did not name that time. It does NOT promise what the SLA will do:
    * this renders from the parse alone, and a case with no severity or an
@@ -193,6 +226,9 @@ export class AlertIntakeModal extends Modal {
       // priority is UI-retired but still written to frontmatter (round-trip default)
       priority: getDefaultPriorityId(config.priorities),
       severity: this.severitySelect.value,
+      // The confirmed category, as an ordinary tag — the card glyph reads tags,
+      // so nothing new is stored and the note stays plain markdown.
+      tags: this.category ? [this.category] : [],
       description: this.parsed.description,
       iocs: this.parsed.iocs,
       occurredAt: this.occurredAt,

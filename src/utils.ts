@@ -1,6 +1,7 @@
 import { Notice, setIcon } from 'obsidian'
 import type { Task, StatusConfig, PriorityConfig } from './types'
 import type { DueUrgency } from './ui/composites/dueChip'
+import { DEFAULT_STATUSES } from './types'
 import { today, parsePlainDate } from './dates'
 
 /** Deterministic HSL color from a string (e.g. assignee name) */
@@ -46,6 +47,30 @@ export function getDefaultPriorityId(priorities: PriorityConfig[]): string {
 export function getCompleteStatusId(statuses: StatusConfig[]): string {
   const found = statuses.find((s) => s.complete)
   return found ? found.id : 'done'
+}
+
+/**
+ * Add the shipped `user-response` status to a saved list that predates it,
+ * immediately before the first terminal (complete) entry so a parked case sits
+ * between active work and closed work on the board.
+ *
+ * INSERT-ONLY, and that is the whole design: nothing is removed, renamed,
+ * recoloured or reordered, so a status the analyst edited or deliberately kept
+ * survives untouched and no task is left pointing at an id the list no longer
+ * defines. Returns a NEW array (never mutates the caller's, which may still be
+ * the DEFAULT_STATUSES constant) or null when there is nothing to do.
+ *
+ * Callers must gate on a one-shot marker: re-running this would resurrect a
+ * User Response the analyst has since deleted (the retired-verdicts scar in
+ * main.ts loadSettings).
+ */
+export function withUserResponse(statuses: StatusConfig[]): StatusConfig[] | null {
+  const entry = DEFAULT_STATUSES.find((s) => s.id === 'user-response')
+  if (!entry || statuses.some((s) => s.id === entry.id)) return null
+  const next = statuses.map((s) => ({ ...s }))
+  const firstComplete = next.findIndex((s) => s.complete)
+  next.splice(firstComplete < 0 ? next.length : firstComplete, 0, { ...entry })
+  return next
 }
 
 /** Returns the sort index of a status in the config array (999 for unknown) */

@@ -45,6 +45,47 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.26.0] - 2026-09-20
+
+### Fixed (your alerts parse now — this was losing data on every paste)
+
+- Real alerts arrive already formatted, as `**Rule :** \`SOC138 - …\``. The
+  field parser read the key as `**rule`, so it matched nothing: **the title,
+  the severity and the event time were all being dropped on every formatted
+  paste**, and the case title fell back to whatever the first line happened to
+  be. Emphasis and code ticks are now stripped from both the key and the value.
+  Underscores are deliberately left alone, because they live inside real
+  hostnames and filenames.
+
+### Added (an icon that says what kind of alert it is)
+
+- Every incident drew the same siren, which says nothing on a SOC board. A case
+  that records its kind now shows that kind's glyph: phishing, malware,
+  suspicious file, credential compromise, web attack, suspicious network. The
+  kinds are an editable catalog and the tooltip still names the issue type.
+- The kind is a plain tag on the case, so nothing new is stored and the note
+  stays portable. A case with no matching tag keeps the siren: the kind is then
+  not recorded, and guessing one at render time would be a claim about meaning.
+- Alert intake suggests a kind from the title and shows **the exact word that
+  matched**, so you can see why. It becomes a tag only when you create the case,
+  and it can be cleared.
+- **Tag alert kinds on this project** in the palette does the same for cases you
+  already have. It lists every proposed tag with its matching word, writes only
+  on confirm, never overwrites a kind you already set, and counts the cases it
+  could not name instead of guessing at them.
+
+### Changed (four default statuses)
+
+- A fresh vault now ships **To Do · In Progress · User Response · Done**.
+- Existing vaults are upgraded by **insertion only**: User Response is added
+  before your first terminal status and *nothing is removed, renamed or
+  reordered*. A status you edited or kept on purpose survives, and no case is
+  ever left pointing at an id your list no longer defines. It runs once, so a
+  User Response you delete is not resurrected.
+- The handover's **Blocked** section is now **Waiting**, and it lists both the
+  new status and the old `blocked` id that older vaults still use, by its
+  configured label rather than the raw id.
+
 ## [2.25.1] - 2026-09-20
 
 ### Added (the shift handover you can actually find)

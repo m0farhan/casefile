@@ -11,9 +11,13 @@ import { formatSlaRemaining, slaAnchor, slaAtRisk, slaState } from './sla'
  * Deterministic shift-handover markdown, built entirely from frontmatter
  * (zero body loads). Sections: open incidents by severity, everything that
  * changed in the last N hours (from the activity log), targets at risk,
- * blocked items. Overwritten on every run — a generated artifact, the header
+ * waiting items. Overwritten on every run — a generated artifact, the header
  * says so.
  */
+/** Statuses that mean "parked on someone else", for the Waiting section.
+ *  'blocked' shipped as a default before 2.26 and still exists in older vaults. */
+const WAITING_STATUS_IDS = new Set(['user-response', 'blocked'])
+
 export function buildHandover(projects: Project[], settings: PMSettings, nowIso: string): string {
   const now = Date.parse(nowIso)
   const windowMs = settings.handoverWindowHours * 3_600_000
@@ -132,17 +136,22 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
   }
   lines.push('')
 
-  // ── Blocked ────────────────────────────────────────────────────────────────
-  // ponytail: status-id 'blocked' only — no heuristics over labels.
-  lines.push('## Blocked')
+  // ── Waiting ────────────────────────────────────────────────────────────────
+  // ponytail: status ids only — no heuristics over labels. 'blocked' is no
+  // longer a shipped default but is still matched: a vault created before 2.26
+  // keeps it, and this section was written for it.
+  lines.push('## Waiting')
   lines.push('')
-  const blocked = all.filter((r) => r.task.status === 'blocked').sort(byKeyAsc)
-  if (!blocked.length) {
+  const waiting = all.filter((r) => WAITING_STATUS_IDS.has(r.task.status)).sort(byKeyAsc)
+  if (!waiting.length) {
     lines.push('None.')
   } else {
-    for (const r of blocked) {
+    for (const r of waiting) {
       const assignees = r.task.assignees.length ? ` · ${r.task.assignees.join(', ')}` : ''
-      lines.push(`- ${label(r.task)}${assignees}`)
+      // The configured label, not the raw id — same rule as sevLabel above and
+      // caseReport.ts; this note is read away from the case (UX-14).
+      const cfg = statusesOf(r.project).find((s) => s.id === r.task.status)
+      lines.push(`- ${label(r.task)}${assignees} · ${cfg?.label ?? r.task.status}`)
     }
   }
   lines.push('')

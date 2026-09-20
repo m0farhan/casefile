@@ -64,10 +64,25 @@ function fieldLines(text: string): Map<string, string> {
   for (const line of text.split('\n')) {
     const m = /^\s*([^:]+?)\s*:\s*(.+?)\s*$/.exec(line)
     if (!m) continue
-    const key = m[1].toLowerCase().replace(/\s+/g, ' ')
-    if (!map.has(key)) map.set(key, m[2])
+    const key = stripEmphasis(m[1]).toLowerCase().replace(/\s+/g, ' ')
+    if (!key) continue
+    if (!map.has(key)) map.set(key, stripEmphasis(m[2]))
   }
   return map
+}
+
+/**
+ * Drop markdown emphasis and code ticks from a field's key and value. Real
+ * alerts are pasted from a console or a ticket already formatted — the common
+ * shapes are `**Rule :** \`SOC138 - …\``, `**Rule** : X` and plain `Rule : X` —
+ * and without this the key came out as `**rule`, so the Rule line, the severity
+ * and the event time were all missed and the title fell back to whatever the
+ * first line happened to be. Underscores are deliberately NOT stripped: `_` is
+ * italics in markdown but also lives inside real values (hostnames, filenames),
+ * and the value is what gets stored.
+ */
+function stripEmphasis(text: string): string {
+  return text.replace(/[*`]/g, '').trim()
 }
 
 /**

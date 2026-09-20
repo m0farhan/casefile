@@ -237,6 +237,21 @@ export interface IssueTypeConfig {
   icon: string
 }
 
+/**
+ * What KIND of alert a case is — the glyph the card shows. A case records its
+ * category as one of its own tags; `match` lists the other tag values and title
+ * words that mean this category (the id and label always match too). The id is
+ * the tag written on the note, so it stays human-readable. List order is match
+ * precedence.
+ */
+export interface AlertCategoryConfig {
+  id: string
+  label: string
+  color: string
+  icon: string
+  match: string[]
+}
+
 export interface SeverityConfig {
   id: string
   label: string
@@ -284,6 +299,8 @@ export interface PMSettings {
   /** SLA policy per severity id. Absent severity = no SLA clock. */
   slaPolicies: Record<string, SlaPolicy>
   incidentTemplates: IncidentTemplate[]
+  /** Alert-kind catalog for the card glyph. Global-only, like severities/verdicts. */
+  alertCategories: AlertCategoryConfig[]
   /** Vault path of the generated shift-handover note. */
   handoverPath: string
   handoverWindowHours: number
@@ -318,19 +335,21 @@ export interface PMSettings {
   collapsedTasks: Record<string, string[]>
   /** Collapsed kanban column status-ids per project file path. */
   collapsedKanbanColumns: Record<string, string[]>
+  /** One-shot marker for the 2.26 User Response insert (main.ts loadSettings).
+   *  Absent in every data.json written before 2.26. */
+  statusDefaultsUpgraded?: boolean
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 export const DEFAULT_STATUSES: StatusConfig[] = [
-  // SOC/IR reading: open work queues amber, active response runs blue,
-  // escalation red, closure review purple, resolved green.
+  // SOC/IR reading: queued work amber, active response blue, parked on the
+  // reporting user purple, resolved green. `icon: ''` keeps the badge a dot —
+  // setting one flips StatusBadge to a glyph (StatusBadge.ts setDot).
   { id: 'todo', label: 'To Do', color: '#b8a06b', icon: '', complete: false },
   { id: 'in-progress', label: 'In Progress', color: '#6ba3d6', icon: '', complete: false },
-  { id: 'blocked', label: 'Blocked', color: '#c47070', icon: '', complete: false },
-  { id: 'review', label: 'In Review', color: '#8b72be', icon: '', complete: false },
-  { id: 'done', label: 'Done', color: '#79b58d', icon: '', complete: true },
-  { id: 'cancelled', label: 'Cancelled', color: '#767491', icon: '', complete: true }
+  { id: 'user-response', label: 'User Response', color: '#8b72be', icon: '', complete: false },
+  { id: 'done', label: 'Done', color: '#79b58d', icon: '', complete: true }
 ]
 
 /* Priority is retired from the UI (severity is the single urgency dial) but stays in the
@@ -356,6 +375,70 @@ export const DEFAULT_ISSUE_TYPES: IssueTypeConfig[] = [
  * them; only the human-facing labels moved off the SEVn scheme when severity replaced
  * priority as the single urgency dial. Order = rank (first is most severe); sev5
  * (Informational) ships without an SLA policy — informational findings carry no clock. */
+/* Ids are the tag written on the case; phishing/malware/credentials are the
+ * tags DEFAULT_INCIDENT_TEMPLATES already writes, so a case made from a
+ * template carries its category with no migration. Match terms are tuned
+ * against real LetsDefend rule names — "SOC138 - Detected Suspicious Xls File"
+ * never says "suspicious file", it says "Xls", and the SOC16x web-attack family
+ * is named only by "IDOR"/"LFI"/"Requested URL" — and are analyst-editable
+ * because every SIEM names its alerts differently. Colours avoid #f2994a: that
+ * is the incident siren this glyph replaces. */
+export const DEFAULT_ALERT_CATEGORIES: AlertCategoryConfig[] = [
+  {
+    id: 'phishing',
+    label: 'Phishing',
+    color: '#56ccf2',
+    icon: 'fish',
+    match: ['deceptive mail', 'spoofed sender', 'business email compromise', 'bec']
+  },
+  {
+    id: 'malware',
+    label: 'Malware',
+    color: '#eb5757',
+    icon: 'bug',
+    match: ['trojan', 'ransomware', 'emotet', 'c2', 'beacon']
+  },
+  {
+    id: 'suspicious-file',
+    label: 'Suspicious file',
+    color: '#f2c94c',
+    icon: 'file-warning',
+    match: ['suspicious file', 'xls', 'xlsx', 'xlsm', 'docm', 'macro', 'executable']
+  },
+  {
+    id: 'credentials',
+    label: 'Credential compromise',
+    color: '#b59aff',
+    icon: 'key-round',
+    match: ['credential', 'brute force', 'impossible travel', 'password spray']
+  },
+  {
+    id: 'web-attack',
+    label: 'Web attack',
+    color: '#4ea7fc',
+    icon: 'globe',
+    match: [
+      'sql injection',
+      'xss',
+      'lfi',
+      'rfi',
+      'idor',
+      'directory traversal',
+      'whoami',
+      'javascript code',
+      'requested url',
+      'request body'
+    ]
+  },
+  {
+    id: 'network',
+    label: 'Suspicious network',
+    color: '#2fbfa4',
+    icon: 'network',
+    match: ['port scan', 'suspicious traffic', 'lateral movement', 'exfiltration', 'dns tunnel']
+  }
+]
+
 export const DEFAULT_SEVERITIES: SeverityConfig[] = [
   { id: 'sev1', label: 'Critical', color: '#eb5757', icon: '' },
   { id: 'sev2', label: 'High', color: '#f2c94c', icon: '' },
@@ -444,12 +527,15 @@ export const DEFAULT_SETTINGS: PMSettings = {
   ganttGranularity: 'week',
   ganttWeekLabel: 'weekNumber',
   statuses: DEFAULT_STATUSES,
+  // A fresh vault already ships the four — the insert is for vaults that predate them.
+  statusDefaultsUpgraded: true,
   priorities: DEFAULT_PRIORITIES,
   issueTypes: DEFAULT_ISSUE_TYPES,
   severities: DEFAULT_SEVERITIES,
   verdicts: DEFAULT_VERDICTS,
   slaPolicies: DEFAULT_SLA_POLICIES,
   incidentTemplates: DEFAULT_INCIDENT_TEMPLATES,
+  alertCategories: DEFAULT_ALERT_CATEGORIES,
   handoverPath: 'SOC/Handover.md',
   handoverWindowHours: 12,
   ownedAssets: [],

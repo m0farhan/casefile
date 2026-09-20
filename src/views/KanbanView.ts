@@ -83,7 +83,11 @@ export class KanbanView implements SubView {
 
   private renderBoard(): void {
     this.config = this.plugin.store.configFor(this.project)
-    setKanbanSocConfig({ severities: this.config.severities, slaPolicies: this.plugin.settings.slaPolicies })
+    setKanbanSocConfig({
+      severities: this.config.severities,
+      slaPolicies: this.plugin.settings.slaPolicies,
+      alertCategories: this.plugin.settings.alertCategories
+    })
     // The rebuild resets every scroll position, which reads as a jarring
     // "refresh" on drop. Snapshot card-list and board-row scrolls (positional
     // keying — the rebuilt DOM enumerates in the same order) and restore after.

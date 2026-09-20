@@ -1,8 +1,10 @@
 import { setIcon, setTooltip } from 'obsidian'
 import {
   DEFAULT_ISSUE_TYPES,
+  DEFAULT_ALERT_CATEGORIES,
   DEFAULT_SEVERITIES,
   DEFAULT_SLA_POLICIES,
+  type AlertCategoryConfig,
   type IssueTypeConfig,
   type Recurrence,
   type SeverityConfig,
@@ -45,6 +47,7 @@ export interface KanbanCardProps {
 interface KanbanSocConfig {
   severities: SeverityConfig[]
   slaPolicies: Record<string, SlaPolicy>
+  alertCategories: AlertCategoryConfig[]
 }
 
 /**
@@ -118,7 +121,8 @@ export class KanbanCard {
     const chips = body.createDiv('pm-kanban-card-chips')
     renderIssueTypeIcon(
       chips,
-      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
+      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType),
+      { alert: { tags: task.tags, categories: socConfig?.alertCategories ?? DEFAULT_ALERT_CATEGORIES } }
     )
     if (task.key) renderKeyChip(chips, task.key, { plain: true })
     renderSeverityBadge(
