@@ -560,6 +560,8 @@ export default class PMPlugin extends Plugin {
       const tag = byId.get(task.id)
       return tag ? { tags: [...task.tags, tag] } : null
     })
+    // The glyph reads the tag at render time, so the board has to be told.
+    this.refreshProjectViews()
     this.showNotice(`Tagged ${rows.length} case(s)`)
   }
 
