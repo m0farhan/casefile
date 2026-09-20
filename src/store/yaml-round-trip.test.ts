@@ -288,6 +288,7 @@ describe('Casefile field round-trips', () => {
       severity: 'sev2',
       verdict: 'true-positive',
       bucket: 'this-week',
+      occurredAt: '2026-07-30T07:50:00.000Z',
       detectedAt: '2026-07-30T08:15:00.000Z',
       respondedAt: '2026-07-30T08:40:00.000Z',
       containedAt: '2026-07-30T10:00:00.000Z',
@@ -306,6 +307,7 @@ describe('Casefile field round-trips', () => {
     expect(task.severity).toBe('sev2')
     expect(task.verdict).toBe('true-positive')
     expect(task.bucket).toBe('this-week')
+    expect(task.occurredAt).toBe(original.occurredAt)
     expect(task.detectedAt).toBe(original.detectedAt)
     expect(task.respondedAt).toBe(original.respondedAt)
     expect(task.containedAt).toBe(original.containedAt)
@@ -326,6 +328,7 @@ describe('Casefile field round-trips', () => {
       'bucket:',
       'severity:',
       'verdict:',
+      'occurredAt:',
       'detectedAt:',
       'respondedAt:',
       'containedAt:',

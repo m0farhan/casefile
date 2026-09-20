@@ -45,6 +45,47 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.23.0] - 2026-09-20
+
+### Fixed (an alert off the queue is no longer born breached)
+
+- Alert intake wrote the alert's own Event Time into the detection field, and
+  the SLA clock anchors there. An alert picked up two days after it fired was
+  therefore already breached before anyone looked at it.
+- Intake now reads two separate key lists. Event-time keys fill a new
+  **Occurred** stamp; only a key that names an alert or a detection can reach
+  the SLA anchor. One named time fills one field, and neither is ever copied
+  into the other.
+- A value must carry a four-digit year and a date separator or month name
+  before it is parsed at all. `Detected : 3` is a count, not a time, and used
+  to become the year 2001 and anchor the clock there.
+
+### Added (the clock says where it starts)
+
+- **Occurred** is a first-class lifecycle stamp: its own row in the incident
+  timeline with Now and Clear, its own timeline event, its own report line,
+  and its own frontmatter key.
+- One shared anchor function decides where the SLA starts, and every surface
+  that states a clock now discloses it when there is no detection time: the
+  incident panel, the case report, the handover note, the breach entry in the
+  append-only log, both report sections, and the board chip's tooltip.
+- The incident panel's response, containment and resolution durations are
+  measured from that same anchor, so the panel and the chip beside it can no
+  longer report different clocks.
+
+### Changed
+
+- Picking an incident template from the menu no longer stamps a detection
+  time. Nothing had been typed yet; the clock falls back to case creation and
+  now says so.
+
+### Note for existing vaults
+
+Cases created before 2.23 still carry the alert's event time in **Detected**.
+Nothing is rewritten. If one of them is anchored wrongly, move the value to
+**Occurred** by hand in the incident timeline panel and the clock corrects
+itself.
+
 ## [2.22.0] - 2026-09-20
 
 ### Changed (the board card is half the height, with nothing dropped)

@@ -7,7 +7,14 @@ import { openTaskModal } from '../ui/ModalFactory'
 import { parseAlertPaste, type ParsedAlert } from '../soc/alertIntake'
 import { iocSightings } from '../soc/ioc'
 
-const EMPTY_PARSE: ParsedAlert = { title: '', severityId: '', detectedAt: '', description: '', iocs: [] }
+const EMPTY_PARSE: ParsedAlert = {
+  title: '',
+  severityId: '',
+  occurredAt: '',
+  detectedAt: '',
+  description: '',
+  iocs: []
+}
 
 /**
  * One-paste case intake: the analyst pastes a monitoring alert ("Key : Value"
@@ -18,9 +25,11 @@ const EMPTY_PARSE: ParsedAlert = { title: '', severityId: '', detectedAt: '', de
  */
 export class AlertIntakeModal extends Modal {
   private parsed: ParsedAlert = EMPTY_PARSE
+  private occurredAt = ''
   private detectedAt = ''
   private titleInput!: HTMLInputElement
   private severitySelect!: HTMLSelectElement
+  private occurredEl!: HTMLElement
   private detectedEl!: HTMLElement
   private iocCountEl!: HTMLElement
   private sightingsEl!: HTMLElement
@@ -75,6 +84,9 @@ export class AlertIntakeModal extends Modal {
       this.severitySelect.createEl('option', { text: s.label, value: s.id })
     }
 
+    // Occurred first: that is the order the two things happen in.
+    this.occurredEl = row('Occurred')
+    this.occurredEl.addClass('pm-alert-detected')
     this.detectedEl = row('Detected')
     this.detectedEl.addClass('pm-alert-detected')
 
@@ -98,7 +110,8 @@ export class AlertIntakeModal extends Modal {
   private renderPreviewValues(): void {
     this.titleInput.value = this.parsed.title
     this.severitySelect.value = this.parsed.severityId
-    this.renderDetected(this.parsed.detectedAt)
+    this.renderStamp('occurredAt', this.parsed.occurredAt)
+    this.renderStamp('detectedAt', this.parsed.detectedAt)
     const n = this.parsed.iocs.length
     this.iocCountEl.setText(n === 0 ? 'No indicators found' : `${n} indicator${n === 1 ? '' : 's'} found`)
     this.renderSightings()
@@ -135,19 +148,27 @@ export class AlertIntakeModal extends Modal {
     label.appendText('Link related cases')
   }
 
-  private renderDetected(iso: string): void {
-    this.detectedAt = iso
-    this.detectedEl.empty()
+  /**
+   * Preview one parsed stamp. The empty text states only what is true here —
+   * the paste did not name that time. It does NOT promise what the SLA will do:
+   * this renders from the parse alone, and a case with no severity or an
+   * Informational one has no clock at all (sev5 ships without a policy). The
+   * panel of the case this opens discloses the anchor, where the policy is known.
+   */
+  private renderStamp(key: 'occurredAt' | 'detectedAt', iso: string): void {
+    this[key] = iso
+    const el = key === 'occurredAt' ? this.occurredEl : this.detectedEl
+    el.empty()
     if (!iso) {
       // Honest empty: no timestamp was parsed, so none is shown or stored.
-      this.detectedEl.createSpan({ cls: 'pm-alert-empty', text: 'Not found in paste' })
+      el.createSpan({ cls: 'pm-alert-empty', text: 'Not found in paste' })
       return
     }
-    this.detectedEl.createSpan({ text: new Date(iso).toLocaleString() })
-    new ExtraButtonComponent(this.detectedEl)
+    el.createSpan({ text: new Date(iso).toLocaleString() })
+    new ExtraButtonComponent(el)
       .setIcon('x')
-      .setTooltip('Clear detected time')
-      .onClick(() => this.renderDetected(''))
+      .setTooltip('Clear')
+      .onClick(() => this.renderStamp(key, ''))
   }
 
   private readonly create = safeAsync(async () => {
@@ -163,6 +184,7 @@ export class AlertIntakeModal extends Modal {
       severity: this.severitySelect.value,
       description: this.parsed.description,
       iocs: this.parsed.iocs,
+      occurredAt: this.occurredAt,
       detectedAt: this.detectedAt
     })
     // Link sighted cases before insertTask so links serialize with the first save.

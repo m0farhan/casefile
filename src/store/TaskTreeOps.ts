@@ -119,6 +119,7 @@ function cloneNode(source: Task, includeSubtasks: boolean, idMap: Map<string, st
     activity: [],
     comments: undefined,
     verdict: '',
+    occurredAt: '',
     detectedAt: '',
     respondedAt: '',
     containedAt: '',

@@ -1,7 +1,8 @@
-import type { Task } from '../types'
-import { formatSlaRemaining } from './sla'
+import type { SlaPolicy, Task } from '../types'
+import { formatSlaRemaining, slaAnchor } from './sla'
 
 const FIELDS = [
+  { key: 'occurredAt', label: 'Occurred' },
   { key: 'detectedAt', label: 'Detected' },
   { key: 'respondedAt', label: 'Responded' },
   { key: 'containedAt', label: 'Contained' },
@@ -25,12 +26,17 @@ export function localInputToIso(value: string): string {
 }
 
 /**
- * Compact incident-timeline section: the four lifecycle timestamps as
+ * Compact incident-timeline section: the five lifecycle timestamps as
  * datetime-local inputs (empty = unset) with a "Now" stamp each, plus derived
- * response/resolution durations when both ends are set. Incidents only —
- * early-returns for every other issue type.
+ * durations measured from the SAME anchor the SLA uses (slaAnchor), so the
+ * panel and the chip beside it can never report different clocks. Incidents
+ * only — early-returns for every other issue type.
  */
-export function renderLifecyclePanel(container: HTMLElement, task: Task, opts: { onChange: () => void }): void {
+export function renderLifecyclePanel(
+  container: HTMLElement,
+  task: Task,
+  opts: { onChange: () => void; slaPolicies: Record<string, SlaPolicy> }
+): void {
   if (task.issueType !== 'incident') return
   const section = container.createDiv('pm-modal-section pm-lifecycle')
   section.createEl('h4', { text: 'Incident timeline', cls: 'pm-modal-section-title' })
@@ -39,15 +45,28 @@ export function renderLifecyclePanel(container: HTMLElement, task: Task, opts: {
 
   const renderSummary = () => {
     summary.empty()
-    const detected = Date.parse(task.detectedAt)
+    // slaAnchor, not task.detectedAt: intake leaves the detection stamp empty
+    // (SD-03), and reading the raw field here blanked all three durations for
+    // exactly the cases this change creates.
+    const anchor = Date.parse(slaAnchor(task).iso)
     const line = (label: string, endIso: string) => {
       const end = Date.parse(endIso)
-      if (Number.isNaN(detected) || Number.isNaN(end) || end < detected) return
-      summary.createSpan({ cls: 'pm-lc-summary-item', text: `${label}: ${formatSlaRemaining(end - detected)}` })
+      if (Number.isNaN(anchor) || Number.isNaN(end) || end < anchor) return
+      summary.createSpan({ cls: 'pm-lc-summary-item', text: `${label}: ${formatSlaRemaining(end - anchor)}` })
     }
     line('Response time', task.respondedAt)
     line('Containment time', task.containedAt)
     line('Resolution time', task.resolvedAt)
+    // SD-03 disclosure: with no detection stamp the clock runs from creation,
+    // and the durations above are measured from there too. Gated on a real
+    // policy, not on severity — a severity whose policy was deleted in settings
+    // has no clock at all, and the chip renders nothing for it.
+    if (!task.detectedAt && opts.slaPolicies[task.severity]) {
+      summary.createSpan({
+        cls: 'pm-lc-summary-item',
+        text: 'SLA runs from case creation — detection time not recorded'
+      })
+    }
   }
 
   for (const f of FIELDS) {

@@ -94,7 +94,11 @@ export interface Task {
   bucket: IssueBucket
   start: string // YYYY-MM-DD, empty string = unset
   due: string // YYYY-MM-DD, empty string = unset
-  /** Incident lifecycle timestamps (ISO datetime, '' = unset). SLA clock anchors at detectedAt||createdAt. */
+  /** When the event itself happened, as the source reported it (ISO datetime,
+   * '' = not recorded). NOT a clock: the SLA never anchors here — an event that
+   * happened last month does not make today's response late (SD-03). */
+  occurredAt: string
+  /** Incident lifecycle timestamps (ISO datetime, '' = unset). SLA clock anchors at slaAnchor(task). */
   detectedAt: string
   respondedAt: string
   containedAt: string
@@ -483,6 +487,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     bucket: 'none',
     start: today().toString(),
     due: '',
+    occurredAt: '',
     detectedAt: '',
     respondedAt: '',
     containedAt: '',

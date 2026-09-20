@@ -123,6 +123,23 @@ export function hydrateSavedViews(raw: unknown[]): SavedView[] {
 }
 
 /** Map raw frontmatter fields to a Task, with optional overrides */
+/**
+ * A frontmatter scalar as an ISO string. Obsidian's parseYaml is js-yaml
+ * (YAML 1.1), so an unquoted `occurredAt: 2024-05-13 09:22:00` arrives as a
+ * Date, and `20240513` as a number. Coerced rather than dropped: promoting a
+ * key into KNOWN_TASK_FRONTMATTER_KEYS stops extras capturing it, so a
+ * discarded value is DELETED from the analyst's note on the next save, and a
+ * Date left in place reaches appendYaml's object branch and writes `key: {}`.
+ * ponytail: the four lifecycle stamps below still use the plain `typeof`
+ * fallback — same latent gap, no clock rides on them; widen to isoOr if a
+ * hand-written detectedAt is ever seen.
+ */
+function isoOr(v: unknown, fallback: string): string {
+  if (typeof v === 'string') return v
+  if (v instanceof Date) return v.toISOString()
+  return fallback
+}
+
 export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Task>): Task {
   // Absent when empty (flagged/recurrence idiom): the key never round-trips into files.
   const links = hydrateLinks(r.links)
@@ -142,6 +159,7 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
     bucket: hydrateBucket(r.bucket),
     start: (r.start as string) ?? '',
     due: (r.due as string) ?? '',
+    occurredAt: isoOr(r.occurredAt, ''),
     detectedAt: typeof r.detectedAt === 'string' ? r.detectedAt : '',
     respondedAt: typeof r.respondedAt === 'string' ? r.respondedAt : '',
     containedAt: typeof r.containedAt === 'string' ? r.containedAt : '',
@@ -172,8 +190,11 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
         ? { ...(r.customFields as Record<string, unknown>) }
         : {},
     collapsed: r.collapsed === true,
-    createdAt: (r.createdAt as string) ?? new Date().toISOString(),
-    updatedAt: (r.updatedAt as string) ?? new Date().toISOString(),
+    // createdAt is the SLA anchor for any case with no detection stamp
+    // (slaAnchor), so a non-string must not survive: `??` fires only on
+    // null/undefined and let a Date through to `createdAt: {}`.
+    createdAt: isoOr(r.createdAt, new Date().toISOString()),
+    updatedAt: isoOr(r.updatedAt, new Date().toISOString()),
     ...overrides
   })
 }

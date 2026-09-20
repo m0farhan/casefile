@@ -4,13 +4,14 @@ import { isoToLocalInput } from './LifecyclePanel'
 /** One row of the case-timeline view. `at` is the stored stamp, verbatim. */
 export interface TimelineEvent {
   at: string
-  kind: 'created' | 'detected' | 'responded' | 'contained' | 'resolved' | 'completed' | 'comment' | 'activity'
+  kind: 'created' | 'occurred' | 'detected' | 'responded' | 'contained' | 'resolved' | 'completed' | 'comment' | 'activity'
   label: string
   detail?: string
 }
 
 /* Lifecycle stamps in workflow order; labels match the LifecyclePanel rows. */
 const LIFECYCLE = [
+  { key: 'occurredAt', kind: 'occurred', label: 'Occurred' },
   { key: 'detectedAt', kind: 'detected', label: 'Detected' },
   { key: 'respondedAt', kind: 'responded', label: 'Responded' },
   { key: 'containedAt', kind: 'contained', label: 'Contained' },

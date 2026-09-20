@@ -2,7 +2,7 @@ import type { PMSettings, Project, Task } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { isTerminalStatus } from '../utils'
 import { formatIocLine } from './ioc'
-import { formatSlaRemaining, slaAtRisk, slaState } from './sla'
+import { formatSlaRemaining, slaAnchor, slaAtRisk, slaState } from './sla'
 
 /**
  * Deterministic shift-handover markdown, built entirely from frontmatter
@@ -67,13 +67,16 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
           ? `target breached ${formatSlaRemaining(state.remainingMs)}`
           : `${state.phase} target in ${formatSlaRemaining(state.remainingMs)}`
         : 'no target'
+      // SD-03: this note is what the next shift is handed, read away from the
+      // case — a countdown with no anchor named is the one that misleads.
+      const anchorNote = state && slaAnchor(r.task).from === 'created' ? ' (from case creation)' : ''
       // Latest by timestamp, not array position — hand-merged logs may be unordered.
       const last = r.task.activity.reduce<Task['activity'][number] | null>(
         (best, a) => (!best || a.at > best.at ? a : best),
         null
       )
       const lastText = last ? ` · last: ${last.field} → ${last.to} at ${last.at}` : ''
-      lines.push(`- ${label(r.task)} — ${r.task.status} · ${slaText}${lastText}`)
+      lines.push(`- ${label(r.task)} — ${r.task.status} · ${slaText}${anchorNote}${lastText}`)
       // ponytail: 8 defanged indicators per incident keeps the note scannable; bump the cap if shifts want more.
       for (const ioc of r.task.iocs.slice(0, 8)) lines.push(`  - ${formatIocLine(ioc)}`)
       if (r.task.iocs.length > 8) lines.push(`  - +${r.task.iocs.length - 8} more`)

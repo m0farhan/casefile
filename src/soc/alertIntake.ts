@@ -5,9 +5,53 @@ import { TASK_SLUG_MAX_LENGTH } from '../store/YamlSerializer'
 export interface ParsedAlert {
   title: string
   severityId: string
+  /** When the event happened, per the alert's own event-time key. '' = not named. */
+  occurredAt: string
+  /** When the detection fired, per an alert/detection-named key ONLY. '' = not named. */
   detectedAt: string
   description: string
   iocs: Ioc[]
+}
+
+/* Keys naming the EVENT's own time: when the thing happened, not when anyone
+ * noticed it. These feed occurredAt and never reach the SLA clock (SD-03). */
+const OCCURRED_KEYS = ['event time', 'time', 'date'] as const
+
+/* Keys naming the DETECTION. A key must say alert or detect to reach the SLA
+ * anchor. Nothing is inferred from a time VALUE, only from the label the
+ * source wrote. */
+const DETECTED_KEYS = [
+  'alert time',
+  'alert created',
+  'alert date',
+  'detection time',
+  'detected',
+  'detected at'
+] as const
+
+/* A value needs a 4-digit year AND a date/time separator or month name before
+ * Date.parse sees it. V8's legacy fallback turns bare integers into years —
+ * Date.parse('3') is 2001-03-01, Date.parse('257') is year 257 — so an EDR's
+ * `Detected : 3` (a count) would otherwise fabricate a stamp and anchor the
+ * SLA on it. Guards the event-time keys too: a fixture carries `EventID : 257`. */
+const HAS_YEAR = /\d{4}/
+const HAS_DATE_PART = /[-/:]|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i
+
+/**
+ * First present key wins; a value that is absent, not time-shaped, or
+ * unparseable yields '' rather than falling through to the next key — the
+ * header's own time line is the one that counts (the fieldLines first-wins
+ * rule). Reads one list, never the other.
+ */
+function firstStamp(fields: Map<string, string>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const raw = fields.get(key)
+    if (!raw) continue
+    if (!HAS_YEAR.test(raw) || !HAS_DATE_PART.test(raw)) return ''
+    const ms = Date.parse(raw)
+    return Number.isNaN(ms) ? '' : new Date(ms).toISOString()
+  }
+  return ''
 }
 
 /**
@@ -46,20 +90,18 @@ export function parseAlertPaste(text: string, cfg: { severities: SeverityConfig[
   const sevLabel = fields.get('severity')
   const severity = sevLabel ? cfg.severities.find((s) => s.label.toLowerCase() === sevLabel.toLowerCase()) : undefined
 
-  // Detected: first present time-ish line wins; stored in the same format the
-  // lifecycle "Now" buttons write (Date.toISOString). Unparseable → ''.
-  let detectedAt = ''
-  for (const key of ['event time', 'time', 'date']) {
-    const raw = fields.get(key)
-    if (!raw) continue
-    const ms = Date.parse(raw)
-    if (!Number.isNaN(ms)) detectedAt = new Date(ms).toISOString()
-    break
-  }
+  // SD-03: the alert's Event Time is when the event HAPPENED, not when the SOC
+  // detected it. Writing it to detectedAt made every queued alert born breached,
+  // because the SLA anchors on detectedAt. Two disjoint key sets, two lookups,
+  // and neither result is ever copied into the other: an alert that names one
+  // time fills one field, and the empty one stays empty.
+  const occurredAt = firstStamp(fields, OCCURRED_KEYS)
+  const detectedAt = firstStamp(fields, DETECTED_KEYS)
 
   return {
     title,
     severityId: severity?.id ?? '',
+    occurredAt,
     detectedAt,
     description: text,
     iocs: extractIocsFromText(text, [])

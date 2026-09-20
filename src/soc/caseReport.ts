@@ -4,7 +4,7 @@ import type { Project, SeverityConfig, SlaPolicy, StatusConfig, Task, VerdictCon
 import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { defangIoc } from './ioc'
-import { formatSlaRemaining, slaState } from './sla'
+import { formatSlaRemaining, slaAnchor, slaState } from './sla'
 
 export interface CaseReportContext {
   project: Project
@@ -64,6 +64,7 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
   // ── Incident timeline ──────────────────────────────────────────────────────
   lines.push('## Incident timeline', '')
   const phases: [string, string][] = [
+    ['Occurred', task.occurredAt],
     ['Detected', task.detectedAt],
     ['Responded', task.respondedAt],
     ['Contained', task.containedAt],
@@ -81,7 +82,15 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
   if (!state || !policy) {
     lines.push('No target set.')
   } else {
-    const anchor = Date.parse(task.detectedAt || task.createdAt)
+    const { iso: anchorIso, from } = slaAnchor(task)
+    const anchor = Date.parse(anchorIso)
+    // The report leaves the vault, and it is the one surface holding
+    // slaPolicies — so it is entitled to say plainly which clock ran.
+    lines.push(
+      from === 'detected'
+        ? '- Clock anchored at: detected'
+        : '- Clock anchored at: case created — detection time not recorded'
+    )
     const responded = task.respondedAt ? Date.parse(task.respondedAt) : NaN
     if (!Number.isNaN(responded)) {
       const margin = anchor + policy.responseMins * 60_000 - responded

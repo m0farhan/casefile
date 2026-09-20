@@ -114,7 +114,7 @@ Protect (port verbatim where possible):
 |---|---|---|---|
 | SD-01 | major | Absence reads as clean: AbuseIPDB 'no reports' and VT 'undetected-only' both return verdict `clean` | ★ ✓2.21 |
 | SD-02 | major | Reputation results are session-only — never recorded on the case, absent from report, handover and timeline | phase 1 |
-| SD-03 | major | Alert intake stores the alert's Event Time as `detectedAt`, so an old alert from the queue is born breached an | phase 1 |
+| SD-03 | major | Alert intake stores the alert's Event Time as `detectedAt`, so an old alert from the queue is born breached an | ★ ✓2.23 |
 | SD-04 | major | The four lifecycle stamps decide SLA compliance yet are the only tracked-worthy fields NOT in the append-only  | ★ phase 1 |
 | SD-05 | major | No asset/IOC boundary: the extractor emits the org's own mail domain and internal IPs as indicators, the intak | phase 1 |
 | SD-06 | major | Bulk paste has no shape gate — labels like 'IP:', 'Hash:', 'Sender' become `domain` indicator rows | phase 1 |

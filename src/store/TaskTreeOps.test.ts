@@ -224,6 +224,7 @@ describe('cloneTaskSubtree — Casefile field semantics', () => {
       issueType: 'incident',
       severity: 'sev1',
       verdict: 'true-positive',
+      occurredAt: '2026-06-30T23:00:00Z',
       detectedAt: '2026-07-01T00:00:00Z',
       respondedAt: '2026-07-01T01:00:00Z',
       containedAt: '2026-07-01T02:00:00Z',
@@ -238,6 +239,7 @@ describe('cloneTaskSubtree — Casefile field semantics', () => {
     expect(clone.activity).toEqual([])
     expect(clone.comments).toBeUndefined()
     expect(clone.verdict).toBe('')
+    expect(clone.occurredAt).toBe('')
     expect(clone.detectedAt).toBe('')
     expect(clone.respondedAt).toBe('')
     expect(clone.containedAt).toBe('')

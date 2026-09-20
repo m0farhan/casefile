@@ -29,7 +29,8 @@ describe('slaChipView', () => {
       text: 'Respond 37m',
       warn: false,
       breach: false,
-      live: true
+      live: true,
+      from: 'detected'
     })
     expect(slaChipView(incident(), POLICIES, T0 + 50 * MIN)).toMatchObject({ text: 'Respond 10m', warn: true })
   })
@@ -41,7 +42,8 @@ describe('slaChipView', () => {
       text: 'Resolve +1h 12m',
       warn: false,
       breach: true,
-      live: true
+      live: true,
+      from: 'detected'
     })
   })
 
@@ -51,7 +53,15 @@ describe('slaChipView', () => {
       text: 'Breached +2h 05m',
       warn: false,
       breach: true,
-      live: false
+      live: false,
+      from: 'detected'
     })
+  })
+
+  it('reports a creation-anchored clock, so the chip can say which one ran', () => {
+    // SD-03: an intake case has no detection stamp, and an identical
+    // "Respond 37m" must not mean two different things without saying so.
+    const t = incident({ detectedAt: '' })
+    expect(slaChipView(t, POLICIES, T0 + 23 * MIN)?.from).toBe('created')
   })
 })

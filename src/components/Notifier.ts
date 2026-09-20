@@ -4,7 +4,7 @@ import type { Project, StatusConfig, Task } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { isTerminalStatus } from '../utils'
 import { Temporal, today, parsePlainDate } from '../dates'
-import { slaState } from '../soc/sla'
+import { slaAnchor, slaState } from '../soc/sla'
 
 // 5min (was hourly): SLA breaches need tight cadence; loads are projectCache-backed.
 const CHECK_INTERVAL_MS = 5 * 60 * 1000
@@ -120,7 +120,10 @@ export class Notifier {
     await this.plugin.store.appendActivity(project, task.id, {
       at: new Date(state.deadline).toISOString(),
       field: 'sla',
-      from: state.phase,
+      // The log is append-only: an entry that cannot say which clock produced
+      // its deadline can never be corrected. `to` is left untouched — the
+      // dedupe above matches on it.
+      from: slaAnchor(task).from === 'created' ? `${state.phase} (from case creation)` : state.phase,
       to: logged
     })
   }

@@ -16,8 +16,24 @@ export interface SlaState {
 export const SLA_WARN_FRACTION = 0.25
 
 /**
- * Pure SLA clock. Anchor = detectedAt || createdAt. The response phase ends at
- * respondedAt, the resolution phase at resolvedAt. Returns null when no clock
+ * Where the SLA clock starts, and which stamp that is. Detection is the moment
+ * the SOC's obligation begins: before it there is nothing to respond to, and
+ * after it the queue latency is the SOC's own — anchoring at analyst pickup
+ * instead would make every case pass by construction. task.occurredAt is NOT a
+ * candidate: an event that happened last month does not make today's response
+ * late. With no detection stamp the clock falls back to case creation, and
+ * `from` is how callers disclose that instead of implying a detection nobody
+ * wrote down (SD-03).
+ */
+export function slaAnchor(task: Task): { iso: string; from: 'detected' | 'created' } {
+  return task.detectedAt ? { iso: task.detectedAt, from: 'detected' } : { iso: task.createdAt, from: 'created' }
+}
+
+/**
+ * Pure SLA clock. Anchor = slaAnchor(task): the detection stamp, else case
+ * creation. task.occurredAt is deliberately absent from this function — see
+ * slaAnchor. The response phase ends at respondedAt, the resolution phase at
+ * resolvedAt. Returns null when no clock
  * applies (not an incident, no severity, or no policy for the severity).
  *
  * ponytail: always-running clock — no pause tracking. Every status transition
@@ -28,7 +44,7 @@ export function slaState(task: Task, policies: Record<string, SlaPolicy>, now: n
   if (task.issueType !== 'incident' || !task.severity) return null
   const policy = policies[task.severity]
   if (!policy) return null
-  const anchorIso = task.detectedAt || task.createdAt
+  const anchorIso = slaAnchor(task).iso
   const anchor = Date.parse(anchorIso)
   if (Number.isNaN(anchor)) return null
 

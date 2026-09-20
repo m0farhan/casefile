@@ -1,5 +1,5 @@
 import type { SlaPolicy, Task } from '../../types'
-import { slaState } from '../../soc/sla'
+import { slaAnchor, slaState } from '../../soc/sla'
 
 /**
  * Pure data reducers for the Reports view. Every function takes an explicit
@@ -170,7 +170,7 @@ export function lifecycleDurations(incidents: Task[]): { overall: LifecyclePhase
   const overall = emptySamples()
   const bySev = new Map<string, PhaseSamples>()
   for (const t of incidents) {
-    const start = Date.parse(t.detectedAt)
+    const start = Date.parse(slaAnchor(t).iso)
     if (Number.isNaN(start)) continue
     for (const [phase, key] of LIFECYCLE_PHASES) {
       const end = Date.parse(t[key])
@@ -196,6 +196,15 @@ export function lifecycleDurations(incidents: Task[]): { overall: LifecyclePhase
       .map(([severityId, s]) => ({ severityId, ...toPhases(s) }))
       .sort((a, b) => a.severityId.localeCompare(b.severityId))
   }
+}
+
+/**
+ * Incidents whose clock runs from case creation because no detection time was
+ * recorded. Both report sections print this rather than mixing anchors in one
+ * number silently (SD-03).
+ */
+export function createdAnchoredCount(incidents: Task[]): number {
+  return incidents.filter((t) => slaAnchor(t).from === 'created').length
 }
 
 export function slaCompliance(incidents: Task[], policies: Record<string, SlaPolicy>, now: number): SlaComplianceRow[] {

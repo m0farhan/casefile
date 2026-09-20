@@ -410,7 +410,7 @@ export class TaskModal extends Modal {
     // ── Incident sections (timeline + indicators) ───────────────────────────
     // onChange is a no-op here: the modal persists the whole clone on Save.
     if (this.task.issueType === 'incident') {
-      renderLifecyclePanel(body, this.task, { onChange: () => {} })
+      renderLifecyclePanel(body, this.task, { onChange: () => {}, slaPolicies: this.plugin.settings.slaPolicies })
       renderIocSection(body, this.task, {
         onChange: () => {},
         reputationKeys: {

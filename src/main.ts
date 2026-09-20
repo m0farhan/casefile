@@ -499,8 +499,10 @@ export default class PMPlugin extends Plugin {
               this.openTaskModalForProject(project, null, {
                 ...tpl.taskDefaults,
                 tags: [...(tpl.taskDefaults.tags ?? [])],
-                description: tpl.bodyMarkdown,
-                detectedAt: new Date().toISOString()
+                // Picking a template from a menu is not a detection (SD-03): no
+                // field has been typed yet. The clock falls back to createdAt —
+                // the same instant — and the panel and report now say so.
+                description: tpl.bodyMarkdown
               })
             })
         )

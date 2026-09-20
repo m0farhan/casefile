@@ -113,6 +113,7 @@ export const KNOWN_TASK_FRONTMATTER_KEYS = new Set([
   'bucket',
   'start',
   'due',
+  'occurredAt',
   'detectedAt',
   'respondedAt',
   'containedAt',
@@ -170,6 +171,7 @@ export function buildTaskFrontmatter(task: Task, project: Project, parentTask: T
   if (task.verdict) fm.verdict = task.verdict
   // ioc.note precedent: written only when true — false/undefined stays out of the file.
   if (task.flagged) fm.flagged = true
+  if (task.occurredAt) fm.occurredAt = task.occurredAt
   if (task.detectedAt) fm.detectedAt = task.detectedAt
   if (task.respondedAt) fm.respondedAt = task.respondedAt
   if (task.containedAt) fm.containedAt = task.containedAt

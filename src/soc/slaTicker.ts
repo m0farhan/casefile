@@ -1,5 +1,5 @@
 import type { SeverityConfig, SlaPolicy, Task } from '../types'
-import { formatSlaRemaining, slaAtRisk, slaState } from './sla'
+import { formatSlaRemaining, slaAnchor, slaAtRisk, slaState } from './sla'
 import { Chip } from '../ui/primitives/Chip'
 
 export interface SlaChipView {
@@ -8,6 +8,11 @@ export interface SlaChipView {
   breach: boolean
   /** True while the clock is running — the chip stays in the tick registry. */
   live: boolean
+  /** Which stamp the countdown runs from — the chip's tooltip. An identical
+   * "Respond 45m" means "since detection" on one case and "since you picked it
+   * up" on another; the board is the most-read surface and cannot say so in
+   * its two words. */
+  from: 'detected' | 'created'
 }
 
 /**
@@ -21,14 +26,21 @@ export function slaChipView(task: Task, policies: Record<string, SlaPolicy>, now
   if (state.done) {
     if (!state.breached) return null
     // Resolved late: steady red record, clock stopped.
-    return { text: `Breached ${formatSlaRemaining(state.remainingMs)}`, warn: false, breach: true, live: false }
+    return {
+      text: `Breached ${formatSlaRemaining(state.remainingMs)}`,
+      warn: false,
+      breach: true,
+      live: false,
+      from: slaAnchor(task).from
+    }
   }
   const verb = state.phase === 'response' ? 'Respond' : 'Resolve'
   return {
     text: `${verb} ${formatSlaRemaining(state.remainingMs)}`,
     warn: !state.breached && slaAtRisk(state, policies[task.severity]),
     breach: state.breached,
-    live: true
+    live: true,
+    from: slaAnchor(task).from
   }
 }
 
@@ -65,6 +77,14 @@ function paint(chip: HTMLElement, view: SlaChipView): void {
     window.setTimeout(() => chip.removeClass('gs-pulse-2'), 2000)
   }
   chip.setText(view.text)
+  // setAttr('title', …) is the repo's plain-element tooltip idiom (TableRenderer.ts:335)
+  // — no obsidian import, no stub change, no layout or CSS change.
+  chip.setAttr(
+    'title',
+    view.from === 'detected'
+      ? 'Clock runs from the detection time'
+      : 'Clock runs from case creation — detection time not recorded'
+  )
   chip.toggleClass('pm-sla--warn', view.warn)
   chip.toggleClass('pm-sla--breach', view.breach)
 }

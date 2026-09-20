@@ -7,6 +7,7 @@ import { formatSlaRemaining } from '../../soc/sla'
 import type { SubView } from '../SubView'
 import {
   lifecycleDurations,
+  createdAnchoredCount,
   openBySeverity,
   openedClosedPerWeek,
   reportSummary,
@@ -256,17 +257,26 @@ export class ReportsView implements SubView {
         text: `${row.met} met · ${row.breached} breached · ${row.open} open · ${row.noData} no data`
       })
     }
+    // SD-03: the tile mixes two anchors, so it says how many rows are which.
+    const fromCreated = createdAnchoredCount(incidents)
+    if (fromCreated) {
+      s.createDiv({
+        cls: 'pm-report-empty',
+        text: `${fromCreated} of ${incidents.length} incidents have no detection time — their clock runs from case creation.`
+      })
+    }
   }
 
   private renderLifecycleDurations(root: HTMLElement, incidents: Task[]): void {
     const s = this.section(root, 'Time to respond / contain / resolve')
     const { overall, bySeverity } = lifecycleDurations(incidents)
     if (!overall.respond && !overall.contain && !overall.resolve) {
-      // Durations anchor on the detected timestamp — say so, or a case with
-      // responded/resolved set but no detected time reads as a broken report.
+      // Named the wrong cause once the anchor falls back to creation: an
+      // intake case has no detection stamp by design, so telling the analyst
+      // to "set it" was advice for a problem they did not have (SD-03).
       s.createDiv({
         cls: 'pm-report-empty',
-        text: 'No measurable durations yet — these are measured from the detected time, so set it (alongside responded / contained / resolved) on an incident.'
+        text: 'No measurable durations yet — stamp responded / contained / resolved on an incident.'
       })
       return
     }
@@ -291,6 +301,15 @@ export class ReportsView implements SubView {
     for (const row of bySeverity) {
       const sev = cfg.severities.find((x) => x.id === row.severityId)
       tile(sev?.label ?? (row.severityId === 'none' ? 'No severity' : row.severityId), row)
+    }
+    // SD-03: same disclosure as the compliance tile — these durations are
+    // measured from the same anchor the SLA judges, which is not always detection.
+    const fromCreated = createdAnchoredCount(incidents)
+    if (fromCreated) {
+      s.createDiv({
+        cls: 'pm-report-empty',
+        text: `${fromCreated} of ${incidents.length} incidents have no detection time — measured from case creation.`
+      })
     }
   }
 }

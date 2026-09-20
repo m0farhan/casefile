@@ -106,7 +106,8 @@ describe('composeCaseReport', () => {
     expect(md).toContain('Status To Do · severity none recorded · verdict none recorded')
     expect(md).not.toContain('· bucket')
     expect(md).not.toContain('· flagged')
-    expect(md.match(/: not recorded/g)).toHaveLength(4)
+    // Five phase lines now: Occurred joins the four lifecycle stamps.
+    expect(md.match(/: not recorded/g)).toHaveLength(5)
     expect(md).toContain('No target set.')
     expect(md).toContain('## Indicators\n\nNone recorded.')
     expect(md).not.toContain('## Linked cases')
