@@ -45,6 +45,18 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.25.0] - 2026-09-20
+
+### Changed (the board gets its space back)
+
+- The card was cut too far in 2.22 and read as cramped. Padding and the gap
+  between the two rows are back up; a typical card sits at about 72px instead
+  of 64px, against 119px before 2.22.
+- The swimlanes row is gone. It cost every board a permanent 39px strip to say
+  "Lanes: None". Grouping now lives in the palette as **Group board by…**, and
+  a compact chip appears above the board only while a grouping is active, with
+  a Clear beside it, so a split board is never a mystery.
+
 ## [2.24.0] - 2026-09-20
 
 ### Fixed (your own estate stops going to third parties)

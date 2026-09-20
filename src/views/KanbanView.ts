@@ -219,22 +219,46 @@ export class KanbanView implements SubView {
     }
   }
 
+  /**
+   * Swimlanes are off for almost every board, and a permanent "Lanes: None"
+   * row cost ~39px of the board's height to say so. Nothing renders when
+   * grouping is off; the palette's "Group board by…" turns it on. When a
+   * grouping IS active the chip shows which one and clears it, so an analyst
+   * who finds a split board always knows why and can undo it in one click.
+   */
   private renderLanesBar(groupBy: KanbanLaneGroup): void {
+    if (groupBy === 'none') return
     const bar = this.container.createDiv('pm-kanban-lanes-bar')
-    // Wrapping label: implicit association, no document-wide id to collide across leaves.
-    const label = bar.createEl('label', { text: 'Lanes', cls: 'pm-kanban-lanes-label' })
-    const select = label.createEl('select', { cls: 'pm-kanban-lanes-select' })
-    for (const g of LANE_GROUPS) {
-      select.createEl('option', { text: g.label, value: g.id })
-    }
-    select.value = groupBy
-    select.addEventListener(
-      'change',
+    const label = LANE_GROUPS.find((g) => g.id === groupBy)?.label ?? groupBy
+    bar.createSpan({ cls: 'pm-kanban-lanes-label', text: `Grouped by ${label.toLowerCase()}` })
+    const clear = bar.createEl('button', { cls: 'pm-kanban-lanes-clear', text: 'Clear' })
+    clear.addEventListener(
+      'click',
       safeAsync(async () => {
-        await this.setLaneGroup(isLaneGroup(select.value) ? select.value : 'none')
+        await this.setLaneGroup('none')
         this.renderBoard()
       })
     )
+  }
+
+  /** The palette's entry point: pick a grouping, or None to turn lanes off again. */
+  async pickLaneGroup(): Promise<void> {
+    const menu = new Menu()
+    const current = this.laneGroup()
+    for (const g of LANE_GROUPS) {
+      menu.addItem((item) =>
+        item
+          .setTitle(g.label)
+          .setChecked(g.id === current)
+          .onClick(
+            safeAsync(async () => {
+              await this.setLaneGroup(g.id)
+              this.renderBoard()
+            })
+          )
+      )
+    }
+    menu.showAtPosition({ x: activeWindow.innerWidth / 2 - 80, y: activeWindow.innerHeight / 3 })
   }
 
   /** Persisted per project alongside the filter, in settings.projectFilters. */

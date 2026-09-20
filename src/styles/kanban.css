@@ -135,7 +135,7 @@
   position: relative;
   /* Off-screen cards skip layout and paint (PS-03); the estimate only sizes the placeholder. */
   content-visibility: auto;
-  contain-intrinsic-size: auto 76px;
+  contain-intrinsic-size: auto 88px;
 }
 .pm-kanban-card:hover {
   background: var(--gs-surface-3);
@@ -179,14 +179,15 @@
   }
 }
 
-/* Two rows: head, chips. The extra bottom padding is the progress hairline's
-   lane — it is pinned to the card edge rather than costing a row. */
+/* Two rows: head, chips. Small, not cramped — the first pass at this cut the
+   card to 74px and it read as squeezed. The extra bottom padding is the
+   progress hairline's lane; it is pinned to the card edge, not a row. */
 .pm-kanban-card-body {
   flex: 1;
-  padding: 8px 10px 9px;
+  padding: 11px 12px 12px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
 }
 .pm-kanban-card-body > .pm-chip {
   align-self: flex-start;
@@ -198,7 +199,7 @@
   min-width: 0;
   font-size: 13px;
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.4;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -240,7 +241,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 .pm-kanban-card-parent {
@@ -286,30 +287,28 @@
 
 /* ─ Casefile board upgrades ─ */
 
-/* Lanes selector, right side of the board area */
+/* Active-grouping chip. Renders ONLY while a grouping is on: the board used to
+   spend a whole row saying "Lanes: None". */
 .pm-kanban-lanes-bar {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  gap: 8px;
   flex-shrink: 0;
-  padding: 8px 16px 0;
+  padding: 6px 16px 0;
 }
 .pm-kanban-lanes-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-size: 12px;
-  font-weight: 500;
   color: var(--gs-ink-subtle);
 }
-.pm-kanban-lanes-select {
-  padding: 2px 6px;
+.pm-kanban-lanes-clear {
+  padding: 2px 8px;
   border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-s);
   background: var(--gs-surface-2);
   color: var(--gs-ink-muted);
   font-size: 12px;
-  transition: border-color 150ms ease-out;
+  cursor: pointer;
 }
 .pm-kanban-lanes-select:hover {
   border-color: var(--gs-hairline-strong);

@@ -22,9 +22,8 @@ import {
 } from './ui/ModalFactory'
 import { AlertIntakeModal } from './modals/AlertIntakeModal'
 import { Notifier } from './components/Notifier'
-import { buildHandover } from './soc/handover'
+import { openHandoverModal } from './soc/HandoverModal'
 import { generateCaseReport } from './soc/caseReport'
-import { ensureFolder } from './store/vaultFs'
 import { migrateProjects } from './migration'
 import { isCasesLayout, isProjectFolderLayout, projectFileName, taskFolderForProjectPath } from './store/layout'
 import { safeAsync } from './utils'
@@ -91,6 +90,12 @@ export default class PMPlugin extends Plugin {
       await this.router.openDashboard()
     })
 
+    // The handover is the one thing that has to be reachable from any screen at
+    // the end of a shift — a palette command nobody knew the name of was not.
+    this.addRibbonIcon('clipboard-list', 'Shift handover', () => {
+      openHandoverModal(this)
+    })
+
     this.addCommand({
       id: 'open-projects',
       name: 'Open projects pane',
@@ -132,6 +137,19 @@ export default class PMPlugin extends Plugin {
       name: 'Create new subtask',
       callback: () => {
         void this.pickProjectThenCreateTask('pick-parent')
+      }
+    })
+
+    this.addCommand({
+      id: 'group-board-by',
+      name: 'Group board by…',
+      // Swimlanes used to cost every board a permanent "Lanes: None" row. This
+      // is the way in; the board shows a chip with a Clear once one is active.
+      checkCallback: (checking) => {
+        const board = this.app.workspace.getActiveViewOfType(ProjectView)?.kanban()
+        if (!board) return false
+        if (!checking) void board.pickLaneGroup()
+        return true
       }
     })
 
@@ -201,9 +219,9 @@ export default class PMPlugin extends Plugin {
 
     this.addCommand({
       id: 'generate-shift-handover',
-      name: 'Generate shift handover',
+      name: 'Shift handover',
       callback: () => {
-        void this.generateShiftHandover()
+        openHandoverModal(this)
       }
     })
 
@@ -518,21 +536,6 @@ export default class PMPlugin extends Plugin {
       }
       menu.showAtPosition({ x: window.innerWidth / 2 - 100, y: window.innerHeight / 3 })
     })
-  }
-
-  private async generateShiftHandover(): Promise<void> {
-    const projects = await this.store.loadAllProjects(this.settings.projectsFolder)
-    const md = buildHandover(projects, this.settings, new Date().toISOString())
-    const path = this.settings.handoverPath || 'SOC/Handover.md'
-    const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
-    if (folder) await ensureFolder(this.app, folder)
-    const existing = this.app.vault.getAbstractFileByPath(path)
-    if (existing instanceof TFile) {
-      await this.app.vault.modify(existing, md)
-    } else {
-      await this.app.vault.create(path, md)
-    }
-    await this.app.workspace.openLinkText(path, '', true)
   }
 
   /**

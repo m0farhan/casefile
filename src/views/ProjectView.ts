@@ -11,6 +11,7 @@ import { BacklogView } from './BacklogView'
 import { ReportsView } from './reports/ReportsView'
 import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { AlertIntakeModal } from '../modals/AlertIntakeModal'
+import { openHandoverModal } from '../soc/HandoverModal'
 import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
 import { setQuerySlaPolicies } from '../store/QueryParser'
@@ -31,6 +32,11 @@ export class ProjectView extends ItemView {
   filter: FilterState = makeDefaultFilter()
   activeSavedViewId: string | null = null
   private subview: SubView | null = null
+
+  /** The board, when it is the open view — the palette's "Group board by…" needs it. */
+  kanban(): KanbanView | null {
+    return this.subview instanceof KanbanView ? this.subview : null
+  }
   private savedTableViewState: TableViewState | null = null
   private toolbarEl!: HTMLElement
   private headerEl!: HTMLElement
@@ -417,6 +423,14 @@ export class ProjectView extends ItemView {
         if (!this.project) return
         new AlertIntakeModal(this.plugin.app, this.plugin, this.project, () => this.refreshProject()).open()
       })
+
+    // Vault-wide, not this project — the tooltip says so, because it sits in a
+    // project toolbar. It is here because the board is what is on screen at the
+    // end of a shift.
+    new ExtraButtonComponent(right)
+      .setIcon('clipboard-list')
+      .setTooltip('Shift handover (whole vault)')
+      .onClick(() => openHandoverModal(this.plugin))
 
     new ExtraButtonComponent(right)
       .setIcon('settings')
