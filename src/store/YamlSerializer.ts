@@ -198,7 +198,11 @@ export function serializeTask(
   task: Task,
   project: Project,
   parentTask: Task | null,
-  statuses: StatusConfig[] = []
+  statuses: StatusConfig[] = [],
+  /** Write the `Project: [[Board]]` backlink. Off = the line is simply not
+   *  emitted; the reader still strips it, so a note that already has one keeps
+   *  working and loses the line on its next save. */
+  linkToBoard = true
 ): string {
   const fm = buildTaskFrontmatter(task, project, parentTask)
 
@@ -223,7 +227,7 @@ export function serializeTask(
   if (parentTask?.filePath) {
     const parentBasename = parentTask.filePath.replace(/^.*\//, '').replace(/\.md$/, '')
     yamlLines.push(`Parent: [[${parentBasename}|${parentTask.title}]]`)
-  } else {
+  } else if (linkToBoard) {
     const projectBasename = project.filePath.replace(/^.*\//, '').replace(/\.md$/, '')
     yamlLines.push(`Project: [[${projectBasename}|${project.title}]]`)
   }

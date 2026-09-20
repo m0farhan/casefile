@@ -537,3 +537,40 @@ describe('boardType round trip', () => {
     expect(back.iocs).toEqual(task.iocs)
   })
 })
+
+/** Parse a serialized task note the way the store does. */
+function readTask(md: string): Task {
+  const { frontmatter, body } = parseFrontmatter(md)
+  if (!frontmatter) throw new Error('frontmatter missing')
+  return hydrateTaskFromFile(frontmatter, body, 'Projects/Test/Tasks/t.md').task
+}
+
+describe('the board backlink line is optional', () => {
+  it('omits it when the setting is off, and the reader is unaffected either way', () => {
+    const project = makeProject('Test', 'Projects/Test.md')
+    const task = makeTask({ id: 'gs-b', title: 'No backlink', description: 'Body text' })
+
+    const withLink = serializeTask(task, project, null, [], true)
+    expect(withLink).toContain('Project: [[Test|Test]]')
+
+    const without = serializeTask(task, project, null, [], false)
+    expect(without).not.toContain('Project: [[')
+    // The line was never data: the description survives identically.
+    expect(readTask(without).description).toBe('Body text')
+    expect(readTask(withLink).description).toBe('Body text')
+  })
+
+  it('still parses comments in a note that has no backlink line', () => {
+    // The line doubled as a section boundary for `## Comments`; without it the
+    // section has to end at `## Subtasks` or end of file instead.
+    const project = makeProject('Test', 'Projects/Test.md')
+    const task = makeTask({
+      id: 'gs-c',
+      title: 'Commented',
+      comments: [{ at: '2026-09-15 09:15', text: 'Hash matches the sample.' }]
+    })
+    const md = serializeTask(task, project, null, [], false)
+    expect(md).not.toContain('Project: [[')
+    expect(readTask(md).comments).toEqual(task.comments)
+  })
+})

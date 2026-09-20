@@ -728,7 +728,13 @@ export class ProjectStore implements TaskSource {
           if (!this.hydratedBodies.has(task)) {
             recoverBodyInto(task, parseFrontmatter(content).body)
           }
-          return serializeTask(task, project, parentTask, this.statusesFor(project))
+          return serializeTask(
+            task,
+            project,
+            parentTask,
+            this.statusesFor(project),
+            this.getSettings().linkTasksToBoard
+          )
         })
       } else {
         // New file or rename target. For a rename of an unhydrated task, read
@@ -740,7 +746,13 @@ export class ProjectStore implements TaskSource {
             recoverBodyInto(task, parseFrontmatter(content).body)
           }
         }
-        const content = serializeTask(task, project, parentTask, this.statusesFor(project))
+        const content = serializeTask(
+          task,
+          project,
+          parentTask,
+          this.statusesFor(project),
+          this.getSettings().linkTasksToBoard
+        )
         this.markSelfWrite(filePath)
         await this.app.vault.create(filePath, content)
       }
@@ -845,7 +857,13 @@ export class ProjectStore implements TaskSource {
     const folder = this.projectTaskFolder(project)
     await this.ensureFolder(folder)
     const newFilePath = taskFilePath(task.title, folder)
-    const newContent = serializeTask(task, project, null, this.statusesFor(project))
+    const newContent = serializeTask(
+      task,
+      project,
+      null,
+      this.statusesFor(project),
+      this.getSettings().linkTasksToBoard
+    )
 
     if (opts.handling === 'move') {
       await this.app.fileManager.renameFile(file, newFilePath)
@@ -892,7 +910,13 @@ export class ProjectStore implements TaskSource {
       }
       const desired = taskFilePath(task.title, folder)
       const dest = this.uniqueChildPath(folder, desired.slice(desired.lastIndexOf('/') + 1))
-      const content = serializeTask(task, project, parent, this.statusesFor(project))
+      const content = serializeTask(
+        task,
+        project,
+        parent,
+        this.statusesFor(project),
+        this.getSettings().linkTasksToBoard
+      )
       if (handling === 'move' && source) {
         await this.app.fileManager.renameFile(source, dest)
         const moved = this.app.vault.getAbstractFileByPath(dest)

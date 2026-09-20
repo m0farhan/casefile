@@ -319,6 +319,25 @@ export interface PMSettings {
   alertCategories: AlertCategoryConfig[]
   /** Vault path of the generated shift-handover note. */
   handoverPath: string
+  /**
+   * Write a `Project: [[Board]]` line at the foot of every task note.
+   *
+   * It is purely an Obsidian backlink — the plugin finds a task's board from
+   * its folder, never from this line — so turning it off costs the graph edge
+   * and nothing else. Off by default: the line is redundant for anyone who
+   * navigates through the plugin. Existing notes keep theirs until the next
+   * time that note is saved, and the reader still strips the line either way.
+   */
+  linkTasksToBoard: boolean
+  /**
+   * Show the five lifecycle stamps (occurred, detected, responded, contained,
+   * resolved) as an editable panel on a case. Off by default: alert intake no
+   * longer invents a detection time, so on most cases all five are empty and
+   * the panel is five empty date inputs. The stamps themselves are unaffected —
+   * they still drive the response clock, still print in the case timeline and
+   * the case report. Turn this on to set one by hand.
+   */
+  showIncidentTimeline: boolean
   /** Move a closed case into Archive/ this many days after its completion date.
    *  0 = off, which is the default: this moves the analyst's files on a timer. */
   autoArchiveDays: number
@@ -556,6 +575,8 @@ export const DEFAULT_SETTINGS: PMSettings = {
   incidentTemplates: DEFAULT_INCIDENT_TEMPLATES,
   alertCategories: DEFAULT_ALERT_CATEGORIES,
   handoverPath: 'SOC/Handover.md',
+  linkTasksToBoard: false,
+  showIncidentTimeline: false,
   autoArchiveDays: 0,
   handoverWindowHours: 12,
   ownedAssets: [],

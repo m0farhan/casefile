@@ -309,13 +309,16 @@ export class TaskDetailView extends ItemView {
       config.issueTypes.find((t) => t.id === task.issueType)
     )
     if (task.key) renderKeyChip(header, task.key, { copy: true })
-    // Severity shows on any task type; the SLA chip stays incident-only
-    // (slaState also gates on issueType, so this is belt and braces).
-    renderSeverityBadge(
-      header,
-      config.severities.find((s) => s.id === task.severity)
-    )
-    if (this.plugin.store.configFor(project).boardType !== 'plain' && task.issueType === 'incident') {
+    // Severity shows on any task type of a CASE board; the SLA chip stays
+    // incident-only (slaState also gates on issueType, so that is belt and braces).
+    const socBoard = config.boardType !== 'plain'
+    if (socBoard) {
+      renderSeverityBadge(
+        header,
+        config.severities.find((s) => s.id === task.severity)
+      )
+    }
+    if (socBoard && task.issueType === 'incident') {
       // Registered chips unregister themselves: the shared 30s tick drops any
       // chip whose element left the DOM, and both onClose and every render()
       // empty contentEl (KanbanCard lifecycle — rebuild, never detach-and-keep).
@@ -398,11 +401,13 @@ export class TaskDetailView extends ItemView {
     })
     // Evidence (files referenced in description/comments) — read-only, no save wiring.
     renderAttachmentsSection(body, { app: this.app, project, task })
-    if (task.issueType === 'incident') {
-      renderLifecyclePanel(body, task, {
-        onChange: () => this.scheduleSave(),
-        slaPolicies: this.plugin.settings.slaPolicies
-      })
+    if (config.boardType !== 'plain' && task.issueType === 'incident') {
+      if (this.plugin.settings.showIncidentTimeline) {
+        renderLifecyclePanel(body, task, {
+          onChange: () => this.scheduleSave(),
+          slaPolicies: this.plugin.settings.slaPolicies
+        })
+      }
       renderIocSection(body, task, {
         onChange: () => this.scheduleSave(),
         onPivot: (value) => void openIndicatorSearch(this.plugin, value),

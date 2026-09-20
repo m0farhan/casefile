@@ -413,7 +413,12 @@ export class TaskModal extends Modal {
     // says — a task imported or moved with issueType 'incident' must not drag
     // the SOC panels onto a Goals board.
     if (config.boardType !== 'plain' && this.task.issueType === 'incident') {
-      renderLifecyclePanel(body, this.task, { onChange: () => {}, slaPolicies: this.plugin.settings.slaPolicies })
+      if (this.plugin.settings.showIncidentTimeline) {
+        renderLifecyclePanel(body, this.task, {
+          onChange: () => {},
+          slaPolicies: this.plugin.settings.slaPolicies
+        })
+      }
       renderIocSection(body, this.task, {
         onChange: () => {},
         reputationKeys: {

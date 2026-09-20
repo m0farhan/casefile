@@ -45,6 +45,29 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.29.0] - 2026-09-20
+
+### Changed (two bits of furniture you can now turn off)
+
+- **The `Project: [[Board]]` line at the foot of every task note is gone by
+  default.** It was only an Obsidian backlink — the plugin finds a task's board
+  from its folder, never from that line — so losing it costs the graph edge and
+  nothing else. Notes that already have it keep it until each one is next
+  saved, and the reader still strips the line either way, so nothing breaks in
+  the meantime. **Settings → Note layout** turns it back on.
+- **The incident timeline panel is hidden by default.** Since intake stopped
+  inventing a detection time, most cases have all five stamps empty, so the
+  panel was five empty date fields under every ticket. The stamps are
+  unaffected: they still drive the response clock and still print in the case
+  timeline and the case report. Turn the panel on in **Settings → Note layout**
+  to set one by hand.
+
+### Fixed
+
+- The task detail panel showed the severity badge and the indicators section on
+  a plain board. Both are case-board chrome; 2.28.0 gated the modal and the
+  board but missed the panel.
+
 ## [2.28.0] - 2026-09-20
 
 ### Added (board types)

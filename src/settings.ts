@@ -445,6 +445,38 @@ export class PMSettingTab extends PluginSettingTab {
         })
     })
 
+    // ── Note layout ───────────────────────────────────────────────────────────
+    new Setting(containerEl).setName('Note layout').setHeading()
+
+    new Setting(containerEl)
+      .setName('Link each task note back to its board')
+      .setDesc(
+        'Writes a "Project: [[Board]]" line at the foot of every task note. It is only an Obsidian ' +
+          "backlink — the plugin finds a task's board from its folder — so turning it off costs the graph " +
+          'edge and nothing else. Notes that already have the line keep it until the next time each one is saved.'
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.linkTasksToBoard).onChange(async (v) => {
+          this.plugin.settings.linkTasksToBoard = v
+          await this.plugin.saveSettings()
+        })
+      )
+
+    new Setting(containerEl)
+      .setName('Show the incident timeline panel')
+      .setDesc(
+        'The five lifecycle stamps — occurred, detected, responded, contained, resolved — as editable ' +
+          'fields on a case. Off by default: intake no longer invents a detection time, so on most cases ' +
+          'all five are empty. The stamps still drive the response clock and still print in the case ' +
+          'timeline and the case report; turn this on to set one by hand.'
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.showIncidentTimeline).onChange(async (v) => {
+          this.plugin.settings.showIncidentTimeline = v
+          await this.plugin.saveSettings()
+        })
+      )
+
     // ── Auto-archive ──────────────────────────────────────────────────────────
     new Setting(containerEl).setName('Auto-archive').setHeading()
 
