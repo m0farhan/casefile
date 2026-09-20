@@ -83,6 +83,14 @@ export class ReportsView implements SubView {
       el.createDiv({ cls: 'pm-report-stat-value', text: value })
       el.createDiv({ cls: 'pm-report-stat-label', text: label })
     }
+    // A plain board records no incidents, verdicts or response targets, so
+    // those three tiles would read "0" and "—" forever — a measurement of
+    // nothing, printed as if it were a finding.
+    if (cfg.boardType === 'plain') {
+      stat(String(sum.open), 'Open')
+      stat(String(sum.closedThisWeek), 'Closed this week')
+      return
+    }
     stat(String(sum.open), 'Open cases')
     stat(String(sum.incidents), 'Incidents')
     stat(String(sum.closedThisWeek), 'Closed this week')
