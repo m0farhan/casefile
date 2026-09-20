@@ -69,7 +69,7 @@ describe('sharedIndicatorLinks', () => {
     const one = makeTask({ id: 'one', iocs: [ip('1.2.3.4')] })
     const two = makeTask({ id: 'two', iocs: [domain('evil.EXAMPLE'), ip('1.2.3.4')] })
     const unrelated = makeTask({ id: 'unrelated', iocs: [ip('9.9.9.9')] })
-    const out = sharedIndicatorLinks(me, [me, one, two, unrelated])
+    const out = sharedIndicatorLinks(me, [me, one, two, unrelated], [])
     expect(out.map((o) => [o.task.id, o.shared])).toEqual([
       ['two', 2],
       ['one', 1]
@@ -79,14 +79,14 @@ describe('sharedIndicatorLinks', () => {
   it('returns nothing when the task has no indicators, and never counts itself', () => {
     const bare = makeTask({ id: 'bare' })
     const other = makeTask({ id: 'other', iocs: [ip('1.1.1.1')] })
-    expect(sharedIndicatorLinks(bare, [bare, other])).toEqual([])
+    expect(sharedIndicatorLinks(bare, [bare, other], [])).toEqual([])
     const solo = makeTask({ id: 'solo', iocs: [ip('1.1.1.1')] })
-    expect(sharedIndicatorLinks(solo, [solo])).toEqual([])
+    expect(sharedIndicatorLinks(solo, [solo], [])).toEqual([])
   })
 
   it('duplicate values on either side count once', () => {
     const me = makeTask({ id: 'me', iocs: [ip('1.2.3.4'), ip('1.2.3.4')] })
     const other = makeTask({ id: 'o', iocs: [ip('1.2.3.4'), ip('1.2.3.4')] })
-    expect(sharedIndicatorLinks(me, [me, other])).toEqual([{ task: other, shared: 1 }])
+    expect(sharedIndicatorLinks(me, [me, other], [])).toEqual([{ task: other, shared: 1 }])
   })
 })

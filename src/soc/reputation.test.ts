@@ -5,7 +5,7 @@ const KEYS = { virustotal: 'vt-key', abuseipdb: 'ab-key' }
 
 describe('buildRequests', () => {
   it('sends an IP to both providers', () => {
-    const reqs = buildRequests('ip', '103.80.134.63', KEYS)
+    const reqs = buildRequests('ip', '103.80.134.63', KEYS, [])
     expect(reqs.map((r) => r.provider)).toEqual(['virustotal', 'abuseipdb'])
     expect(reqs[0].url).toBe('https://www.virustotal.com/api/v3/ip_addresses/103.80.134.63')
     expect(reqs[0].headers).toEqual({ 'x-apikey': 'vt-key' })
@@ -15,36 +15,36 @@ describe('buildRequests', () => {
   })
 
   it('refangs defanged values before querying', () => {
-    const reqs = buildRequests('ip', '103[.]80[.]134[.]63', KEYS)
+    const reqs = buildRequests('ip', '103[.]80[.]134[.]63', KEYS, [])
     expect(reqs[0].url).toContain('103.80.134.63')
     expect(reqs[1].url).toContain('ipAddress=103.80.134.63')
   })
 
   it('sends domain and hash to VirusTotal only', () => {
-    expect(buildRequests('domain', 'coffeeshooop.com', KEYS).map((r) => r.provider)).toEqual(['virustotal'])
-    const hash = buildRequests('hash', 'cd903ad2211cf7d166646d75e57fb866', KEYS)
+    expect(buildRequests('domain', 'coffeeshooop.com', KEYS, []).map((r) => r.provider)).toEqual(['virustotal'])
+    const hash = buildRequests('hash', 'cd903ad2211cf7d166646d75e57fb866', KEYS, [])
     expect(hash.map((r) => r.provider)).toEqual(['virustotal'])
     expect(hash[0].url).toContain('/files/cd903ad2211cf7d166646d75e57fb866')
   })
 
   it('encodes URLs with the VirusTotal base64url id', () => {
-    const [req] = buildRequests('url', 'https://free-coffee.zip/a?b=1', KEYS)
+    const [req] = buildRequests('url', 'https://free-coffee.zip/a?b=1', KEYS, [])
     const id = vtUrlId('https://free-coffee.zip/a?b=1')
     expect(id).not.toMatch(/[+/=]/)
     expect(req.url).toBe(`https://www.virustotal.com/api/v3/urls/${id}`)
   })
 
   it('queries the domain of an email and says so', () => {
-    const [req] = buildRequests('email', 'free[at]coffeeshooop[.]com', KEYS)
+    const [req] = buildRequests('email', 'free[at]coffeeshooop[.]com', KEYS, [])
     expect(req.url).toBe('https://www.virustotal.com/api/v3/domains/coffeeshooop.com')
     expect(req.queried).toBe('coffeeshooop.com')
   })
 
   it('omits providers without a key, and yields nothing with no keys', () => {
-    expect(buildRequests('ip', '1.2.3.4', { virustotal: 'vt-key' }).map((r) => r.provider)).toEqual(['virustotal'])
-    expect(buildRequests('ip', '1.2.3.4', { abuseipdb: 'ab-key' }).map((r) => r.provider)).toEqual(['abuseipdb'])
-    expect(buildRequests('ip', '1.2.3.4', {})).toEqual([])
-    expect(buildRequests('domain', 'x.com', { abuseipdb: 'ab-key' })).toEqual([])
+    expect(buildRequests('ip', '1.2.3.4', { virustotal: 'vt-key' }, []).map((r) => r.provider)).toEqual(['virustotal'])
+    expect(buildRequests('ip', '1.2.3.4', { abuseipdb: 'ab-key' }, []).map((r) => r.provider)).toEqual(['abuseipdb'])
+    expect(buildRequests('ip', '1.2.3.4', {}, [])).toEqual([])
+    expect(buildRequests('domain', 'x.com', { abuseipdb: 'ab-key' }, [])).toEqual([])
   })
 })
 
@@ -52,7 +52,7 @@ describe('buildRequests - abuse.ch', () => {
   const AC = { abusech: 'ac-key' }
 
   it('sends a hash to MalwareBazaar as a form POST', () => {
-    const [req] = buildRequests('hash', 'cd903ad2211cf7d166646d75e57fb866', AC)
+    const [req] = buildRequests('hash', 'cd903ad2211cf7d166646d75e57fb866', AC, [])
     expect(req.provider).toBe('malwarebazaar')
     expect(req.url).toBe('https://mb-api.abuse.ch/api/v1/')
     expect(req.method).toBe('POST')
@@ -62,7 +62,7 @@ describe('buildRequests - abuse.ch', () => {
   })
 
   it('sends a url to URLhaus with the value form-encoded', () => {
-    const [req] = buildRequests('url', 'https://free-coffee.zip/a?b=1', AC)
+    const [req] = buildRequests('url', 'https://free-coffee.zip/a?b=1', AC, [])
     expect(req.provider).toBe('urlhaus')
     expect(req.url).toBe('https://urlhaus-api.abuse.ch/v1/url/')
     expect(req.body).toBe(`url=${encodeURIComponent('https://free-coffee.zip/a?b=1')}`)
@@ -70,7 +70,7 @@ describe('buildRequests - abuse.ch', () => {
   })
 
   it('sends a domain to the URLhaus host endpoint, refanged', () => {
-    const [req] = buildRequests('domain', 'coffeeshooop[.]com', AC)
+    const [req] = buildRequests('domain', 'coffeeshooop[.]com', AC, [])
     expect(req.provider).toBe('urlhaus')
     expect(req.url).toBe('https://urlhaus-api.abuse.ch/v1/host/')
     expect(req.body).toBe('host=coffeeshooop.com')
@@ -78,7 +78,7 @@ describe('buildRequests - abuse.ch', () => {
   })
 
   it('sends an ip to ThreatFox as JSON, alongside the other providers', () => {
-    const reqs = buildRequests('ip', '103.80.134.63', { ...KEYS, ...AC })
+    const reqs = buildRequests('ip', '103.80.134.63', { ...KEYS, ...AC }, [])
     expect(reqs.map((r) => r.provider)).toEqual(['virustotal', 'abuseipdb', 'threatfox'])
     const tf = reqs[2]
     expect(tf.url).toBe('https://threatfox-api.abuse.ch/api/v1/')
@@ -89,7 +89,7 @@ describe('buildRequests - abuse.ch', () => {
   })
 
   it('sends nothing to abuse.ch for an email', () => {
-    expect(buildRequests('email', 'free@coffeeshooop.com', AC)).toEqual([])
+    expect(buildRequests('email', 'free@coffeeshooop.com', AC, [])).toEqual([])
   })
 })
 
@@ -238,5 +238,27 @@ describe('skippedProviders', () => {
   it('never blames a provider that does not cover the type', () => {
     expect(skippedProviders('email', { abusech: 'ac-key' })).toEqual(['virustotal'])
     expect(skippedProviders('email', {})).toEqual(['virustotal'])
+  })
+})
+
+describe('the asset boundary is the one outbound gate (ST-4)', () => {
+  it('builds no request at all for the org own estate', () => {
+    // Keys are set and the provider covers the type: the only reason nothing
+    // is sent is the boundary. Checked before any URL or header is assembled.
+    expect(buildRequests('ip', '10.0.0.5', KEYS, [])).toEqual([])
+    expect(buildRequests('ip', '192.168.1.20', KEYS, [])).toEqual([])
+    expect(buildRequests('domain', 'mail.corp.example', KEYS, ['corp.example'])).toEqual([])
+    expect(buildRequests('url', 'https://intranet.corp.example/x', KEYS, ['corp.example'])).toEqual([])
+    expect(buildRequests('email', 'bob@corp.example', KEYS, ['corp.example'])).toEqual([])
+  })
+
+  it('still sends adversary infrastructure, so the gate is not a blanket off switch', () => {
+    expect(buildRequests('ip', '103.80.134.63', KEYS, ['corp.example']).length).toBeGreaterThan(0)
+    expect(buildRequests('domain', 'evilcorp.example', KEYS, ['corp.example']).length).toBeGreaterThan(0)
+  })
+
+  it('is judged on the value, so re-typing a row cannot walk an address out', () => {
+    // The row says "domain" but the value is an internal address.
+    expect(buildRequests('domain', '10.0.0.5', KEYS, [])).toEqual([])
   })
 })

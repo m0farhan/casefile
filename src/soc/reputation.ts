@@ -1,5 +1,5 @@
 import type { IocType } from '../types'
-import { refangIoc } from './ioc'
+import { assetRule, refangIoc } from './ioc'
 
 /**
  * Live IOC reputation checks: pure request builders + response parsers, no
@@ -14,6 +14,9 @@ import { refangIoc } from './ioc'
  *    urls and domains, ThreatFox for ips — one platform per type keeps the
  *    chip row tidy. Absent from a listing is 'unknown', never 'clean'.
  * Requests fire only on explicit analyst action, never automatically.
+ * Nothing that matches the asset boundary (assetRule) is ever requested: the
+ * gate is HERE, because requestUrl (IocSection) is fed only from
+ * buildRequests, and `owned` is a required argument so no call site can skip it.
  */
 
 export type RepProvider = 'virustotal' | 'abuseipdb' | 'malwarebazaar' | 'urlhaus' | 'threatfox'
@@ -93,8 +96,11 @@ function vtRequest(kind: string, id: string, guiKind: string, guiId: string, key
  * row still queries correctly. Providers without a configured key are simply
  * absent from the result.
  */
-export function buildRequests(type: IocType, value: string, keys: RepKeys): RepRequest[] {
+export function buildRequests(type: IocType, value: string, keys: RepKeys, owned: string[]): RepRequest[] {
   const real = refangIoc(value)
+  // The one outbound gate: an indicator naming the org's own estate has no
+  // request to send. Before any URL, header or key is assembled.
+  if (assetRule(real, owned)) return []
   const out: RepRequest[] = []
   const vt = keys.virustotal?.trim()
   const ab = keys.abuseipdb?.trim()

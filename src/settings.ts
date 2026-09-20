@@ -5,6 +5,7 @@ import { flattenTasks } from './store/TaskTreeOps'
 import { getTaskNotesApi, importTaskNotesPalettes, isTaskNotesInstalled } from './integrations/tasknotes'
 import { renderPriorityListEditor, renderStatusListEditor } from './ui/PaletteListEditor'
 import { IconButton } from './ui/primitives/IconButton'
+import { unmatchableAssetRules } from './soc/ioc'
 
 export type { PMSettings }
 export { DEFAULT_SETTINGS }
@@ -347,6 +348,48 @@ export class PMSettingTab extends PluginSettingTab {
 
     this.slaContainer = containerEl.createDiv('pm-settings-sla')
     this.renderSlaRows()
+
+    // ── Asset boundary ────────────────────────────────────────────────────────
+    new Setting(containerEl).setName('Asset boundary').setHeading()
+    containerEl.createEl('p', {
+      cls: 'pm-settings-desc',
+      text:
+        'Your own domains and IPv4 ranges, one per line — corp.example, *.corp.example, 10.0.0.0/8, ' +
+        '198.51.100.7, 2001:db8::5. Lines starting with # are comments. Indicators that match are still ' +
+        'recorded on the case and marked ASSET, and are never sent to VirusTotal, AbuseIPDB or abuse.ch, ' +
+        'or searched across cases. Nothing is guessed: only what you list here, plus the private, loopback ' +
+        'and link-local ranges (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, IPv6 ::1, fc00::/7, ' +
+        'fe80::/10, and IPv4-mapped forms like ::ffff:10.0.0.5), which are internal by definition. ' +
+        'A domain covers its subdomains: corp.example matches mail.corp.example, not evilcorp.example.'
+    })
+    const assetWarnEl = containerEl.createEl('p', { cls: 'pm-settings-desc' })
+    const renderAssetWarning = () => {
+      const bad = unmatchableAssetRules(this.plugin.settings.ownedAssets)
+      assetWarnEl.setText(
+        bad.length
+          ? `Not matched, these entries are ignored: ${bad.join(', ')} — use a domain, an IPv4 address ` +
+              `or CIDR, or a single IPv6 address. IPv6 ranges are not supported.`
+          : ''
+      )
+    }
+    new Setting(containerEl).setName('Owned domains and ranges').addTextArea((text) => {
+      text.inputEl.rows = 4
+      // No placeholder: the examples are in the description above, and the
+      // UI-copy lint reads any placeholder as a sentence — 'corp.example' is
+      // not one, and capitalising it would make it a wrong example.
+      text.setValue(this.plugin.settings.ownedAssets.join('\n')).onChange(async (v) => {
+        // One entry per LINE, as the description promises. Splitting on all
+        // whitespace would turn "# datacentre range" into three live rules,
+        // one of which ("datacentre") would match a bare hostname.
+        this.plugin.settings.ownedAssets = v
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line && !line.startsWith('#'))
+        renderAssetWarning()
+        await this.plugin.saveSettings()
+      })
+    })
+    renderAssetWarning()
 
     // ── Live reputation checks ────────────────────────────────────────────────
     new Setting(containerEl).setName('Live reputation checks').setHeading()

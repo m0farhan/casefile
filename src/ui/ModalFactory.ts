@@ -7,7 +7,7 @@ import { ProjectModal } from '../modals/ProjectModal'
 import { ProjectPickerModal, TaskPickerModal } from '../modals/PickerModals'
 import { ImportModal } from '../modals/ImportModal'
 import { flattenTasks } from '../store/TaskTreeOps'
-import { defangIoc, refangIoc } from '../soc/ioc'
+import { assetRule, defangIoc, refangIoc } from '../soc/ioc'
 import { findTaskById } from '../store/TaskIndex'
 import { pushRecent } from './recents'
 
@@ -450,6 +450,11 @@ class IndicatorSearchModal extends SuggestModal<IndicatorHit> {
     el.addClass('mod-complex')
     const content = el.createDiv({ cls: 'suggestion-content' })
     content.createDiv({ cls: 'suggestion-title', text: defangIoc(hit.ioc.value, hit.ioc.type) })
+    // The analyst asked for THIS value, so every hit still shows, in order — a
+    // deliberate local search is not the SD-05 pivot noise. It is marked so the
+    // list is honest about what they are looking at.
+    const asset = assetRule(hit.ioc.value, this.plugin.settings.ownedAssets)
+    if (asset) content.createSpan({ cls: 'pm-ioc-asset', text: `ASSET · ${asset.rule}` })
     const config = this.configs.get(hit.project) ?? this.plugin.store.configFor(hit.project)
     const status = config.statuses.find((st) => st.id === hit.task.status)?.label ?? hit.task.status
     const note = hit.ioc.note ? ` · ${hit.ioc.note}` : ''

@@ -399,14 +399,18 @@ export class TaskDetailView extends ItemView {
     // Evidence (files referenced in description/comments) — read-only, no save wiring.
     renderAttachmentsSection(body, { app: this.app, project, task })
     if (task.issueType === 'incident') {
-      renderLifecyclePanel(body, task, { onChange: () => this.scheduleSave(), slaPolicies: this.plugin.settings.slaPolicies })
+      renderLifecyclePanel(body, task, {
+        onChange: () => this.scheduleSave(),
+        slaPolicies: this.plugin.settings.slaPolicies
+      })
       renderIocSection(body, task, {
         onChange: () => this.scheduleSave(),
         onPivot: (value) => void openIndicatorSearch(this.plugin, value),
         reputationKeys: {
           ...this.plugin.reputationKeys()
         },
-        findSightings: (value) => iocSightings(value, project.tasks, task.id)
+        ownedAssets: () => this.plugin.settings.ownedAssets,
+        findSightings: (value) => iocSightings(value, project.tasks, task.id, this.plugin.settings.ownedAssets)
       })
     }
     this.commentsSection?.destroy()

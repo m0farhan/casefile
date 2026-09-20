@@ -319,6 +319,15 @@ export default class PMPlugin extends Plugin {
     if (!this.settings.projectFilters) this.settings.projectFilters = {}
     if (!this.settings.collapsedTasks) this.settings.collapsedTasks = {}
     if (!this.settings.collapsedKanbanColumns) this.settings.collapsedKanbanColumns = {}
+    // Trust boundary: a hand-edited data.json can hand us a string, a null, or
+    // numbers inside the list. Filtering to strings (not just checking the
+    // container) matters — a non-string element throws out of assetRule inside
+    // renderRows and takes the whole Indicators section down. The filter also
+    // detaches from DEFAULT_SETTINGS.ownedAssets, which Object.assign shares
+    // by reference when data.json has no list of its own.
+    this.settings.ownedAssets = Array.isArray(this.settings.ownedAssets)
+      ? this.settings.ownedAssets.filter((v): v is string => typeof v === 'string')
+      : []
     // A data.json written by older versions lacks the new filter arrays.
     for (const entry of Object.values(this.settings.projectFilters)) {
       entry.filter.severities ??= []

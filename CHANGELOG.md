@@ -45,6 +45,49 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.24.0] - 2026-09-20
+
+### Fixed (your own estate stops going to third parties)
+
+- There was no boundary between your network and the adversary's. The indicator
+  extractor emitted your own mail domain and internal addresses as indicators,
+  those linked every case to every other through the seen-before pivot, and
+  **Check all sent them to VirusTotal, AbuseIPDB and abuse.ch** — the org
+  telling a third party about its own estate.
+- New **Asset boundary** setting: your own domains and IPv4 ranges, one per
+  line. Nothing is guessed. Private, loopback and link-local ranges are covered
+  without listing anything, including IPv4-mapped IPv6 forms like
+  `::ffff:10.0.0.5`.
+- The gate is in one place, on the way out. Building a request for an asset
+  returns nothing before a single URL, header or key is assembled, and the
+  boundary argument is required, so no future call site can forget it.
+- The boundary is judged on the value's shape, not the row's declared type, so
+  re-typing a row cannot walk an internal address past it.
+- An asset is still **recorded** on the case as evidence. It is marked ASSET in
+  the indicator list, in the case report, in the copied block, in the handover
+  note and in the indicator search, so a reader can tell it from adversary
+  infrastructure.
+- Entries the boundary cannot match are named back to you in settings rather
+  than silently ignored.
+
+### Fixed (a pasted label is not an indicator)
+
+- Bulk paste had no shape gate, so `SHA256:`, `Sender` and a date all fell
+  through to the final "it must be a domain" branch and became indicator rows.
+- Pasting now reports two counts separately and names what it dropped:
+  `Added 4 indicators · 2 not indicator-shaped ("SHA256:", "Sender") · 1 already
+  recorded`.
+
+### Changed (silence no longer reads as a finding)
+
+- An asset's row says cross-case sightings are not computed for it, instead of
+  drawing nothing where "never seen anywhere else" would be read.
+- The intake preview counts the indicators it actually searched and says how
+  many it did not.
+- The links panel says how many of a case's indicators were excluded as assets,
+  so a case whose only overlap was an asset does not read as having nothing in
+  common with anything.
+
 ## [2.23.0] - 2026-09-20
 
 ### Fixed (an alert off the queue is no longer born breached)

@@ -3,6 +3,7 @@ import type PMPlugin from '../main'
 import type { Project, Task, TaskLinkType } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { findTaskById } from '../store/TaskIndex'
+import { assetRule } from '../soc/ioc'
 import { renderKeyChip } from '../ui/composites/issueMeta'
 import { IconButton } from '../ui/primitives/IconButton'
 import { renderSelectControl } from '../ui/composites/properties'
@@ -33,8 +34,11 @@ const MAX_DERIVED_ROWS = 5
  * (case-insensitive on the value), most shared first. Pure — derived live
  * from real indicators, never stored.
  */
-export function sharedIndicatorLinks(task: Task, allTasks: Task[]): { task: Task; shared: number }[] {
-  const mine = new Set(task.iocs.map((i) => i.value.toLowerCase()))
+export function sharedIndicatorLinks(task: Task, allTasks: Task[], owned: string[]): { task: Task; shared: number }[] {
+  // Assets are on many cases by definition; sharing one is not a lead (SD-05).
+  // Excluding them from `mine` is enough — both sides compare the same raw
+  // lowercased values, so an asset can never be counted on the other side.
+  const mine = new Set(task.iocs.filter((i) => !assetRule(i.value, owned)).map((i) => i.value.toLowerCase()))
   if (mine.size === 0) return []
   const out: { task: Task; shared: number }[] = []
   for (const other of allTasks) {
@@ -116,7 +120,8 @@ export function renderLinksPanel(container: HTMLElement, ctx: LinksPanelContext)
 
     // Derived rows: real IOC-value overlap, computed live, never stored.
     const allTasks = flattenTasks(project.tasks).map((f) => f.task)
-    const overlaps = sharedIndicatorLinks(task, allTasks)
+    const owned = ctx.plugin.settings.ownedAssets
+    const overlaps = sharedIndicatorLinks(task, allTasks, owned)
     for (const { task: other, shared } of overlaps.slice(0, MAX_DERIVED_ROWS)) {
       any = true
       const row = list.createDiv('pm-link-row')
@@ -132,6 +137,15 @@ export function renderLinksPanel(container: HTMLElement, ctx: LinksPanelContext)
     }
 
     if (!any) list.createDiv({ cls: 'pm-links-empty', text: 'None recorded' })
+    // Honest exclusion: without this, a case whose only overlap was an asset
+    // reads as a case with nothing in common with anything.
+    const assetCount = task.iocs.filter((i) => assetRule(i.value, owned)).length
+    if (assetCount) {
+      list.createDiv({
+        cls: 'pm-links-more',
+        text: `${assetCount} of this case's indicators are your own assets — not counted as overlap.`
+      })
+    }
   }
 
   let pendingType: TaskLinkType = 'blocks'

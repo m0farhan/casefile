@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   VT_PACE_MS,
+  assetRule,
   defangIoc,
   detectIocType,
   extractIocsFromText,
   formatIocLine,
+  hasIocShape,
   iocSightings,
   parseIocPaste,
   refangIoc,
+  unmatchableAssetRules,
   vtWaitMs
 } from './ioc'
 import { makeTask, type Ioc } from '../types'
@@ -86,12 +89,23 @@ describe('parseIocPaste', () => {
 
 describe('formatIocLine', () => {
   it('formats type: defangedValue, appending the note only when present', () => {
-    expect(formatIocLine({ type: 'ip', value: '10.0.0.1' })).toBe('ip: 10[.]0[.]0[.]1')
-    expect(formatIocLine({ type: 'url', value: 'http://evil.example.com/a', note: 'beacon callback' })).toBe(
+    expect(formatIocLine({ type: 'ip', value: '203.0.113.1' }, [])).toBe('ip: 203[.]0[.]113[.]1')
+    expect(formatIocLine({ type: 'url', value: 'http://evil.example.com/a', note: 'beacon callback' }, [])).toBe(
       'url: hxxp://evil[.]example[.]com/a — beacon callback'
     )
-    expect(formatIocLine({ type: 'hash', value: 'd41d8cd98f00b204e9800998ecf8427e' })).toBe(
+    expect(formatIocLine({ type: 'hash', value: 'd41d8cd98f00b204e9800998ecf8427e' }, [])).toBe(
       'hash: d41d8cd98f00b204e9800998ecf8427e'
+    )
+  })
+
+  it('marks an own asset wherever an indicator leaves the plugin', () => {
+    // A private range needs no configuration; a listed domain comes from settings.
+    expect(formatIocLine({ type: 'ip', value: '10.0.0.1' }, [])).toBe('ip: 10[.]0[.]0[.]1 (own asset)')
+    expect(formatIocLine({ type: 'domain', value: 'mail.corp.example' }, ['corp.example'])).toBe(
+      'domain: mail[.]corp[.]example (own asset)'
+    )
+    expect(formatIocLine({ type: 'domain', value: 'evilcorp.example' }, ['corp.example'])).toBe(
+      'domain: evilcorp[.]example'
     )
   })
 })
@@ -178,23 +192,120 @@ describe('iocSightings', () => {
   ]
 
   it('matches across defanged and real forms, flattening subtasks', () => {
-    const hits = iocSightings('112[.]85[.]42[.]13', tasks, '')
+    const hits = iocSightings('112[.]85[.]42[.]13', tasks, '', [])
     expect(hits.map((h) => h.key)).toEqual(['SOC282', 'SOC283'])
     expect(hits[0]).toEqual({ taskId: 't1', key: 'SOC282', title: 'Case SOC282' })
     // real query form finds the defanged stored value too
-    expect(iocSightings('112.85.42.13', tasks, '').map((h) => h.taskId)).toEqual(['t1', 't3'])
+    expect(iocSightings('112.85.42.13', tasks, '', []).map((h) => h.taskId)).toEqual(['t1', 't3'])
   })
 
   it('compares case-insensitively', () => {
-    expect(iocSightings('evil.EXAMPLE.com', tasks, '').map((h) => h.key)).toEqual(['SOC281'])
+    expect(iocSightings('evil.EXAMPLE.com', tasks, '', []).map((h) => h.key)).toEqual(['SOC281'])
   })
 
   it('excludes the asking case itself', () => {
-    expect(iocSightings('112.85.42.13', tasks, 't1').map((h) => h.taskId)).toEqual(['t3'])
+    expect(iocSightings('112.85.42.13', tasks, 't1', []).map((h) => h.taskId)).toEqual(['t3'])
   })
 
   it('returns nothing on no match or a blank value', () => {
-    expect(iocSightings('10.9.9.9', tasks, '')).toEqual([])
-    expect(iocSightings('   ', tasks, '')).toEqual([])
+    expect(iocSightings('203.0.113.9', tasks, '', [])).toEqual([])
+    expect(iocSightings('   ', tasks, '', [])).toEqual([])
+  })
+})
+
+describe('assetRule — the boundary that decides what is never sent', () => {
+  it('covers private, loopback and link-local without any configuration', () => {
+    for (const v of ['10.1.2.3', '172.16.0.1', '192.168.1.1', '127.0.0.1', '169.254.1.1']) {
+      expect(assetRule(v, [])?.builtIn).toBe(true)
+    }
+    // Public addresses are not ours just because nobody listed them.
+    expect(assetRule('203.0.113.10', [])).toBeNull()
+    expect(assetRule('8.8.8.8', [])).toBeNull()
+  })
+
+  it('attributes a listed rule to the analyst and a built-in range to Casefile', () => {
+    expect(assetRule('mail.corp.example', ['corp.example'])).toEqual({ rule: 'corp.example', builtIn: false })
+    expect(assetRule('10.0.0.1', ['corp.example'])?.builtIn).toBe(true)
+  })
+
+  it('matches on a label boundary, so a lookalike domain is not ours', () => {
+    expect(assetRule('corp.example', ['corp.example'])).not.toBeNull()
+    expect(assetRule('mail.corp.example', ['*.corp.example'])).not.toBeNull()
+    expect(assetRule('evilcorp.example', ['corp.example'])).toBeNull()
+    expect(assetRule('corp.example.attacker.test', ['corp.example'])).toBeNull()
+  })
+
+  it('never lets a domain rule suffix-match an IP literal', () => {
+    // The half-typed entry "10" used to own 203.0.113.10 through endsWith.
+    expect(assetRule('203.0.113.10', ['10'])).toBeNull()
+    expect(assetRule('203.0.113.10', ['198.51.100'])).toBeNull()
+  })
+
+  it('reads a CIDR by arithmetic, and refuses one it cannot parse', () => {
+    expect(assetRule('198.51.100.7', ['198.51.100.0/24'])).not.toBeNull()
+    expect(assetRule('198.51.101.7', ['198.51.100.0/24'])).toBeNull()
+    // '10.0.0.0/' must not mask nothing and swallow every address.
+    expect(assetRule('203.0.113.10', ['10.0.0.0/'])).toBeNull()
+    expect(assetRule('203.0.113.10', ['10.0.0.0/33'])).toBeNull()
+  })
+
+  it('judges a URL by its host, even one the URL parser rejects', () => {
+    expect(assetRule('https://mail.corp.example/login', ['corp.example'])).not.toBeNull()
+    expect(assetRule('http://10.0.0.5:99999/a', [])?.builtIn).toBe(true)
+    expect(assetRule('user@corp.example', ['corp.example'])).not.toBeNull()
+  })
+
+  it('treats every spelling of one IPv6 address as that address', () => {
+    expect(assetRule('::1', [])?.rule).toBe('IPv6 loopback ::1')
+    expect(assetRule('0:0:0:0:0:0:0:1', [])?.rule).toBe('IPv6 loopback ::1')
+    expect(assetRule('fe80::1', [])?.rule).toContain('link-local')
+    expect(assetRule('fc00::1', [])?.rule).toContain('unique-local')
+    // An IPv4-mapped internal address is judged on the IPv4 side.
+    expect(assetRule('::ffff:10.0.0.5', [])?.rule).toBe('10.0.0.0/8')
+    expect(assetRule('2001:0db8:0:0:0:0:0:5', ['2001:db8::5'])).not.toBeNull()
+    // Not every colon is an address: a clock and a MAC must not match.
+    expect(assetRule('12:34:56', [])).toBeNull()
+    expect(assetRule('08:00:27:12:34:56', [])).toBeNull()
+  })
+
+  it('names every listed entry it cannot match, so nothing reads as cover', () => {
+    expect(
+      unmatchableAssetRules([
+        '*.corp.example',
+        '2001:db8::/32',
+        '10.0.0.0/8',
+        '#internal',
+        'corp.example/8',
+        '198.51.100.0-198.51.100.255',
+        'corp.example',
+        '10.0.0.0/33'
+      ])
+    ).toEqual(['2001:db8::/32', '#internal', 'corp.example/8', '198.51.100.0-198.51.100.255', '10.0.0.0/33'])
+  })
+})
+
+describe('hasIocShape — the paste gate', () => {
+  it('keeps the shapes an analyst actually pastes', () => {
+    for (const v of [
+      'evil.com/payload.exe',
+      'evil[.]com/payload.exe',
+      'coffeeshooop.com/inv.php?id=2',
+      '1.2.3.4:8080',
+      'victim.gov.ie',
+      'evil.com.',
+      '::ffff:10.0.0.5',
+      'd41d8cd98f00b204e9800998ecf8427e'
+    ]) {
+      expect(hasIocShape(v)).toBe(true)
+    }
+  })
+
+  it('drops the alert labels that used to become domain rows (SD-06)', () => {
+    for (const v of ['SHA256:', 'Sender', 'Host', '2026-09-20', '12:34:56', '08:00:27:12:34:56', 'v1.2.3']) {
+      expect(hasIocShape(v)).toBe(false)
+    }
+    // An impossible octet is not an address, and odd-length hex is not a hash.
+    expect(hasIocShape('300.1.2.3')).toBe(false)
+    expect(hasIocShape('d41d8cd98f00b204e9800998ecf8427')).toBe(false)
   })
 })

@@ -88,7 +88,7 @@ Protect (port verbatim where possible):
 | ST-1 | major | External links in the description preview are live click-throughs to the analyst's browser | ✓2.21 |
 | ST-2 | major | file:// links are deliberately made to launch via window.open | ★ ✓2.21 |
 | ST-3 | major | Remote images/iframes in pasted text fetch automatically on open — contradicts 'no network unless clicked' | ✓2.21 |
-| ST-4 | major | Check-all sends auto-extracted internal IPs and the org's own domains to third parties | phase 1 |
+| ST-4 | major | Check-all sends auto-extracted internal IPs and the org's own domains to third parties | ★ ✓2.24 |
 | ST-5 | major | API keys live in plaintext data.json — the one file Sync, iCloud and git-committed vaults replicate | ★ ✓2.21 |
 | ST-6 | major | A pasted `## Comments` heading forges or displaces append-only journal entries | phase 1 |
 | ST-7 | minor | Hydrator casts nine string fields without a typeof guard — YAML coercion on the slow path can break saves or b | phase 1 |
@@ -116,8 +116,8 @@ Protect (port verbatim where possible):
 | SD-02 | major | Reputation results are session-only — never recorded on the case, absent from report, handover and timeline | phase 1 |
 | SD-03 | major | Alert intake stores the alert's Event Time as `detectedAt`, so an old alert from the queue is born breached an | ★ ✓2.23 |
 | SD-04 | major | The four lifecycle stamps decide SLA compliance yet are the only tracked-worthy fields NOT in the append-only  | ★ phase 1 |
-| SD-05 | major | No asset/IOC boundary: the extractor emits the org's own mail domain and internal IPs as indicators, the intak | phase 1 |
-| SD-06 | major | Bulk paste has no shape gate — labels like 'IP:', 'Hash:', 'Sender' become `domain` indicator rows | phase 1 |
+| SD-05 | major | No asset/IOC boundary: the extractor emits the org's own mail domain and internal IPs as indicators, the intak | ★ ✓2.24 |
+| SD-06 | major | Bulk paste has no shape gate — labels like 'IP:', 'Hash:', 'Sender' become `domain` indicator rows | ★ ✓2.24 |
 | SD-07 | major | SLA breach log entry is stamped when Obsidian noticed, not when the breach happened | ★ ✓2.21 |
 | SD-08 | major | No actor on the audit trail or comments, and comments carry zone-less local time while everything else is UTC  | phase 1 |
 | SD-09 | major | Shift handover is overwritten every run and carries no owner, journal or next action for open incidents | phase 1 |

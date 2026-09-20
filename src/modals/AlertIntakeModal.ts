@@ -5,7 +5,7 @@ import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
 import { parseAlertPaste, type ParsedAlert } from '../soc/alertIntake'
-import { iocSightings } from '../soc/ioc'
+import { assetRule, iocSightings } from '../soc/ioc'
 
 const EMPTY_PARSE: ParsedAlert = {
   title: '',
@@ -113,7 +113,12 @@ export class AlertIntakeModal extends Modal {
     this.renderStamp('occurredAt', this.parsed.occurredAt)
     this.renderStamp('detectedAt', this.parsed.detectedAt)
     const n = this.parsed.iocs.length
-    this.iocCountEl.setText(n === 0 ? 'No indicators found' : `${n} indicator${n === 1 ? '' : 's'} found`)
+    const assets = this.parsed.iocs.filter((i) => assetRule(i.value, this.plugin.settings.ownedAssets)).length
+    this.iocCountEl.setText(
+      n === 0
+        ? 'No indicators found'
+        : `${n} indicator${n === 1 ? '' : 's'} found${assets ? ` · ${assets} your own assets` : ''}`
+    )
     this.renderSightings()
     this.createBtn.setDisabled(!this.parsed.title.trim())
   }
@@ -127,20 +132,26 @@ export class AlertIntakeModal extends Modal {
     this.sightingsEl.empty()
     this.linkCheckbox = null
     const byCase = new Map<string, { key: string; title: string }>()
+    // The denominator is the SEARCHED set: a partial search printed as a
+    // complete one is a fabricated count, not a rounding error (SD-05).
+    const owned = this.plugin.settings.ownedAssets
+    const searched = this.parsed.iocs.filter((i) => !assetRule(i.value, owned))
+    const notSearched = this.parsed.iocs.length - searched.length
     let seen = 0
-    for (const ioc of this.parsed.iocs) {
-      const hits = iocSightings(ioc.value, this.project.tasks, '')
+    for (const ioc of searched) {
+      const hits = iocSightings(ioc.value, this.project.tasks, '', owned)
       if (hits.length) seen++
       for (const h of hits) byCase.set(h.taskId, h)
     }
     this.sightedTaskIds = [...byCase.keys()]
     if (!seen) return
-    const total = this.parsed.iocs.length
+    const total = searched.length
     const names = [...byCase.values()].slice(0, 3).map((c) => c.key || c.title)
     const extra = byCase.size > 3 ? ` and ${byCase.size - 3} more` : ''
+    const skipped = notSearched ? ` · ${notSearched} your own assets not searched` : ''
     this.sightingsEl.createDiv({
       cls: 'pm-ioc-sightings',
-      text: `${seen} of ${total} indicator${total === 1 ? '' : 's'} seen before — ${names.join(', ')}${extra}`
+      text: `${seen} of ${total} indicator${total === 1 ? '' : 's'} seen before — ${names.join(', ')}${extra}${skipped}`
     })
     const label = this.sightingsEl.createEl('label', { cls: 'pm-alert-link-cases' })
     this.linkCheckbox = label.createEl('input', { type: 'checkbox' })

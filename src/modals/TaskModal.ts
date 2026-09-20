@@ -416,7 +416,9 @@ export class TaskModal extends Modal {
         reputationKeys: {
           ...this.plugin.reputationKeys()
         },
-        findSightings: (value) => iocSightings(value, this.project.tasks, this.task.id),
+        ownedAssets: () => this.plugin.settings.ownedAssets,
+        findSightings: (value) =>
+          iocSightings(value, this.project.tasks, this.task.id, this.plugin.settings.ownedAssets),
         onPivot: (value) => {
           // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
           this.saved = false

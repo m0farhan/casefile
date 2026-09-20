@@ -4,7 +4,16 @@ import { isoToLocalInput } from './LifecyclePanel'
 /** One row of the case-timeline view. `at` is the stored stamp, verbatim. */
 export interface TimelineEvent {
   at: string
-  kind: 'created' | 'occurred' | 'detected' | 'responded' | 'contained' | 'resolved' | 'completed' | 'comment' | 'activity'
+  kind:
+    | 'created'
+    | 'occurred'
+    | 'detected'
+    | 'responded'
+    | 'contained'
+    | 'resolved'
+    | 'completed'
+    | 'comment'
+    | 'activity'
   label: string
   detail?: string
 }

@@ -792,6 +792,20 @@ a.pm-ioc-rep--unknown {
   font-size: 12px;
 }
 
+/* Asset boundary: this indicator names the analyst's own estate, so it is
+   recorded and marked but never sent to a reputation provider (SD-05) */
+.pm-ioc-asset {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 99px;
+  border: 1px solid var(--gs-hairline-strong);
+  color: var(--gs-ink-subtle);
+  background: var(--gs-surface-2);
+  white-space: nowrap;
+}
+
 /* Seen-before sightings hint — quiet line tucked under its indicator row
    (IocSection) or in the intake preview (AlertIntakeModal) */
 .pm-ioc-sightings {

@@ -287,6 +287,14 @@ export interface PMSettings {
   /** Vault path of the generated shift-handover note. */
   handoverPath: string
   handoverWindowHours: number
+  /**
+   * The analyst's own estate: domains and IPv4 CIDRs that are never sent to a
+   * reputation provider. Analyst-owned — nothing is guessed. Private,
+   * loopback and link-local ranges are covered without listing them.
+   * Org policy, so it lives in data.json and travels with the vault (unlike
+   * the provider keys below, which are device-local).
+   */
+  ownedAssets: string[]
   /** Live IOC reputation checks — keys stay local in this vault's data.json; '' disables the provider. */
   virusTotalApiKey: string
   abuseIpdbApiKey: string
@@ -444,6 +452,7 @@ export const DEFAULT_SETTINGS: PMSettings = {
   incidentTemplates: DEFAULT_INCIDENT_TEMPLATES,
   handoverPath: 'SOC/Handover.md',
   handoverWindowHours: 12,
+  ownedAssets: [],
   virusTotalApiKey: '',
   abuseIpdbApiKey: '',
   abuseChApiKey: '',

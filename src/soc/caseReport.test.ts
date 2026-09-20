@@ -32,6 +32,7 @@ function ctxFor(tasks: Task[]): CaseReportContext {
     statuses: DEFAULT_STATUSES,
     severities: DEFAULT_SEVERITIES,
     verdicts: DEFAULT_VERDICTS,
+    ownedAssets: [],
     slaPolicies: POLICIES,
     now: NOW
   }

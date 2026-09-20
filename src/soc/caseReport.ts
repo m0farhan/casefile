@@ -3,7 +3,7 @@ import type PMPlugin from '../main'
 import type { Project, SeverityConfig, SlaPolicy, StatusConfig, Task, VerdictConfig } from '../types'
 import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
-import { defangIoc } from './ioc'
+import { OWN_ASSET_SUFFIX, assetRule, defangIoc } from './ioc'
 import { formatSlaRemaining, slaAnchor, slaState } from './sla'
 
 export interface CaseReportContext {
@@ -12,6 +12,9 @@ export interface CaseReportContext {
   severities: SeverityConfig[]
   verdicts: VerdictConfig[]
   slaPolicies: Record<string, SlaPolicy>
+  /** The analyst's asset boundary — marks own-estate rows so a reader of the
+   *  exported report can tell them from adversary infrastructure. */
+  ownedAssets: string[]
   now: number
 }
 
@@ -141,7 +144,8 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
   } else {
     lines.push('| Type | Value | Note |', '| --- | --- | --- |')
     for (const ioc of task.iocs) {
-      lines.push(`| ${ioc.type} | ${cell(defangIoc(ioc.value, ioc.type))} | ${cell(ioc.note ?? '')} |`)
+      const asset = assetRule(ioc.value, ctx.ownedAssets) ? OWN_ASSET_SUFFIX : ''
+      lines.push(`| ${ioc.type} | ${cell(defangIoc(ioc.value, ioc.type)) + asset} | ${cell(ioc.note ?? '')} |`)
     }
   }
   lines.push('')
@@ -213,6 +217,7 @@ export async function loadAndComposeCaseReport(plugin: PMPlugin, project: Projec
     severities: cfg.severities,
     verdicts: cfg.verdicts,
     slaPolicies: plugin.settings.slaPolicies,
+    ownedAssets: plugin.settings.ownedAssets,
     now: Date.now()
   })
 }

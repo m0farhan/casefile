@@ -78,7 +78,7 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
       const lastText = last ? ` · last: ${last.field} → ${last.to} at ${last.at}` : ''
       lines.push(`- ${label(r.task)} — ${r.task.status} · ${slaText}${anchorNote}${lastText}`)
       // ponytail: 8 defanged indicators per incident keeps the note scannable; bump the cap if shifts want more.
-      for (const ioc of r.task.iocs.slice(0, 8)) lines.push(`  - ${formatIocLine(ioc)}`)
+      for (const ioc of r.task.iocs.slice(0, 8)) lines.push(`  - ${formatIocLine(ioc, settings.ownedAssets)}`)
       if (r.task.iocs.length > 8) lines.push(`  - +${r.task.iocs.length - 8} more`)
     }
   }
