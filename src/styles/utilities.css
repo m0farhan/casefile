@@ -243,3 +243,31 @@ body.pm-resize-active * {
   font-size: 1.125rem;
   color: var(--text-normal);
 }
+
+/* -- Shift handover preview modal ------------------------------------------ */
+/* Tokens come from the .pm-modal scope in variables.css.                     */
+
+.pm-modal--handover {
+  width: min(720px, 90vw);
+}
+.pm-handover-meta {
+  margin: 0 0 0.75rem;
+  color: var(--gs-ink-subtle);
+  font-size: var(--font-ui-smaller);
+}
+.pm-handover-preview {
+  max-height: 55vh;
+  overflow: auto;
+  margin: 0 0 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--gs-hairline);
+  border-radius: var(--radius-s);
+  background: var(--gs-surface-1);
+  color: var(--gs-ink-muted);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

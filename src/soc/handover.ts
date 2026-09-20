@@ -1,5 +1,8 @@
+import type { App } from 'obsidian'
+import { TFile, normalizePath } from 'obsidian'
 import type { PMSettings, Project, Task } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
+import { ensureFolder } from '../store/vaultFs'
 import { isTerminalStatus } from '../utils'
 import { formatIocLine } from './ioc'
 import { formatSlaRemaining, slaAnchor, slaAtRisk, slaState } from './sla'
@@ -145,4 +148,24 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
   lines.push('')
 
   return lines.join('\n')
+}
+
+/**
+ * Write the composed handover to `settings.handoverPath`, creating the folder
+ * and the note on first run and overwriting it after that — the same contract
+ * the note's own header states. Lifted out of main.ts unchanged so the palette
+ * command and the preview modal write the identical file. Returns the path
+ * actually written.
+ */
+export async function writeHandoverNote(app: App, md: string, path: string): Promise<string> {
+  const target = normalizePath(path || 'SOC/Handover.md')
+  const folder = target.includes('/') ? target.slice(0, target.lastIndexOf('/')) : ''
+  if (folder) await ensureFolder(app, folder)
+  const existing = app.vault.getAbstractFileByPath(target)
+  if (existing instanceof TFile) {
+    await app.vault.modify(existing, md)
+  } else {
+    await app.vault.create(target, md)
+  }
+  return target
 }

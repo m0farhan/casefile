@@ -45,6 +45,28 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.25.1] - 2026-09-20
+
+### Added (the shift handover you can actually find)
+
+- The handover existed only as a palette command whose name you had to already
+  know, and it wrote the note first and showed it second. It now opens a
+  preview: the exact markdown, on screen, before anything is written.
+- Three ways in: the ribbon icon, a **Shift handover** button in the board
+  header, and the palette command (renamed from "Generate shift handover").
+- **Copy** puts the same string on the clipboard that you just read. **Write**
+  saves it to the configured note and opens it. Nothing is written until you
+  choose one.
+- Vault-wide on purpose, and board filters deliberately do not apply — a
+  filtered handover would silently drop incidents the next shift owns.
+- It composes once on open, so what you read and what the buttons emit cannot
+  drift apart.
+
+### Fixed
+
+- 2.25.0 shipped the handover wiring without the file it imports, so the plugin
+  did not build from a clean checkout. Corrected here.
+
 ## [2.25.0] - 2026-09-20
 
 ### Changed (the board gets its space back)

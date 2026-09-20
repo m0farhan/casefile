@@ -1,4 +1,4 @@
-import { MarkdownView, Menu, Plugin, Notice, TFile, TFolder, normalizePath } from 'obsidian'
+import { MarkdownView, Menu, Plugin, Notice, TFolder, normalizePath } from 'obsidian'
 import { DEFAULT_SETTINGS, type PMSettings, type Project, type Task } from './types'
 import { flattenTasks, findTask } from './store/TaskTreeOps'
 import { ProjectStore } from './store'

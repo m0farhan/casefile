@@ -9,6 +9,7 @@
  *  - .pm-root                     project/dashboard/styleguide leaves
  *  - .pm-modal                    task/project modals (Obsidian modal container)
  *  - .pm-prompt-modal/.pm-confirm-modal/.import-modal-container  ModalFactory
+ *  - .pm-modal--handover          shift-handover preview (also carries .pm-modal)
  *  - .pm-pop                      Popover — can mount on document.body
  *  - .pm-notice                   styled Notices (pmNotice helper)
  * Left native on purpose: Obsidian Menu (context menus), NoteLinkSuggest,
