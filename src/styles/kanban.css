@@ -135,7 +135,7 @@
   position: relative;
   /* Off-screen cards skip layout and paint (PS-03); the estimate only sizes the placeholder. */
   content-visibility: auto;
-  contain-intrinsic-size: auto 88px;
+  contain-intrinsic-size: auto 92px;
 }
 .pm-kanban-card:hover {
   background: var(--gs-surface-3);
@@ -184,10 +184,13 @@
    progress hairline's lane; it is pinned to the card edge, not a row. */
 .pm-kanban-card-body {
   flex: 1;
-  padding: 11px 12px 12px;
+  /* The extra room went into vertical padding. The sides stay at 12px because
+     in a narrow column the severity, SLA and tag chips sit close to the wrap
+     threshold, and content width is worth more there than symmetry. */
+  padding: 12px 12px 13px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 9px;
 }
 .pm-kanban-card-body > .pm-chip {
   align-self: flex-start;
@@ -199,7 +202,7 @@
   min-width: 0;
   font-size: 13px;
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 1.45;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -236,7 +239,10 @@
   flex: 0 0 auto;
 }
 
-/* Every counter, chip and tag the card carries, wrapping in one row. */
+/* Every counter, chip and tag the card carries, wrapping in one row.
+   The gap is kept tight on purpose: at a narrow column width the severity,
+   SLA and tag chips sit right at the wrap threshold, and a wider gap tips a
+   one-line card into two for no gain. */
 .pm-kanban-card-chips {
   display: flex;
   flex-wrap: wrap;

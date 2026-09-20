@@ -45,6 +45,16 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.27.1] - 2026-09-20
+
+### Changed
+
+- The board card has a little more room again: vertical padding and the gap
+  between its two rows are up, so a one-line card sits at about 76px and a
+  two-line one at about 100px. The side padding is deliberately unchanged —
+  in a narrow column the chips sit close to the wrap threshold, and content
+  width is worth more there than symmetry.
+
 ## [2.27.0] - 2026-09-20
 
 ### Added (closed cases file themselves away)
