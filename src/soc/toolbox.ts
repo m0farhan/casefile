@@ -184,7 +184,11 @@ export function defangSelection(text: string): string {
     .map((line) => {
       const value = line.trim()
       if (!value || !hasIocShape(value)) return line
-      return line.replace(value, defangIoc(value, detectIocType(value)))
+      // A function replacement, not a string one: String.replace expands `$&`,
+      // `$\``, `$'` and `$1` INSIDE the replacement, so a URL carrying any of
+      // them came back corrupted — and a corrupted indicator is worse than an
+      // undefanged one, because it looks like a real value.
+      return line.replace(value, () => defangIoc(value, detectIocType(value)))
     })
     .join('\n')
 }
@@ -196,7 +200,7 @@ export function refangSelection(text: string): string {
     .map((line) => {
       const value = line.trim()
       if (!value) return line
-      return line.replace(value, refangIoc(value))
+      return line.replace(value, () => refangIoc(value))
     })
     .join('\n')
 }

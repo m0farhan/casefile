@@ -37,6 +37,13 @@ export interface Attachment {
    * reads as a clean result for a payload no one has looked at.
    */
   undecodable: boolean
+  /**
+   * The bytes are the file exactly as it travelled. base64 and quoted-printable
+   * are ASCII on the wire and round-trip exactly; a 7bit/8bit part reached us
+   * through the reader's line normalisation, so its hashes will not match the
+   * sender's copy and the caller has to say so.
+   */
+  exact: boolean
 }
 
 export interface Eml {
@@ -273,13 +280,15 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   // real payload's name, bytes and hash in front of the analyst instead of a
   // single row reading `fwd.eml — message/rfc822`.
   if (mime === 'message/rfc822') {
-    if (filename || /^attachment/i.test(disposition)) pushAttachment(out, filename, mime, bytes, inline, failed)
+    if (filename || /^attachment/i.test(disposition)) {
+      pushAttachment(out, filename, mime, bytes, inline, failed, exact)
+    }
     walk(splitHeadersAndBody(decodeText(bytes, param(contentType, 'charset'), exact, part.body)), out, depth + 1)
     return
   }
 
   if (isAttachment || !mime.startsWith('text/')) {
-    pushAttachment(out, filename, mime, bytes, inline, failed)
+    pushAttachment(out, filename, mime, bytes, inline, failed, exact)
     return
   }
 
@@ -301,7 +310,8 @@ function pushAttachment(
   contentType: string,
   bytes: Uint8Array,
   inline: boolean,
-  undecodable: boolean
+  undecodable: boolean,
+  exact: boolean
 ): void {
   out.attachments.push({
     filename: filename || '(no filename given)',
@@ -309,7 +319,8 @@ function pushAttachment(
     size: bytes.length,
     bytes,
     inline,
-    undecodable
+    undecodable,
+    exact
   })
 }
 

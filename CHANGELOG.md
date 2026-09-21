@@ -45,6 +45,65 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.35.0] - 2026-09-21
+
+### Fixed — an audit of everything built this session
+
+Six auditors read the 14 commits and three skeptics judged every finding.
+Thirty-three held up. The ones that mattered:
+
+- **Auto-archive had lost the guard that says a case must have been finished.**
+  Moving the clock onto the activity log made the log answer two questions at
+  once — when it landed, and whether it was ever really closed — and that
+  quietly dropped the "no completion date, never archive" rule. A case dragged
+  to Done with its date cleared became archivable on a timer that renames its
+  file without asking. The date is checked first again. **This one was live.**
+- **A case title could break out of the wiki-link the board index writes it
+  into.** A title is the subject line of a pasted alert, so it is
+  sender-controlled: `Invoice ]] ![[private]] <img src=…>` closed the link and
+  the rest rendered as markdown — an embed and a beacon that fires when the
+  note is opened. Brackets are now neutralised in the alias at all four sites,
+  in the serializer, where every title path goes through.
+- **The Google-redirect gateway matched `google.<anything>`**, so a link to
+  `google.evil.com/url?q=…` was reported as unwrapping to whatever the attacker
+  put in the parameter — the attacker chose the destination the report named.
+- **Unwrapping percent-decoded a target the gateway had already decoded**, so
+  the reported host could differ from the host the gateway actually redirects
+  to. Only the two Proofpoint shapes decode now.
+- **Dropping decoy anchor text was deleting real destinations.** A URL a mail
+  tells you to type is clickable in a plain-text client; when the same string
+  was also an anchor label it vanished from the links, the indicators and the
+  case. A label is dropped only when nothing else found it.
+- **The screen said the copied report carried the rest of a long body. It
+  carried none of it** — no body section existed. The body is now carried,
+  fenced, so a case records the mail and not just the analysis of it.
+- The copied report had **two different "Indicators" sections** and the first
+  was the raw-paste scan the module's own docs call the wrong source.
+- The sender's domain was parsed by hand instead of through the hardened
+  reader, so the RFC 5322 comment evasion closed in 2.32.0 was still open for
+  the look-alike check.
+- One un-archivable case **silently stopped the sweep** for every case after
+  it. Each case is guarded now and failures are reported.
+- **Create case failed silently** when two mails shared a subject.
+- Hashes over a part that carried no transfer encoding **say so**: they are of
+  the decoded text, not of the bytes as sent, and will not match the sender's
+  copy.
+- `defang`/`refang` corrupted any value containing `$&` or `$1`, because
+  `String.replace` expands those inside the replacement.
+- The wide-row label rule **never applied** — it lost on CSS specificity, so a
+  three-line tag block left its label floating in the middle of the chips.
+- The analyser's tab strip scrolled away with the pane it switches, and a
+  pending parse could fire after the modal closed.
+- **manifest.json and package.json were still 2.30.0** while the changelog and
+  versions.json had gone to 2.34.1.
+
+### Added
+
+- Tests that can actually fail: an attachment digest pinned to a value computed
+  outside this codebase rather than to a 64-hex shape, the undecodable-part
+  case asserting the empty-file hash is never printed, and an unwrap-bound test
+  whose old form passed whether or not any bound existed.
+
 ## [2.34.1] - 2026-09-21
 
 ### Changed (the analyser stops shouting)

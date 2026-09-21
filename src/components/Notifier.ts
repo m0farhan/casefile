@@ -85,6 +85,7 @@ export class Notifier {
       }
       const now = archiveNow()
       let moved = 0
+      let failed = 0
       for (const project of projects) {
         const statuses = this.plugin.store.configFor(project).statuses
         // Top-level only, and a parent waits while any descendant is still open.
@@ -94,9 +95,26 @@ export class Notifier {
             (f) => f.task.id !== task.id && !isTerminalStatus(f.task.status, statuses)
           )
           if (subtreeOpen) continue
-          await this.plugin.store.archiveTask(project, task.id, 'auto')
-          moved++
+          // Guarded per case. The sweep is the unguarded half of the split
+          // tick, so one case whose file cannot be renamed — open elsewhere, a
+          // name collision in Archive/, a permission — used to abort the whole
+          // pass and every case after it, silently, for as long as that case
+          // stayed due.
+          try {
+            await this.plugin.store.archiveTask(project, task.id, 'auto')
+            moved++
+          } catch (e) {
+            console.error(`Casefile: could not auto-archive ${task.title}`, e)
+            failed++
+          }
         }
+      }
+      if (failed) {
+        new Notice(
+          `Casefile could not archive ${failed} case${failed === 1 ? '' : 's'}. ` +
+            'They stay on the board; the console has the reason for each.',
+          8000
+        )
       }
       if (moved) {
         new Notice(

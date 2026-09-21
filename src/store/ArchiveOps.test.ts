@@ -89,3 +89,37 @@ describe('dueForAutoArchive — the clock starts when the case landed in Done', 
     expect(dueAt([moved('2026-09-25T09:00:00.000Z')])).toBe(false)
   })
 })
+
+describe('dueForAutoArchive — a completion date is the proof of closure', () => {
+  const NOW_T = '2026-09-20T12:00:00.000Z'
+  const moved = (at: string, to = 'done') => ({ at, field: 'status', from: 'in-progress', to })
+
+  it('never archives a case with no completion date, however old the log entry is', () => {
+    // The regression: moving the clock onto the activity log made the log
+    // answer both "when did it land" and "was it ever really closed". A case
+    // dragged to Done with its date cleared became archivable on a timer that
+    // renames its file with no confirmation.
+    const task = makeTask({ status: 'done', completed: '', activity: [moved('2026-01-01T09:00:00.000Z')] })
+    expect(dueForAutoArchive(task, STATUSES, 2, NOW_T)).toBe(false)
+  })
+
+  it('still archives when both the date and the log are there', () => {
+    const task = makeTask({
+      status: 'done',
+      completed: '2026-09-10',
+      activity: [moved('2026-09-10T09:00:00.000Z')]
+    })
+    expect(dueForAutoArchive(task, STATUSES, 2, NOW_T)).toBe(true)
+  })
+
+  it('compares the fallback against the analyst’s own calendar, not UTC', () => {
+    // `completed` is written from the local calendar. Slicing the UTC instant
+    // put the two on different days for anyone west of UTC every evening.
+    const task = makeTask({ status: 'done', completed: '2026-09-18' })
+    const local = new Date('2026-09-20T12:00:00.000Z')
+    const expected = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`
+    // Whatever zone this runs in, the answer follows the local date.
+    const age = Number(expected.slice(8)) - 18
+    expect(dueForAutoArchive(task, STATUSES, 2, NOW_T)).toBe(age >= 2)
+  })
+})

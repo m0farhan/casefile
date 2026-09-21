@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { makeProject, makeTask, type Project, type SavedView, type Task } from '../types'
+import { DEFAULT_STATUSES, makeProject, makeTask, type Project, type SavedView, type Task } from '../types'
 import { hydrateProjectFromFrontmatter, hydrateTaskFromFile } from './YamlHydrator'
 import { parseFrontmatter } from './YamlParser'
 import { serializeProject, serializeTask, taskFilePath } from './YamlSerializer'
@@ -572,5 +572,31 @@ describe('the board backlink line is optional', () => {
     const md = serializeTask(task, project, null, [], false)
     expect(md).not.toContain('Project: [[')
     expect(readTask(md).comments).toEqual(task.comments)
+  })
+})
+
+describe('a sender-controlled title cannot escape the wiki-link it is written into', () => {
+  it('neutralises brackets in the board index alias', () => {
+    // A case title is the subject line of a pasted alert. `]]` closes the link
+    // early and everything after it becomes markdown the note renders.
+    const hostile = 'Invoice ]] ![[private-note]] <img src="http://beacon.test/x.gif">'
+    const project = makeProject('Board', 'Board/Board.md')
+    project.tasks = [makeTask({ title: hostile, filePath: 'Board/Tasks/a.md' })]
+    const md = serializeProject(project, DEFAULT_STATUSES)
+    const line = md.split('\n').find((l) => l.includes('beacon.test')) ?? ''
+    expect(line).not.toContain('![[')
+    expect(line).not.toContain(']] ')
+    // Exactly one link, closed where we closed it.
+    expect(line.match(/\[\[/g)?.length).toBe(1)
+    expect(line.match(/\]\]/g)?.length).toBe(1)
+  })
+
+  it('neutralises brackets in the board backlink on a task note', () => {
+    const project = makeProject('Ops ]] ![[secret]]', 'Ops/Ops.md')
+    const task = makeTask({ title: 'A case', filePath: 'Ops/Tasks/a.md' })
+    const md = serializeTask(task, project, null, DEFAULT_STATUSES, true)
+    const line = md.split('\n').find((l) => l.startsWith('Project:')) ?? ''
+    expect(line).not.toContain('![[')
+    expect(line.match(/\]\]/g)?.length).toBe(1)
   })
 })

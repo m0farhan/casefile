@@ -24,13 +24,19 @@ describe('unwrapUrl', () => {
     expect(unwrapUrl('https://example.test/a')).toEqual({ target: 'https://example.test/a', wrappedBy: '' })
   })
 
-  it('does not unwrap forever', () => {
-    // Safe Links wrapping Safe Links wrapping Safe Links…
+  it('stops after a bounded number of unwraps instead of following the whole chain', () => {
+    // The old version of this test only asserted "does not throw", which a
+    // five-deep chain satisfies whether or not any bound exists. Ten wrappers
+    // with a distinct innermost target proves the loop STOPS: after five
+    // rounds the target is still a Safe Links URL, not evil.test.
     let url = 'https://evil.test/go'
     for (let i = 0; i < 10; i++) {
       url = `https://x.safelinks.protection.outlook.com/?url=${encodeURIComponent(url)}`
     }
-    expect(() => unwrapUrl(url)).not.toThrow()
+    const { target, wrappedBy } = unwrapUrl(url)
+    expect(wrappedBy).toBe('Microsoft Safe Links')
+    expect(target).not.toBe('https://evil.test/go')
+    expect(target).toContain('safelinks.protection.outlook.com')
   })
 })
 
@@ -96,7 +102,8 @@ describe('attachmentFacts', () => {
     size: 1,
     bytes: new Uint8Array(1),
     inline,
-    undecodable: false
+    undecodable: false,
+    exact: true
   })
 
   it('names macro-capable, executable and archive types', () => {
@@ -217,5 +224,50 @@ describe('what a file actually is', () => {
       'named .pdf but the bytes begin as Windows executable (MZ)'
     )
     expect(contentMismatch('invoice.pdf', 'application/pdf', 'PDF')).toBe('')
+  })
+})
+
+describe('gateway unwrapping cannot be steered by the attacker', () => {
+  it('will not treat google.<attacker domain> as the Google redirector', () => {
+    // `google\.[a-z.]+$` let the suffix swallow a whole attacker domain, so a
+    // link the browser sends to evil.com was reported as going to paypal.test.
+    const crafted = 'https://google.evil.com/url?q=https://paypal.test/'
+    expect(unwrapUrl(crafted)).toEqual({ target: crafted, wrappedBy: '' })
+    expect(unwrapUrl('https://accounts.google.evil.test/url?q=https://paypal.test/').wrappedBy).toBe('')
+  })
+
+  it('still unwraps the real Google redirector on its real suffixes', () => {
+    for (const host of ['www.google.com', 'google.de', 'www.google.co.uk']) {
+      expect(unwrapUrl(`https://${host}/url?q=https://evil.test/go`).target).toBe('https://evil.test/go')
+    }
+  })
+
+  it('does not percent-decode a target the gateway already decoded', () => {
+    // searchParams.get() decodes once. Decoding again turned this into a
+    // different URL from the one the gateway actually redirects to, so the row
+    // named a host the victim never reaches.
+    const wrapped =
+      'https://eur01.safelinks.protection.outlook.com/?url=' +
+      encodeURIComponent('https://evil.test/a?next=https%3A%2F%2Fpaypal.test')
+    expect(unwrapUrl(wrapped).target).toBe('https://evil.test/a?next=https%3A%2F%2Fpaypal.test')
+  })
+})
+
+describe('an anchor label is dropped only when nothing else found it', () => {
+  it('keeps a URL that is a decoy label in the HTML and a real link in the text', () => {
+    // The mail says "type this address" in the plain part and uses the same
+    // string as the visible text of a link pointing elsewhere. It is genuinely
+    // clickable in a plain-text client, so it is a destination.
+    const text = 'Or go to https://paypal.test/signin yourself.'
+    const html = '<a href="http://evil.test/go">https://paypal.test/signin</a>'
+    const targets = extractLinks(text, html, []).links.map((l) => l.target)
+    expect(targets).toContain('https://paypal.test/signin')
+    expect(targets).toContain('http://evil.test/go')
+  })
+
+  it('still drops a label that appears nowhere else', () => {
+    const html = '<a href="http://evil.test/go">https://paypal.test/signin</a>'
+    const targets = extractLinks('', html, []).links.map((l) => l.target)
+    expect(targets).toEqual(['http://evil.test/go'])
   })
 })

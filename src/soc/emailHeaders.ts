@@ -309,7 +309,9 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
     const count = all(key).length
     if (count > 1) {
       observations.push({
-        text: `There are ${count} ${key} headers. Only the first is shown above; mail clients do not agree on which one wins.`,
+        text:
+          `There are ${count} ${key} headers. Identities show the first; ` +
+          'authentication results show all of them. Mail clients do not agree on which one wins.',
         aligned: false
       })
     }
@@ -399,9 +401,11 @@ export function formatHeaderReport(a: HeaderAnalysis): string {
   // domains, so they are quarantined too.
   if (a.observations.length) for (const o of a.observations) lines.push(`- ${quoteUntrusted(o.text)}`)
   else lines.push('Nothing to compare.')
-  lines.push('', '### Indicators', '')
-  if (a.indicators.length) for (const i of a.indicators) lines.push(`- ${quoteUntrusted(i)}`)
-  else lines.push('None found.')
+  // Indicators are deliberately NOT emitted here. The phishing report builds
+  // its own set from the PARSED message and emits it once; when this section
+  // also printed a raw-paste scan the copied report carried two different
+  // "### Indicators" headings whose contents disagreed, and the first one was
+  // the scan the module's own docs say is the wrong source.
   if (a.notes.length) {
     lines.push('', '### Not in this paste', '')
     for (const n of a.notes) lines.push(`- ${quoteUntrusted(n)}`)

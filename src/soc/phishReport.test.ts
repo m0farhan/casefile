@@ -93,9 +93,12 @@ describe('analysePhishing over a whole message', () => {
     expect(markdown).not.toMatch(/malicious|phishing|suspicious|spoofed|dangerous|threat/i)
     // Hashes are labelled with where they came from, always.
     expect(markdown).toContain('(computed here)')
-    // Links in the report are defanged, so a copied report cannot be clicked.
+    // Links in the LINKS section are defanged, so a copied report cannot be
+    // clicked through. The body is a separate matter: it is evidence and is
+    // carried verbatim, inside a fence, where nothing autolinks.
     expect(markdown).toContain('hxxps://login[.]paypa1[.]test/verify')
-    expect(markdown).not.toContain('https://login.paypa1.test/verify')
+    const linkLine = markdown.split('\n').find((l) => l.startsWith('- hxxps://login')) ?? ''
+    expect(linkLine).not.toContain('https://login.paypa1.test/verify')
   })
 })
 
@@ -131,5 +134,64 @@ describe('the whole-message report after hardening', () => {
   it('still reaches no verdict', async () => {
     const markdown = formatPhishReport(await analysePhishing(MAIL, ['corp.test'], ['paypal']))
     expect(markdown).not.toMatch(/malicious|phishing|suspicious|spoofed|dangerous|threat/i)
+  })
+})
+
+describe('a hash is either this machine’s answer or nothing', () => {
+  const b64 = (s: string): string => btoa(s)
+
+  it('pins the digest to a value, not a shape', async () => {
+    const mail =
+      'Content-Type: application/octet-stream\n' +
+      'Content-Disposition: attachment; filename="a.bin"\n' +
+      `Content-Transfer-Encoding: base64\n\n${b64('MZ payload')}\n`
+    const [a] = (await analysePhishing(mail, [], [])).attachments
+    // The literal digest, computed outside this codebase with `shasum -a 256`.
+    // Pinned to a VALUE, not a shape: a test that only checks 64 hex characters
+    // passes just as happily on the hash of an empty file.
+    expect(a.sha256).toBe('48bf631186b8c57da7e7a47b870604e8d58fa140633ee0c899cf25a549ebd7a6')
+    expect(a.size).toBe('MZ payload'.length)
+  })
+
+  it('records nothing at all for a part it could not decode', async () => {
+    // The exact shape that used to print the empty file's SHA-256 under
+    // "computed here, from the bytes in the file".
+    const mail =
+      'Content-Type: application/octet-stream\n' +
+      'Content-Disposition: attachment; filename="a.bin"\n' +
+      'Content-Transfer-Encoding: base64\n\n=====\n'
+    const report = await analysePhishing(mail, [], [])
+    const [a] = report.attachments
+    expect(a.sha256).toBe('')
+    expect(a.sha1).toBe('')
+    expect(a.facts).toContain('this part could not be decoded, so its size, hashes and type are not recorded')
+    const md = formatPhishReport(report)
+    expect(md).toContain('SHA-256 not recorded')
+    expect(md).toContain('size not recorded')
+    expect(md).not.toContain('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+  })
+})
+
+describe('the report carries the message body it says it carries', () => {
+  it('emits the body, fenced, so a case records the mail and not just the analysis', async () => {
+    const markdown = formatPhishReport(await analysePhishing(MAIL, [], []))
+    expect(markdown).toContain('### Message body')
+    expect(markdown).toContain('Your account is limited.')
+    expect(markdown).toContain('<img src="http://track.paypa1.test/open.gif"')
+  })
+
+  it('fences content that contains a fence, so it cannot close its own block', async () => {
+    const mail = 'Content-Type: text/plain\n\n```\n![[private]] <img src="http://beacon.test/x">\n`````\n'
+    const markdown = formatPhishReport(await analysePhishing(mail, [], []))
+    expect(markdown).toContain('``````')
+    // The embed is inside the fence, not loose in the note.
+    const lines = markdown.split('\n')
+    const fenceStarts = lines.reduce((n, l) => n + (/^`{3,}$/.test(l) ? 1 : 0), 0)
+    expect(fenceStarts % 2).toBe(0)
+  })
+
+  it('says so when there is no body rather than implying one', async () => {
+    const markdown = formatPhishReport(await analysePhishing('From: a@b.test\nSubject: hi', [], []))
+    expect(markdown).toContain('### Message body\n\nNot recorded.')
   })
 })

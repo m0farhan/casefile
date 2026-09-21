@@ -145,3 +145,19 @@ describe('runToolbox', () => {
     expect(hit?.result.body).toContain('SHA-1    da86b2350d7133a0b9455e2c4cae962d691712b0')
   })
 })
+
+describe('a $ in a value does not corrupt it', () => {
+  it('defangs a URL containing $& without expanding it', () => {
+    // String.replace expands $&, $`, $' and $1 inside the REPLACEMENT string.
+    // A corrupted indicator is worse than an undefanged one: it looks real.
+    const url = 'http://evil.test/a?x=$&y=$1'
+    const out = defangSelection(url)
+    expect(out).toBe('hxxp://evil[.]test/a?x=$&y=$1')
+    expect(out).not.toContain('evil.test/a?x=http')
+  })
+
+  it('round-trips it through refang', () => {
+    const url = 'http://evil.test/a?x=$&y=$1'
+    expect(refangSelection(defangSelection(url))).toBe(url)
+  })
+})

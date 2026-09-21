@@ -1,5 +1,5 @@
 import { type Attachment, hashBytes, parseEml } from './eml'
-import { type HeaderAnalysis, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
+import { type HeaderAnalysis, addressOf, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
 import { defangIoc, extractIocsFromText, formatIocLine } from './ioc'
 import { decodePercentEscapes } from './toolbox'
 
@@ -50,7 +50,11 @@ const GATEWAYS: { name: string; host: RegExp; path?: RegExp; extract(url: string
   },
   {
     name: 'Google redirect',
-    host: /(^|\.)google\.[a-z.]+$/i,
+    // Bounded. `google\.[a-z.]+$` let the suffix swallow a whole attacker
+    // domain — google.evil.com matched — so a link the victim's browser sends
+    // to evil.com was reported as unwrapping to whatever the attacker put in
+    // the q parameter. A gateway match must be a match on the gateway.
+    host: /(^|\.)google\.[a-z]{2,3}(\.[a-z]{2})?$/i,
     path: /^\/url/i,
     extract: (url) => {
       const params = new URL(url).searchParams
@@ -68,10 +72,10 @@ const GATEWAYS: { name: string; host: RegExp; path?: RegExp; extract(url: string
     extract: (url) => {
       // v3: …/v3/__<real url>__;<base64 of replaced chars>!!…
       const v3 = /\/v3\/__(.+?)__;/.exec(url)
-      if (v3) return v3[1]
+      if (v3) return decodePercentEscapes(v3[1])
       // v2: …/v2/url?u=<url with _ for / and - for %>&d=…
       const v2 = new URL(url).searchParams.get('u')
-      return v2 ? v2.replace(/_/g, '/').replace(/-/g, '%') : ''
+      return v2 ? decodePercentEscapes(v2.replace(/_/g, '/').replace(/-/g, '%')) : ''
     }
   },
   {
@@ -114,7 +118,12 @@ export function unwrapUrl(url: string): { target: string; wrappedBy: string } {
       break
     }
     wrappedBy = wrappedBy || gateway.name
-    current = decodePercentEscapes(next)
+    // NOT decoded again here. searchParams.get() has already percent-decoded
+    // its value, so a second pass turns `https://evil.test/?u=https%3A%2F%2Fpaypal.test`
+    // into a different URL from the one the gateway actually redirects to, and
+    // the row then names a host the victim never reaches. The two shapes that
+    // genuinely need decoding do it in their own extract().
+    current = next
   }
   return { target: current, wrappedBy }
 }
@@ -373,11 +382,17 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
   }
   // Bare URLs in BOTH bodies. The HTML is scanned with its tags stripped, so a
   // URL sitting in visible text or in a <meta refresh> content= is not missed.
+  // That scan is the ONLY one that can turn anchor TEXT into a candidate, so
+  // what it contributed is remembered: a decoy label is dropped below, but
+  // only when no other scan found the same URL as a real destination.
   for (const m of text.matchAll(URL_RE)) add(m[0])
+  const fromVisibleText = new Set<string>()
   for (const m of decodeEntities(html)
     .replace(/<[^>]{0,2000}>/g, ' ')
     .matchAll(URL_RE)) {
+    const before = raws.size
     add(m[0])
+    if (raws.size > before) fromVisibleText.add(normaliseUrl(m[0]))
   }
   for (const m of html.matchAll(ATTR_RE)) add(m[1] ?? m[2] ?? m[3] ?? '')
   for (const m of html.matchAll(CSS_URL_RE)) add(m[1])
@@ -401,10 +416,14 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
     if (href && /^https?:\/\//i.test(label)) shown.set(href, label)
   }
   // The text of an anchor is what the victim is SHOWN, not anywhere they can
-  // go. Listing it beside the real destinations would put the decoy in the
-  // indicator list as though the mail pointed there — so it is dropped unless
-  // it is also a destination somewhere in the message.
-  for (const label of shown.values()) if (!hrefs.has(label)) raws.delete(label)
+  // go, so the decoy is dropped from the destination list. Only when NOTHING
+  // else found it: the same string can be a decoy in one anchor and the real
+  // link in the plain-text part — the URL a mail tells you to type by hand is
+  // genuinely clickable in a plain-text client, and deleting it took the
+  // actual phishing destination out of the links, the indicators and the case.
+  for (const label of shown.values()) {
+    if (!hrefs.has(label) && fromVisibleText.has(label)) raws.delete(label)
+  }
 
   const all = [...raws]
   const kept = all.slice(0, MAX_LINKS)
@@ -547,7 +566,11 @@ export function sniffType(bytes: Uint8Array): string {
 const EXT_EXPECTS: { ext: RegExp; label: RegExp }[] = [
   { ext: /\.pdf$/i, label: /PDF/ },
   { ext: /\.(docx|xlsx|pptx|zip|jar|apk)$/i, label: /ZIP/ },
-  { ext: /\.(doc|xls|ppt|msg)$/i, label: /OLE/ },
+  { ext: /\.(doc|xls|ppt|msg|dot|xlt|pot)$/i, label: /OLE/ },
+  // The macro-capable OOXML types are ZIPs, and they are exactly the ones
+  // attachmentFacts already calls out — so a .docm that is really a PE was
+  // flagged as macro-capable and NOT flagged as mislabelled.
+  { ext: /\.(docm|dotm|xlsm|xltm|xlam|pptm|potm|ppam)$/i, label: /ZIP/ },
   { ext: /\.(jpg|jpeg)$/i, label: /JPEG/ },
   { ext: /\.png$/i, label: /PNG/ },
   { ext: /\.gif$/i, label: /GIF/ },
@@ -588,15 +611,15 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   // The sender's own domain gets the folding the link hosts get. Five of the
   // shipped classifications are impersonation of one kind or another, and the
   // domain being impersonated is usually in the From line, not in a link.
+  // Through addressOf, not a hand-rolled lastIndexOf('@'). The hardened reader
+  // strips quoted display names and RFC 5322 comments; slicing the raw value
+  // read the LAST @ in the line, so a comment or a display name carrying an
+  // address decided which domain got the look-alike check — the exact evasion
+  // 2.32.0 closed for the Observations panel and left open here.
   const fromValue = headers.identities.find((i) => i.label === 'From')?.value ?? ''
-  const at = fromValue.lastIndexOf('@')
-  const senderHost =
-    at < 0
-      ? ''
-      : fromValue
-          .slice(at + 1)
-          .replace(/[>\s].*$/, '')
-          .toLowerCase()
+  const senderAddress = addressOf(fromValue)
+  const at = senderAddress.lastIndexOf('@')
+  const senderHost = at < 0 ? '' : senderAddress.slice(at + 1).toLowerCase()
   const senderFacts = senderHost ? hostFacts(senderHost, brands, senderHost) : []
 
   // Built once, from what was actually parsed, and used by both the copy
@@ -629,6 +652,17 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
     indicators,
     notes: dedupe(notes)
   }
+}
+
+/**
+ * A fenced block whose backtick run is longer than anything inside it, so the
+ * content cannot close its own fence and escape into the note that renders it.
+ */
+function fenced(text: string): string {
+  let longest = 0
+  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${fence}\n${text.replace(/\r\n?/g, '\n')}\n${fence}`
 }
 
 /** Notes repeat once per malformed part; a 4MB mail produced 120,000 identical lines. */
@@ -668,6 +702,12 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
   }
   const sniffed = sniffType(a.bytes)
   const mismatch = contentMismatch(a.filename, a.contentType, sniffed)
+  // A part that was not transfer-encoded reached us through the reader's line
+  // normalisation, so its bytes are the message's text, not the file as sent.
+  // base64 and quoted-printable are ASCII on the wire and round-trip exactly;
+  // these do not, and a hash that will not match the sender's copy has to say
+  // so rather than be quoted at a sandbox as if it would.
+  const wireExact = a.exact
   return {
     filename: a.filename,
     contentType: a.contentType,
@@ -675,7 +715,13 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
     sha256: await hashBytes(a.bytes),
     sha1: await hashBytes(a.bytes, 'SHA-1'),
     sniffed,
-    facts: mismatch ? [mismatch, ...facts] : facts,
+    facts: [
+      ...(mismatch ? [mismatch] : []),
+      ...facts,
+      ...(wireExact
+        ? []
+        : ['this part carried no transfer encoding, so the hashes are of the decoded text, not of the bytes as sent'])
+    ],
     inside: stringsInside(a.bytes, owned),
     bytes: a.bytes
   }
@@ -743,6 +789,20 @@ export function formatPhishReport(report: PhishReport): string {
   } else {
     lines.push('None.')
   }
+  // The message itself. The screen told the analyst the copied report carried
+  // the rest of a truncated body, and it carried none of it — the body reached
+  // no section at all, so a case created from the analysis held an analysis of
+  // a mail whose text was nowhere. Fenced with a backtick run longer than
+  // anything inside it, so hostile markdown cannot close its own block, and
+  // nothing inside a fence autolinks.
+  lines.push('', '### Message body', '')
+  if (report.text.trim() || report.htmlSource.trim()) {
+    if (report.text.trim()) lines.push('Plain text:', '', fenced(report.text.trim()), '')
+    if (report.htmlSource.trim()) lines.push('HTML source, not rendered:', '', fenced(report.htmlSource.trim()))
+  } else {
+    lines.push('Not recorded.')
+  }
+
   lines.push('', '### Indicators', '')
   if (report.indicators.length) for (const i of report.indicators) lines.push(`- ${quoteUntrusted(i)}`)
   else lines.push('None found.')

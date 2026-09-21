@@ -144,7 +144,9 @@ describe('formatHeaderReport', () => {
     const md = formatHeaderReport(analyseHeaders('From: a@b.test'))
     expect(md).toContain('### Authentication\n\nNot recorded.')
     expect(md).toContain('### Path\n\nNot recorded.')
-    expect(md).toContain('### Indicators\n\n- `email: a[at]b[.]test`')
+    // Indicators are emitted once, by the phishing report, from the PARSED
+    // message — this section no longer prints a second raw-paste scan.
+    expect(md).not.toContain('### Indicators')
   })
 })
 
@@ -195,7 +197,8 @@ describe('headers that appear more than once', () => {
   it('says so rather than silently using the first', () => {
     const a = analyseHeaders('From: real@corp.test\nFrom: spoof@evil.test\nSubject: hi')
     expect(a.observations.map((o) => o.text)).toContain(
-      'There are 2 from headers. Only the first is shown above; mail clients do not agree on which one wins.'
+      'There are 2 from headers. Identities show the first; authentication results show all of them. ' +
+        'Mail clients do not agree on which one wins.'
     )
   })
 })

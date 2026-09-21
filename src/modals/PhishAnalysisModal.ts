@@ -6,6 +6,7 @@ import { type PhishReport, analysePhishing, formatPhishReport } from '../soc/phi
 import { extractIocsFromText } from '../soc/ioc'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
 import { type Ioc, makeTask } from '../types'
+import { TaskFileNameConflictError } from '../store/ProjectStore'
 import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
 
 /**
@@ -36,6 +37,7 @@ class PhishAnalysisModal extends Modal {
   private runId = 0
   private debounce: number | null = null
   private tab: TabId = 'message'
+  private tabStrip: HTMLElement | null = null
 
   constructor(private plugin: PMPlugin) {
     super(plugin.app)
@@ -55,6 +57,10 @@ class PhishAnalysisModal extends Modal {
       cls: 'pm-headers-input',
       attr: { placeholder: 'Received: from …', rows: '5', spellcheck: 'false' }
     })
+    // Outside the scroll box: the strip that switches panes must stay put, or
+    // it scrolls off the top of a long pane and the only way back is to scroll
+    // up through the thing you were trying to leave.
+    this.tabStrip = contentEl.createDiv('pm-headers-tabs')
     const out = contentEl.createDiv('pm-headers-out')
     const row = contentEl.createDiv('pm-modal-btn-row')
 
@@ -167,7 +173,19 @@ class PhishAnalysisModal extends Modal {
           description: formatPhishReport(this.report as PhishReport),
           iocs
         })
-        await this.plugin.store.insertTask(project, task)
+        try {
+          await this.plugin.store.insertTask(project, task)
+        } catch (err) {
+          // Two mails can share a subject, and a subject IS the title here, so
+          // this is the ordinary case rather than the exotic one. It used to
+          // throw past the caller, leaving the modal open with no explanation
+          // and the board's in-memory copy holding a case that was never saved.
+          if (err instanceof TaskFileNameConflictError) {
+            new Notice(`Case not created: a note named "${err.fileName}" already exists.`)
+            return
+          }
+          throw err
+        }
         this.close()
         openTaskModal(this.plugin, project, { task, onSave: () => {} })
       })()
@@ -191,7 +209,8 @@ class PhishAnalysisModal extends Modal {
       { id: 'body', label: 'Body' },
       { id: 'indicators', label: `Indicators (${report.indicators.length})` }
     ]
-    const strip = out.createDiv('pm-headers-tabs')
+    const strip = this.tabStrip ?? out.createDiv('pm-headers-tabs')
+    strip.empty()
     const panel = out.createDiv('pm-headers-panel')
     for (const tab of tabs) {
       const button = strip.createEl('button', { cls: 'pm-headers-tab', text: tab.label })
@@ -317,7 +336,7 @@ class PhishAnalysisModal extends Modal {
         if (trimmed.length > BODY_PREVIEW) {
           body.createDiv({
             cls: 'pm-headers-note',
-            text: `Showing the first ${BODY_PREVIEW.toLocaleString()} of ${trimmed.length.toLocaleString()} characters. The copied report carries the rest.`
+            text: `Showing the first ${BODY_PREVIEW.toLocaleString()} of ${trimmed.length.toLocaleString()} characters here. The copied report and the case carry all of it.`
           })
         }
       }
@@ -418,6 +437,13 @@ class PhishAnalysisModal extends Modal {
   }
 
   onClose(): void {
+    // Cancel the pending parse and retire the run token: a debounce that fires
+    // after close would analyse into a DOM that no longer exists, and a run
+    // already in flight must not paint its result on the way out.
+    if (this.debounce !== null) window.clearTimeout(this.debounce)
+    this.debounce = null
+    this.runId++
+    this.tabStrip = null
     this.contentEl.empty()
   }
 }

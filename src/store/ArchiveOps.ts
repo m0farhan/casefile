@@ -100,6 +100,16 @@ export function dueForAutoArchive(task: Task, statuses: StatusConfig[], days: nu
   if (!isTerminalStatus(task.status, statuses)) return false
   if (task.activity.some((a) => a.field === 'archived')) return false
 
+  // A completion date is the PROOF that somebody finished this case, and it is
+  // checked before anything else. Moving the clock onto the activity log made
+  // the log answer both questions at once — when it landed AND whether it was
+  // ever really closed — and that quietly dropped this guard: a case dragged
+  // to Done with its completion date cleared, or one whose status moved for
+  // any other reason, became archivable on a timer that renames its file with
+  // no confirmation. The log says WHEN. This says WHETHER.
+  const closed = parsePlainDate(task.completed)
+  if (!closed) return false
+
   const landed = landedInTerminal(task, statuses)
   if (landed !== undefined) {
     const nowMs = Date.parse(now)
@@ -107,10 +117,22 @@ export function dueForAutoArchive(task: Task, statuses: StatusConfig[], days: nu
     return Number.isNaN(nowMs) ? false : nowMs - landed >= days * DAY_MS
   }
 
-  const closed = parsePlainDate(task.completed)
-  const today_ = parsePlainDate(now.slice(0, 10))
-  if (!closed || !today_) return false
+  // Fallback for a case whose log never recorded the move. `now` is an ISO
+  // instant in UTC; `completed` was stamped from the analyst's LOCAL calendar,
+  // so the comparison is made on the local date. Slicing the UTC string
+  // instead put the two on different calendars and archived a case a day early
+  // for anyone west of UTC every evening.
+  const today_ = parsePlainDate(localDate(now))
+  if (!today_) return false
   return today_.since(closed).days >= days
+}
+
+/** The analyst's own calendar date for an ISO instant — the one `completed` is written in. */
+function localDate(iso: string): string {
+  const ms = Date.parse(iso)
+  if (Number.isNaN(ms)) return iso.slice(0, 10)
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 const DAY_MS = 86_400_000

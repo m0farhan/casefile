@@ -580,7 +580,11 @@ input.pm-pop-field:focus {
 }
 /* A full-width row holds something that wraps (tags, links), so its label
    belongs at the top of the block, not floating in the middle of it. */
-.pm-prop-row--wide {
+/* Carries the grid ancestor so it beats `.pm-prop-grid .pm-prop-row` above,
+   which sets align-items:center at (0,2,0). Without it this rule lost on
+   specificity and a three-line tag block left its label floating in the middle
+   of the chips instead of at the top of the row it names. */
+.pm-prop-grid .pm-prop-row--wide {
   grid-column: 1 / -1;
   align-items: start;
 }

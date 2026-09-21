@@ -356,7 +356,12 @@ export interface PMSettings {
    * be this plugin deciding whose customers are worth protecting.
    */
   phishBrands: string[]
-  /** Live IOC reputation checks — keys stay local in this vault's data.json; '' disables the provider. */
+  /**
+   * Live IOC reputation checks. These fields are a MIGRATION SHIM, not storage:
+   * a key found here is moved into device-local storage on load and the field
+   * is blanked (main.ts, SECRET_FIELDS). A key never stays in data.json, which
+   * is the one file Sync, iCloud and git replicate. '' disables the provider.
+   */
   virusTotalApiKey: string
   abuseIpdbApiKey: string
   abuseChApiKey: string

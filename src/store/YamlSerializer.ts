@@ -29,6 +29,22 @@ function serializeProjectConfig(config: ProjectConfig | undefined): Record<strin
   return Object.keys(out).length ? out : null
 }
 
+/**
+ * A wiki-link alias, made safe to sit between `[[` and `]]`.
+ *
+ * A case title is sender-controlled on every SOC board — it is lifted from the
+ * subject line of a pasted alert or a reported phishing mail. A title carrying
+ * `]]` closes the link early and everything after it is markdown the note will
+ * render, which is how `Invoice ]] ![[private-note]] <img src=http://beacon>`
+ * turns a board index into an embed and a beacon that fires when the note is
+ * opened. Square brackets are display-only here, so replacing them costs the
+ * alias nothing and closes the whole class at the one place every title is
+ * written.
+ */
+function linkAlias(title: string): string {
+  return title.replace(/[[\]]/g, ' ').replace(/[\r\n]+/g, ' ')
+}
+
 export function serializeProject(project: Project, statuses: StatusConfig[] = [], extraBody = ''): string {
   const seen = new Set<string>()
   const tasks: Task[] = []
@@ -77,7 +93,7 @@ export function serializeProject(project: Project, statuses: StatusConfig[] = []
       if (t.filePath) {
         const basename = t.filePath.replace(/^.*\//, '').replace(/\.md$/, '')
         const check = isTerminalStatus(t.status, statuses) ? 'x' : ' '
-        yamlLines.push(`- [${check}] [[${basename}|${t.title}]]`)
+        yamlLines.push(`- [${check}] [[${basename}|${linkAlias(t.title)}]]`)
       }
     }
     yamlLines.push('')
@@ -226,10 +242,10 @@ export function serializeTask(
 
   if (parentTask?.filePath) {
     const parentBasename = parentTask.filePath.replace(/^.*\//, '').replace(/\.md$/, '')
-    yamlLines.push(`Parent: [[${parentBasename}|${parentTask.title}]]`)
+    yamlLines.push(`Parent: [[${parentBasename}|${linkAlias(parentTask.title)}]]`)
   } else if (linkToBoard) {
     const projectBasename = project.filePath.replace(/^.*\//, '').replace(/\.md$/, '')
-    yamlLines.push(`Project: [[${projectBasename}|${project.title}]]`)
+    yamlLines.push(`Project: [[${projectBasename}|${linkAlias(project.title)}]]`)
   }
 
   if (task.subtasks.length) {
@@ -240,7 +256,7 @@ export function serializeTask(
         ? sub.filePath.replace(/^.*\//, '').replace(/\.md$/, '')
         : taskFileName(sub.title)
       const check = isTerminalStatus(sub.status, statuses) ? 'x' : ' '
-      yamlLines.push(`- [${check}] [[${subBasename}|${sub.title}]]`)
+      yamlLines.push(`- [${check}] [[${subBasename}|${linkAlias(sub.title)}]]`)
     }
   }
 
