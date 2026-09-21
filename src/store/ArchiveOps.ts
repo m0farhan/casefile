@@ -1,7 +1,7 @@
 import type { App } from 'obsidian'
 import { TFile, normalizePath } from 'obsidian'
 import type { Project, StatusConfig, Task } from '../types'
-import { parsePlainDate, today } from '../dates'
+import { parsePlainDate } from '../dates'
 import { isTerminalStatus } from '../utils'
 import { findParentId, findTaskById } from './TaskIndex'
 import { repointDescendantFiles } from './TaskTreeOps'
@@ -74,11 +74,18 @@ export async function unarchiveTask(app: App, project: Project, taskId: string):
  *
  * - TERMINAL BY CONFIG, not by the id `done`: an analyst who renamed or added a
  *   closing status still gets the behaviour they configured.
+ * - THE CLOCK STARTS WHEN THE CASE LANDED IN THAT STATUS, read off the
+ *   append-only log, which carries a full datetime. So a two-day window is 48
+ *   hours from the move, not two flips of the calendar: a case closed at 23:50
+ *   used to be swept ~25 hours later, because whole-day arithmetic counted the
+ *   ten minutes to midnight as a day. Moving between two closing statuses
+ *   restarts it — that is a fresh decision about the case.
+ * - A case whose log does not record the move (imported, or closed by hand in
+ *   the note) falls back to the `completed` date and whole days, as before.
  * - A `completed` stamp that is missing, unparseable or in the future NEVER
- *   archives. The clock has to be a recorded fact; a case with no closing date
- *   is a case nobody finished.
- * - Whole days, counted from the stamp's own date. `days` is the analyst's
- *   setting, read at sweep time.
+ *   archives on the fallback path. The clock has to be a recorded fact; a case
+ *   with no closing date is a case nobody finished.
+ * - `days` is the analyst's setting, read at sweep time.
  * - DISARMED BY THE LOG. Once an `archived` entry exists, the append-only
  *   record says a human has already decided this case's archive state, and the
  *   timer never touches it again — so a case you pulled back out stays out.
@@ -92,14 +99,41 @@ export function dueForAutoArchive(task: Task, statuses: StatusConfig[], days: nu
   if (task.archived) return false
   if (!isTerminalStatus(task.status, statuses)) return false
   if (task.activity.some((a) => a.field === 'archived')) return false
+
+  const landed = landedInTerminal(task, statuses)
+  if (landed !== undefined) {
+    const nowMs = Date.parse(now)
+    // A landing in the future (a clock that went backwards) is never due.
+    return Number.isNaN(nowMs) ? false : nowMs - landed >= days * DAY_MS
+  }
+
   const closed = parsePlainDate(task.completed)
-  const today_ = parsePlainDate(now)
+  const today_ = parsePlainDate(now.slice(0, 10))
   if (!closed || !today_) return false
-  const age = today_.since(closed).days
-  return age >= days
+  return today_.since(closed).days >= days
 }
 
-/** Today's plain date, for callers that only need the sweep's clock. */
-export function archiveToday(): string {
-  return today().toString()
+const DAY_MS = 86_400_000
+
+/**
+ * When this case last moved INTO a closing status, in milliseconds, from the
+ * append-only log. undefined when the log does not record that move — the
+ * newest status entry moved it somewhere open (so the status on the task did
+ * not come from the log), there is no status entry at all, or the stamp is
+ * unreadable. The caller then falls back to the completion date.
+ */
+function landedInTerminal(task: Task, statuses: StatusConfig[]): number | undefined {
+  for (let i = task.activity.length - 1; i >= 0; i--) {
+    const entry = task.activity[i]
+    if (entry.field !== 'status') continue
+    if (!isTerminalStatus(entry.to, statuses)) return undefined
+    const ms = Date.parse(entry.at)
+    return Number.isNaN(ms) ? undefined : ms
+  }
+  return undefined
+}
+
+/** The sweep's clock, as an ISO datetime — the window is measured in hours. */
+export function archiveNow(): string {
+  return new Date().toISOString()
 }

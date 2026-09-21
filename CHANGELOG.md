@@ -55,6 +55,15 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   width back (two-line titles often become one), and the card is no taller for
   it. A due date, which travelled with the avatar, moves with it.
 
+- **Auto-archive counts from the moment a case landed in a closing status**,
+  read off the append-only log, which carries a full datetime. A two-day
+  window is now 48 hours from the move. It used to be whole calendar days from
+  the completion date, so a case closed at 23:50 was swept about 25 hours
+  later. Moving a case between two closing statuses restarts the clock, and a
+  case whose log never recorded the move still falls back to its completion
+  date. Still off until you set a window (`0` = off), in **Settings →
+  Auto-archive**.
+
 ### Fixed (two things a live pass through the boards turned up)
 
 - **Opening a case and closing it again no longer claims you edited it.** The

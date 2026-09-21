@@ -2,7 +2,7 @@ import { Notice } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, StatusConfig, Task } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
-import { archiveToday, dueForAutoArchive } from '../store/ArchiveOps'
+import { archiveNow, dueForAutoArchive } from '../store/ArchiveOps'
 import { isTerminalStatus } from '../utils'
 import { Temporal, today, parsePlainDate } from '../dates'
 import { slaAnchor, slaState } from '../soc/sla'
@@ -68,7 +68,7 @@ export class Notifier {
       } catch {
         return
       }
-      const now = archiveToday()
+      const now = archiveNow()
       let moved = 0
       for (const project of projects) {
         const statuses = this.plugin.store.configFor(project).statuses
