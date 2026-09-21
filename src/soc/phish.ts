@@ -252,7 +252,14 @@ export interface PhishReport {
   text: string
   htmlSource: string
   links: LinkFinding[]
-  attachments: { filename: string; contentType: string; size: number; sha256: string; facts: string[] }[]
+  attachments: {
+    filename: string
+    contentType: string
+    size: number
+    sha256: string
+    sha1: string
+    facts: string[]
+  }[]
   notes: string[]
 }
 
@@ -273,6 +280,7 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
       contentType: a.contentType,
       size: a.size,
       sha256: await hashBytes(a.bytes),
+      sha1: await hashBytes(a.bytes, 'SHA-1'),
       facts: attachmentFacts(a)
     }))
   )
@@ -296,6 +304,7 @@ export function formatPhishReport(report: PhishReport): string {
     for (const a of report.attachments) {
       lines.push(`- ${a.filename} — ${a.contentType}, ${a.size} bytes`)
       lines.push(`  - SHA-256 ${a.sha256} (computed here)`)
+      lines.push(`  - SHA-1 ${a.sha1} (computed here)`)
       for (const fact of a.facts) lines.push(`  - ${fact}`)
     }
   } else {

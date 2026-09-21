@@ -84,6 +84,7 @@ describe('analysePhishing over a whole message', () => {
     expect(attachment.filename).toBe('Invoice_2026.docm')
     expect(attachment.size).toBe('fake macro document bytes'.length)
     expect(attachment.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(attachment.sha1).toMatch(/^[0-9a-f]{40}$/)
     expect(attachment.facts).toContain('file type that can carry macros')
   })
 

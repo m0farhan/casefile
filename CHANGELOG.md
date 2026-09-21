@@ -45,6 +45,20 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.31.1] - 2026-09-21
+
+### Added
+
+- **PhishTool's classification taxonomy**, offered as tick boxes when the
+  analyser opens a case, each tick written as an ordinary tag. The ids are
+  PhishTool's own codes, read from its public API schema, so a case closed here
+  counts the same way as one closed there; the labels are this plugin's
+  expansion of those codes and not PhishTool's wording, which the settings copy
+  says out loud. Editable in **Settings → Phishing analyser**.
+- **SHA-1 alongside SHA-256** on every attachment, both computed here from the
+  bytes. MD5 is deliberately absent: WebCrypto does not implement it, and
+  hand-rolling a broken hash to save one paste is not a trade worth making.
+
 ## [2.31.0] - 2026-09-21
 
 ### Added — a phishing analyser, built in

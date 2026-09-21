@@ -301,6 +301,47 @@ export interface IncidentTemplate {
   bodyMarkdown: string
 }
 
+/** One way of naming what a phishing email was trying to do. */
+export interface PhishClassification {
+  id: string
+  label: string
+}
+
+/**
+ * The classification set PhishTool resolves against, so a case closed here can
+ * be counted the same way.
+ *
+ * The ids are PhishTool's own codes, read from its public API schema; the
+ * labels are this plugin's expansion of those codes and not their wording, so
+ * treat a label as our reading of the code and not as a quotation. The list is
+ * editable in settings — it is a starting vocabulary, not a fixed one.
+ */
+export const DEFAULT_PHISH_CLASSIFICATIONS: PhishClassification[] = [
+  { id: 'CRED_HARV', label: 'Credential harvesting' },
+  { id: 'DRIVE_BY', label: 'Drive-by download' },
+  { id: 'RECON', label: 'Reconnaissance' },
+  { id: 'REPLY_SOLICIT', label: 'Reply solicitation' },
+  { id: 'SPOOF', label: 'Spoofing' },
+  { id: 'MAL_ATTACH', label: 'Malicious attachment' },
+  { id: 'MAL_URL', label: 'Malicious URL' },
+  { id: 'MAL_WEBAPP', label: 'Malicious web app' },
+  { id: 'QUISHING', label: 'QR-code phishing' },
+  { id: 'MALWARE', label: 'Malware' },
+  { id: 'COMPRO_SEND', label: 'Compromised sender' },
+  { id: 'THREAD_HIJACK', label: 'Thread hijacking' },
+  { id: 'FIN_FRAUD', label: 'Financial fraud' },
+  { id: 'WEBMAIL', label: 'Webmail' },
+  { id: 'WHALE', label: 'Whaling' },
+  { id: 'VOLUME', label: 'Volumetric' },
+  { id: 'SPEAR', label: 'Spear phishing' },
+  { id: 'POLY', label: 'Polymorphic' },
+  { id: 'IMPER', label: 'Impersonation' },
+  { id: 'GOV_IMPER', label: 'Government impersonation' },
+  { id: '3P_IMPER', label: 'Third-party impersonation' },
+  { id: 'T3P_IMPER', label: 'Trusted third-party impersonation' },
+  { id: 'VIP_IMPER', label: 'VIP impersonation' }
+]
+
 export interface PMSettings {
   /** Base folder for the per-project folders; '' means the vault root. */
   projectsFolder: string
@@ -350,6 +391,8 @@ export interface PMSettings {
    * the provider keys below, which are device-local).
    */
   ownedAssets: string[]
+  /** The taxonomy offered when a phishing case is opened from the analyser. */
+  phishClassifications: PhishClassification[]
   /**
    * Names worth impersonating, for the phishing analyser's look-alike check.
    * Empty by default and deliberately not seeded: a shipped brand list would
@@ -587,6 +630,7 @@ export const DEFAULT_SETTINGS: PMSettings = {
   handoverWindowHours: 12,
   ownedAssets: [],
   phishBrands: [],
+  phishClassifications: DEFAULT_PHISH_CLASSIFICATIONS,
   virusTotalApiKey: '',
   abuseIpdbApiKey: '',
   abuseChApiKey: '',

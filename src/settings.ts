@@ -401,6 +401,14 @@ export class PMSettingTab extends PluginSettingTab {
         'one character away from it. Nothing ships in this list on purpose: which brands matter is your ' +
         'call, not the plugin’s, and a guessed list would cry wolf on every mail from a real sender.'
     })
+    containerEl.createEl('p', {
+      cls: 'pm-settings-desc',
+      text:
+        'The classification list below is offered as tick boxes when the analyser opens a case, and each tick ' +
+        'becomes an ordinary tag. The ids are PhishTool’s own codes so a case closed here counts the same way ' +
+        'as one closed there; the labels are this plugin’s expansion of those codes, not PhishTool’s wording. ' +
+        'One per line, id first, then the label. Edit freely — it is a starting vocabulary, not a fixed one.'
+    })
     new Setting(containerEl).setName('Brands to watch for').addTextArea((text) => {
       text.inputEl.rows = 4
       text.setValue(this.plugin.settings.phishBrands.join('\n')).onChange(async (v) => {
@@ -410,6 +418,25 @@ export class PMSettingTab extends PluginSettingTab {
           .filter((line) => line && !line.startsWith('#'))
         await this.plugin.saveSettings()
       })
+    })
+
+    new Setting(containerEl).setName('Classifications offered when a case is opened').addTextArea((text) => {
+      text.inputEl.rows = 5
+      text
+        .setValue(this.plugin.settings.phishClassifications.map((c) => `${c.id} ${c.label}`).join('\n'))
+        .onChange(async (v) => {
+          this.plugin.settings.phishClassifications = v
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith('#'))
+            .map((line) => {
+              const space = line.indexOf(' ')
+              return space < 0
+                ? { id: line, label: line }
+                : { id: line.slice(0, space), label: line.slice(space + 1).trim() }
+            })
+          await this.plugin.saveSettings()
+        })
     })
 
     // ── Live reputation checks ────────────────────────────────────────────────

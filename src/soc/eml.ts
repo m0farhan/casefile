@@ -190,10 +190,17 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   else out.text += text
 }
 
-/** SHA-256 of an attachment, hex. Separate from parsing because it is async. */
-export async function hashBytes(bytes: Uint8Array): Promise<string> {
+/**
+ * Hash an attachment, hex. Separate from parsing because it is async.
+ *
+ * ponytail: SHA-256 and SHA-1 only. MD5 is what several lookup services still
+ * key on, but WebCrypto does not implement it and hand-rolling a broken hash
+ * to save the analyst one paste is not a trade worth making. If MD5 turns out
+ * to matter, it is a self-contained ~60 lines here and nothing else changes.
+ */
+export async function hashBytes(bytes: Uint8Array, algorithm: 'SHA-256' | 'SHA-1' = 'SHA-256'): Promise<string> {
   const buffer = new ArrayBuffer(bytes.byteLength)
   new Uint8Array(buffer).set(bytes)
-  const digest = await crypto.subtle.digest('SHA-256', buffer)
+  const digest = await crypto.subtle.digest(algorithm, buffer)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }

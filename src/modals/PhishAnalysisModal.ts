@@ -25,6 +25,8 @@ import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
 class PhishAnalysisModal extends Modal {
   private report: PhishReport | null = null
   private raw = ''
+  /** Ids the analyst ticked. They become tags on the case, nothing more. */
+  private readonly chosen = new Set<string>()
 
   constructor(private plugin: PMPlugin) {
     super(plugin.app)
@@ -45,6 +47,21 @@ class PhishAnalysisModal extends Modal {
       attr: { placeholder: 'Received: from …', rows: '7', spellcheck: 'false' }
     })
     const out = contentEl.createDiv('pm-headers-out')
+    // PhishTool resolves a case against a classification set, which is what
+    // makes its dashboard countable. Same vocabulary here, ticked by the
+    // analyst and written as ordinary tags — the card already reads tags, so
+    // nothing new is stored and the note stays plain markdown.
+    contentEl.createEl('h4', { cls: 'pm-headers-h', text: 'Classification (optional)' })
+    const chipRow = contentEl.createDiv('pm-headers-chips')
+    for (const classification of this.plugin.settings.phishClassifications) {
+      const chip = chipRow.createSpan({ cls: 'pm-headers-chip', text: classification.label })
+      chip.addEventListener('click', () => {
+        if (this.chosen.has(classification.id)) this.chosen.delete(classification.id)
+        else this.chosen.add(classification.id)
+        chip.toggleClass('is-on', this.chosen.has(classification.id))
+      })
+    }
+
     const row = contentEl.createDiv('pm-modal-btn-row')
 
     const loadBtn = new ButtonComponent(row).setButtonText('Load .eml')
@@ -138,7 +155,7 @@ class PhishAnalysisModal extends Modal {
           issueType: 'incident',
           status: getDefaultStatusId(config.statuses),
           priority: getDefaultPriorityId(config.priorities),
-          tags: ['phishing'],
+          tags: ['phishing', ...[...this.chosen].map(classificationTag)],
           description: formatPhishReport(this.report as PhishReport),
           iocs
         })
@@ -215,6 +232,7 @@ class PhishAnalysisModal extends Modal {
           text: `${attachment.filename} — ${attachment.contentType}, ${attachment.size} bytes`
         })
         line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${attachment.sha256}` })
+        line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-1   ${attachment.sha1}` })
         line.createDiv({ cls: 'pm-headers-note', text: 'hash computed here, from the bytes in the file' })
         for (const fact of attachment.facts) line.createDiv({ cls: 'pm-headers-flag', text: fact })
       }
@@ -277,6 +295,11 @@ class EmlPickerModal extends SuggestModal<TFile> {
 
 function openEmlPicker(plugin: PMPlugin, files: TFile[], onChoose: (file: TFile) => void): void {
   new EmlPickerModal(plugin, files, onChoose).open()
+}
+
+/** `CRED_HARV` → `cred-harv`: a tag, lowercase and hyphenated like every other. */
+function classificationTag(id: string): string {
+  return id.toLowerCase().replace(/_/g, '-')
 }
 
 export function openPhishAnalysis(plugin: PMPlugin): void {
