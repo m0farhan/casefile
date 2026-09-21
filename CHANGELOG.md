@@ -45,6 +45,40 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.30.0] - 2026-09-21
+
+### Added (two things the editor could not do before)
+
+- **Analyst toolbox on the selection** — right-click, or the command palette.
+  Defang and refang indicators, decode base64, percent-escapes or hex, read a
+  number as a timestamp, and hash the selection. It offers only the transforms
+  that actually APPLY to what you selected, each showing the result before you
+  pick it, so it never hands back rubbish from a decode that was never going to
+  work. base64 is tried as UTF-8 **and UTF-16LE**, because PowerShell's own
+  `-EncodedCommand` is UTF-16LE and a UTF-8-only decoder returns every other
+  character as a NUL on the commonest thing you will paste into it. A number
+  gets every reading it could plausibly be — Unix seconds, milliseconds,
+  microseconds, Windows FILETIME, the WebKit epoch — each labelled with the
+  epoch it assumes, and readings landing outside 1990–2100 are dropped rather
+  than listed. The result is INSERTED below the selection in a `Derived`
+  callout, never substituted for it: the note keeps the thing that was decoded
+  next to what it decoded to. Decoded text is fenced and quoted line by line,
+  so content that is itself markdown cannot break out and rewrite the note.
+  Entirely offline — the toolbox never asks anything about a value, it only
+  rewrites what you already have.
+- **Analyse email headers** — paste a header block and read what it says.
+  Received chain reversed so hop 1 is the origin, with the delay at each hop;
+  SPF, DKIM and DMARC exactly as the headers state them; From, Return-Path and
+  Reply-To compared; RFC 2047 encoded subjects decoded; and every indicator
+  extracted, defanged and marked when it is one of your own assets, ready to
+  copy into a case. It reports and never concludes: there is no score, no
+  colour-coded verdict and no word like "suspicious" anywhere in the output.
+  A header the paste does not contain is listed under "Not in this paste",
+  because a missing SPF result is not an SPF pass. It reads the display name
+  separately from the real address — `"PayPal Security <service@paypal.test>"
+  <billing@paypa1.test>` is a live trick, and the address a mail client shows
+  you is the decoration.
+
 ## [2.29.1] - 2026-09-21
 
 ### Changed

@@ -61,12 +61,7 @@ describe('dueForAutoArchive — the clock starts when the case landed in Done', 
   const NOW_T = '2026-09-20T12:00:00.000Z'
   const moved = (at: string, to = 'done') => ({ at, field: 'status', from: 'in-progress', to })
   const dueAt = (activity: { at: string; field: string; from: string; to: string }[], days = 2): boolean =>
-    dueForAutoArchive(
-      makeTask({ status: 'done', completed: '2026-09-18', activity }),
-      STATUSES,
-      days,
-      NOW_T
-    )
+    dueForAutoArchive(makeTask({ status: 'done', completed: '2026-09-18', activity }), STATUSES, days, NOW_T)
 
   it('measures 48 hours from the move, not two flips of the calendar', () => {
     // The regression: closed at 23:50 on the 18th, whole-day arithmetic made
@@ -77,9 +72,7 @@ describe('dueForAutoArchive — the clock starts when the case landed in Done', 
   })
 
   it('restarts when the case moves between two closing statuses', () => {
-    expect(dueAt([moved('2026-09-10T09:00:00.000Z'), moved('2026-09-20T09:00:00.000Z', 'cancelled')])).toBe(
-      false
-    )
+    expect(dueAt([moved('2026-09-10T09:00:00.000Z'), moved('2026-09-20T09:00:00.000Z', 'cancelled')])).toBe(false)
   })
 
   it('ignores a log whose newest status move left the case open', () => {
