@@ -94,7 +94,8 @@ export function decodeEncodedWords(value: string): string {
   )
 }
 
-function quotedPrintableBytes(text: string): Uint8Array {
+/** `=XX` escapes to bytes. Shared with the MIME body decoder in eml.ts. */
+export function quotedPrintableBytes(text: string): Uint8Array {
   const bytes: number[] = []
   for (let i = 0; i < text.length; i++) {
     if (text[i] === '=' && /^[0-9a-f]{2}$/i.test(text.slice(i + 1, i + 3))) {

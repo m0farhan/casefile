@@ -391,6 +391,27 @@ export class PMSettingTab extends PluginSettingTab {
     })
     renderAssetWarning()
 
+    // ── Phishing analyser ─────────────────────────────────────────────────────
+    new Setting(containerEl).setName('Phishing analyser').setHeading()
+    containerEl.createEl('p', {
+      cls: 'pm-settings-desc',
+      text:
+        'Names worth impersonating, one per line — the brands your users would believe. The analyser folds ' +
+        'look-alike characters and reports a link host that reads as one of these once folded, or that sits ' +
+        'one character away from it. Nothing ships in this list on purpose: which brands matter is your ' +
+        'call, not the plugin’s, and a guessed list would cry wolf on every mail from a real sender.'
+    })
+    new Setting(containerEl).setName('Brands to watch for').addTextArea((text) => {
+      text.inputEl.rows = 4
+      text.setValue(this.plugin.settings.phishBrands.join('\n')).onChange(async (v) => {
+        this.plugin.settings.phishBrands = v
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line && !line.startsWith('#'))
+        await this.plugin.saveSettings()
+      })
+    })
+
     // ── Live reputation checks ────────────────────────────────────────────────
     new Setting(containerEl).setName('Live reputation checks').setHeading()
 

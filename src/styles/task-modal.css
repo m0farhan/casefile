@@ -649,3 +649,28 @@ button.pm-verdict-cancel:hover {
 .pm-headers-empty {
   color: var(--gs-ink-subtle);
 }
+.pm-headers-link {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--gs-hairline);
+}
+.pm-headers-link:last-child {
+  border-bottom: 0;
+}
+/* Facts, not alarms: the same muted treatment as every other stated line. The
+   analyst decides what a fact means, so nothing here is coloured to pre-empt
+   that judgement. */
+.pm-headers-flag {
+  color: var(--gs-ink-muted);
+  font-size: var(--font-ui-smaller);
+  padding-left: 12px;
+}
+.pm-headers-pre {
+  max-height: 180px;
+  overflow: auto;
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--gs-surface-2);
+  padding: 8px;
+  border-radius: 4px;
+}

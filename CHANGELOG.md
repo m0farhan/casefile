@@ -45,6 +45,47 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.31.0] - 2026-09-21
+
+### Added — a phishing analyser, built in
+
+`Analyse a phishing email` takes a pasted header block, a whole pasted
+message, or a `.eml` already in the vault, and reads it offline. It replaces
+and subsumes the header reader added in 2.30.0 (the command keeps its id, so
+any hotkey you set still works).
+
+- **The message, taken apart.** Nested multiparts, quoted-printable and base64
+  bodies, RFC 2047 filenames and subjects, attachments decoded to their true
+  size. The MIME boundary is matched as a whole delimiter line, as RFC 2046
+  requires, and not as a substring — a crafted inner boundary that merely
+  *starts* with the outer one would otherwise swallow the split and hide an
+  attachment from the one tool whose job is to show you everything in the file.
+- **Links, unwrapped.** Microsoft Safe Links, Proofpoint URL Defense v2 and
+  v3, Barracuda LinkProtect and Google redirects are unwrapped back to the
+  address the sender wrote, bounded so a link wrapped ten times cannot spin.
+  Mimecast is named as the wrapper rather than pretended to be unwrapped,
+  because its target is an opaque id. Anchor text that is itself a URL is
+  compared against where the link really goes.
+- **Look-alike hosts**, folded across digit and Cyrillic confusables, so
+  `paypa1.test` and `раypal.test` both read as `paypal`; also one-character
+  differences, punycode hosts, and links to a bare IP. All of it against
+  **your** brand list in **Settings → Phishing analyser**, which ships empty on
+  purpose: which brands matter is your call, not the plugin's.
+- **Attachments** get a SHA-256 computed here from the bytes, never a hash
+  quoted from a tool, and the type facts an analyst reads first — macro-capable,
+  executable, archive, double extension, right-to-left override in the name.
+- **Nothing is rendered.** The HTML body is shown as source. No remote image is
+  fetched, no link is resolved, no link on screen is clickable, and every link
+  in the copied report is defanged. Opening a phishing mail to analyse it must
+  not be what tells the sender you opened it.
+- **Create case** opens a case carrying the report verbatim, with the links,
+  addresses and attachment hashes already typed as indicators. Severity and
+  verdict are left unset deliberately: this screen has no opinion, and a case
+  born with a verdict is a case nobody judged.
+
+Not a verdict engine, and not by accident: there is no score and no word like
+"suspicious" anywhere in its output, and a test asserts that.
+
 ## [2.30.0] - 2026-09-21
 
 ### Added (two things the editor could not do before)

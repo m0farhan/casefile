@@ -350,6 +350,12 @@ export interface PMSettings {
    * the provider keys below, which are device-local).
    */
   ownedAssets: string[]
+  /**
+   * Names worth impersonating, for the phishing analyser's look-alike check.
+   * Empty by default and deliberately not seeded: a shipped brand list would
+   * be this plugin deciding whose customers are worth protecting.
+   */
+  phishBrands: string[]
   /** Live IOC reputation checks — keys stay local in this vault's data.json; '' disables the provider. */
   virusTotalApiKey: string
   abuseIpdbApiKey: string
@@ -580,6 +586,7 @@ export const DEFAULT_SETTINGS: PMSettings = {
   autoArchiveDays: 0,
   handoverWindowHours: 12,
   ownedAssets: [],
+  phishBrands: [],
   virusTotalApiKey: '',
   abuseIpdbApiKey: '',
   abuseChApiKey: '',
