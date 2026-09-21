@@ -90,12 +90,18 @@ textarea.pm-te-title:focus {
 /* Inline property value control. The `button` prefix is required: Obsidian's core
    `button:not(.clickable-icon)` rule outranks a bare class, so without it these
    controls inherit the default grey button fill and inset shadow. */
+/* The negative inline margin cancels the border + padding EXACTLY, so the
+   control's text starts flush with the column edge. At -4px against 8px of
+   border+padding the label sat 4px right of every chip and slider in the same
+   column, which is small enough to look like nothing and big enough to make
+   the grid read as crooked. The hover fill still bleeds into the column gap,
+   which is what the gap is for. */
 button.pm-prop-inline {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  margin: -1px -4px;
+  margin: -1px -8px;
   padding: 3px 7px;
   border: 1px solid transparent;
   border-radius: var(--radius-s);
@@ -544,32 +550,53 @@ input.pm-pop-field:focus {
 }
 
 /* ── Compact property grid ──────────────────────────────────────────────── */
+/* Two equal halves. minmax(0, …) rather than a bare 1fr: a grid track's
+   default minimum is its content, so one long tag list or assignee row used to
+   push its own column wider and knock the other half out of line. */
 .pm-prop-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px 22px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 24px;
   align-items: start;
 }
+/* One row height for every row, and the label centred IN it rather than
+   nudged down by a fixed padding. The old padding-top guess only lined up
+   against a control of one particular height, so the taller ones — the
+   slider, a chip, a date button — each sat off the label by a different
+   amount and no two rows agreed. */
 .pm-prop-grid .pm-prop-row {
-  grid-template-columns: 104px 1fr;
-  min-height: 30px;
-  padding: 2px 0;
-  align-items: start;
+  grid-template-columns: 100px minmax(0, 1fr);
+  /* Wide enough that a control's hover fill can bleed left without touching
+     the label it belongs to. */
+  column-gap: 14px;
+  min-height: 34px;
+  padding: 0;
+  align-items: center;
 }
 .pm-prop-grid .pm-prop-label {
-  padding-top: 6px;
+  padding-top: 0;
   color: var(--text-muted);
+  line-height: 1.3;
 }
+/* A full-width row holds something that wraps (tags, links), so its label
+   belongs at the top of the block, not floating in the middle of it. */
 .pm-prop-row--wide {
   grid-column: 1 / -1;
+  align-items: start;
+}
+.pm-prop-row--wide .pm-prop-label {
+  padding-top: 8px;
 }
 .pm-prop-progress {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
+/* Capped: at 1fr the slider ate the whole half and pushed the reading hard
+   against the next column's label. */
 .pm-prop-progress .slider {
-  flex: 1;
+  flex: 1 1 auto;
+  max-width: 190px;
   min-width: 0;
   margin: 0;
 }

@@ -33,9 +33,11 @@
 /* Property rows */
 .pm-prop-row {
   display: grid;
-  grid-template-columns: 140px 1fr;
+  grid-template-columns: 140px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  /* 14px, matching the grid: an inline control's hover fill bleeds 8px left
+     to keep its text flush with the column, and needs room to do it. */
+  gap: 14px;
   padding: 5px 0;
   min-height: 34px;
 }

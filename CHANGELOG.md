@@ -45,6 +45,25 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.32.1] - 2026-09-21
+
+### Changed (the property grid lines up now)
+
+- **Labels are centred in their row instead of nudged down by a fixed
+  padding.** The old `padding-top: 6px` only lined up against a control of one
+  particular height, so the slider, a chip and a date button each sat off their
+  label by a different amount and no two rows agreed.
+- **An inline control's text starts flush with its column.** The negative
+  margin cancelled only half the border and padding, leaving every dropdown
+  4px right of the chips and sliders beside it — small enough to look like
+  nothing, big enough to make the grid read as crooked.
+- One row height throughout, both halves on the same label width, and
+  `minmax(0, …)` tracks so one long tag list can no longer widen its own column
+  and knock the other half out of line. A full-width row (tags, links) tops its
+  label against the block it labels, since that block wraps.
+- The progress slider is capped rather than filling its half, so the reading
+  beside it no longer sits hard against the next column's label.
+
 ## [2.32.0] - 2026-09-21
 
 ### Fixed — the phishing analyser, after an adversarial review of it
