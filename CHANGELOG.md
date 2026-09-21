@@ -45,6 +45,26 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.34.1] - 2026-09-21
+
+### Changed (the analyser stops shouting)
+
+- **Section headings speak the plugin's own language** — small, uppercase,
+  muted, exactly like DESCRIPTION and INDICATORS in the case editor. They were
+  bright indigo with a rule under each, which made five headings compete with
+  the content they exist to organise, and made this one screen look like a
+  different application.
+- **An observation is marked, not painted.** Three lines of solid amber is a
+  wall nobody reads, and it made every observation look equally urgent. The
+  sentence is now normal ink with a thin rule beside it — amber where the
+  comparison differs, green where it matches — so the eye catches the marker
+  and reads the line calmly.
+- Flags get the same treatment: muted text, amber rule.
+- `pass` and `fail` keep their colour. On a single stated word the hue IS the
+  information; on a whole sentence it is not.
+- The active tab reads as selected without competing, and the monospace detail
+  behind an authentication result sits back a shade so the result word leads.
+
 ## [2.34.0] - 2026-09-21
 
 ### Added — tabs, and an attachment pane that shows you the file

@@ -608,14 +608,20 @@ button.pm-verdict-cancel:hover {
   margin-top: 8px;
   padding-right: 4px;
 }
+/* The same voice as every other section heading in this plugin — small,
+   uppercase, muted. They were bright indigo with a rule under each, which made
+   five of them shout over the content they were supposed to be organising. A
+   heading's job is to be found when looked for, not to be read first. */
 .pm-headers-h {
-  color: var(--gs-accent-hover);
-  font-size: var(--font-ui-smaller);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  margin: 14px 0 6px;
-  padding-bottom: 3px;
-  border-bottom: 1px solid var(--gs-hairline);
+  color: var(--gs-ink-subtle);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 18px 0 7px;
+}
+.pm-headers-panel > .pm-headers-h:first-child {
+  margin-top: 6px;
 }
 .pm-headers-row {
   display: flex;
@@ -644,11 +650,28 @@ button.pm-verdict-cancel:hover {
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
 }
+/* On a single stated word — pass, fail — the hue IS the information. */
 .pm-headers-ok {
   color: var(--gs-green);
 }
 .pm-headers-warn {
   color: var(--gs-amber);
+}
+/* On a whole sentence it is not: three lines of solid amber is a wall nobody
+   reads, and it makes every observation look equally urgent. The marker
+   carries the colour and the sentence stays legible. */
+.pm-obs {
+  color: var(--gs-ink);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  padding: 3px 0 3px 10px;
+  border-left: 2px solid var(--gs-hairline-strong);
+}
+.pm-obs--differ {
+  border-left-color: var(--gs-amber);
+}
+.pm-obs--match {
+  border-left-color: var(--gs-green);
 }
 .pm-headers-neutral {
   color: var(--gs-ink-subtle);
@@ -660,7 +683,7 @@ button.pm-verdict-cancel:hover {
   font-size: var(--font-ui-smaller);
 }
 .pm-headers-detail {
-  color: var(--gs-ink-subtle);
+  color: var(--gs-ink-tertiary);
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   overflow-wrap: anywhere;
@@ -707,11 +730,11 @@ button.pm-verdict-cancel:hover {
    whole class carries the attention hue: it marks "read this line", not "this
    mail is bad". */
 .pm-headers-flag {
-  color: var(--gs-amber);
+  color: var(--gs-ink-muted);
   font-size: var(--font-ui-smaller);
-  padding-left: 12px;
-  border-left: 2px solid var(--gs-amber-tint);
-  margin-left: 2px;
+  line-height: 1.5;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--gs-amber);
 }
 .pm-headers-pre {
   max-height: 180px;
@@ -748,8 +771,8 @@ button.pm-verdict-cancel:hover {
   background: transparent;
 }
 .pm-headers-tab.is-on {
-  color: var(--gs-accent-hover);
-  border-bottom-color: var(--gs-accent-hover);
+  color: var(--gs-ink);
+  border-bottom-color: var(--gs-accent);
 }
 .pm-headers-panel {
   padding-top: 2px;

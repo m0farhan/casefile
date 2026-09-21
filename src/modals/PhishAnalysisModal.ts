@@ -265,7 +265,7 @@ class PhishAnalysisModal extends Modal {
       if (a.observations.length) {
         for (const o of a.observations) {
           // Coloured from the comparison's own outcome, not from its wording.
-          obs.createDiv({ cls: o.aligned ? 'pm-headers-ok' : 'pm-headers-warn', text: o.text })
+          obs.createDiv({ cls: `pm-obs ${o.aligned ? 'pm-obs--match' : 'pm-obs--differ'}`, text: o.text })
         }
       } else {
         obs.createDiv({ cls: 'pm-headers-empty', text: 'Nothing to compare.' })
