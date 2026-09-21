@@ -110,3 +110,73 @@ describe('parseEml', () => {
     expect(out.text).not.toContain('deep')
   })
 })
+
+describe('parser evasions that used to hide content from the analyst', () => {
+  const b64of = (s: string): string => btoa(s)
+
+  it('an inline disposition with a filename is still the body, not an attachment', () => {
+    // One parameter on the text/html part used to move the whole body out of
+    // the body: the client still rendered it (the header says inline) while
+    // the analysis showed no HTML, no links, and one bland attachment row.
+    const mail =
+      'Content-Type: text/html; charset=utf-8\nContent-Disposition: inline; filename="message.html"\n\n' +
+      '<html><body><a href="http://evil.test/login">Sign in</a></body></html>'
+    const eml = parseEml(mail)
+    expect(eml.attachments).toEqual([])
+    expect(eml.html).toContain('http://evil.test/login')
+  })
+
+  it('RFC 2231 filename* wins, because it is the name the client saves', () => {
+    const mail =
+      'Content-Type: application/octet-stream\n' +
+      'Content-Disposition: attachment; filename="invoice.pdf"; filename*=UTF-8\'\'invoice.pdf.exe\n\nx'
+    expect(parseEml(mail).attachments[0].filename).toBe('invoice.pdf.exe')
+  })
+
+  it('reassembles a filename split across RFC 2231 continuations', () => {
+    const mail =
+      'Content-Type: application/octet-stream\n' +
+      'Content-Disposition: attachment; filename*0="inv"; filename*1="oice.exe"\n\nx'
+    expect(parseEml(mail).attachments[0].filename).toBe('invoice.exe')
+  })
+
+  it('opens a forwarded message and finds the payload inside it', () => {
+    // Forward-as-attachment is how most reported phish reaches a SOC.
+    const inner =
+      'From: attacker@evil.test\nSubject: Invoice\nContent-Type: multipart/mixed; boundary="IN"\n\n' +
+      '--IN\nContent-Type: application/octet-stream\n' +
+      'Content-Disposition: attachment; filename="payload.exe"\nContent-Transfer-Encoding: base64\n\n' +
+      `${b64of('MZ payload')}\n--IN--\n`
+    const outer =
+      'Content-Type: multipart/mixed; boundary="OUT"\n\n--OUT\nContent-Type: text/plain\n\nSee attached.\n' +
+      `--OUT\nContent-Type: message/rfc822\nContent-Disposition: attachment; filename="fwd.eml"\n\n${inner}--OUT--\n`
+    const names = parseEml(outer).attachments.map((a) => a.filename)
+    expect(names).toContain('fwd.eml')
+    expect(names).toContain('payload.exe')
+  })
+
+  it('tolerates the stray bytes RFC 2045 says to ignore, as every client does', () => {
+    const mail =
+      'Content-Type: application/octet-stream\nContent-Disposition: attachment; filename="a.bin"\n' +
+      `Content-Transfer-Encoding: base64\n\n${b64of('payload bytes').slice(0, 4)}!${b64of('payload bytes').slice(4)}`
+    const [a] = parseEml(mail).attachments
+    expect(a.undecodable).toBe(false)
+    expect(a.size).toBe('payload bytes'.length)
+  })
+
+  it('records a genuinely undecodable part as not recorded rather than as empty', () => {
+    const mail =
+      'Content-Type: application/octet-stream\nContent-Disposition: attachment; filename="a.bin"\n' +
+      'Content-Transfer-Encoding: base64\n\n=====\n'
+    const eml = parseEml(mail)
+    expect(eml.attachments[0].undecodable).toBe(true)
+    expect(eml.notes.join(' ')).toContain('could not be decoded')
+  })
+
+  it('does not run two text parts together into a token that is in neither', () => {
+    const mail =
+      'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhttp://a.test' +
+      '\n--B\nContent-Type: text/plain\n\n/evil\n--B--\n'
+    expect(parseEml(mail).text).not.toContain('http://a.test/evil')
+  })
+})

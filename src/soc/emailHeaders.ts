@@ -34,6 +34,13 @@ export interface AuthResult {
   mechanism: string
   result: string
   detail: string
+  /**
+   * The authserv-id: the host claiming this result. It is the whole trust
+   * question. A sender can put `Authentication-Results: spf=pass` in their own
+   * message and it parses identically to the receiving MTA's — only the
+   * asserting host tells them apart, so it is never dropped.
+   */
+  assertedBy: string
 }
 
 export interface HeaderAnalysis {
@@ -86,7 +93,11 @@ export function decodeEncodedWords(value: string): string {
           encoding.toLowerCase() === 'b'
             ? Uint8Array.from(atob(text), (c) => c.charCodeAt(0))
             : quotedPrintableBytes(text.replace(/_/g, ' '))
-        return new TextDecoder(charset).decode(bytes)
+        // Flattened: a header value is ONE logical line by definition (RFC
+        // 5322 unfolding), so a decoded one carrying CR/LF is malformed. Left
+        // in, a Subject could forge whole sections of the report and whole
+        // timestamped comments on the case note it lands in.
+        return new TextDecoder(charset).decode(bytes).replace(/[\r\n\u2028\u2029]+/g, ' ')
       } catch {
         return whole
       }
@@ -118,7 +129,18 @@ export function quotedPrintableBytes(text: string): Uint8Array {
  * read. Strip the quoted part, then take the last bracketed address.
  */
 export function addressOf(value: string): string {
-  const unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '')
+  // Quotes first (a '(' inside a quoted display name is literal), then
+  // comments. An address parked in a comment is legal anywhere RFC 5322 allows
+  // CFWS and every client shows the addr-spec instead — so
+  // `From: (<bounce@mailer.test>) security@microsoft.com` used to be read as
+  // the bouncer's domain, and the From/Return-Path panel reported alignment
+  // on a mail that had none. Comments nest, so the strip runs to a fixed point.
+  let unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '')
+  for (let i = 0; i < 6; i++) {
+    const next = unquoted.replace(/\((?:[^()\\]|\\.)*\)/g, ' ')
+    if (next === unquoted) break
+    unquoted = next
+  }
   const angled = [...unquoted.matchAll(/<([^>]*)>/g)]
   const raw = (angled.length ? angled[angled.length - 1][1] : unquoted).trim()
   return raw.replace(/^mailto:/i, '')
@@ -156,15 +178,18 @@ function parseHop(value: string, n: number): Hop {
   }
 }
 
-function parseAuth(value: string): AuthResult[] {
+function parseAuth(value: string, assertedBy = ''): AuthResult[] {
+  const segments = value.split(';')
+  const servid = assertedBy || segments[0].trim().split(/\s+/)[0] || 'not stated'
   const out: AuthResult[] = []
-  for (const part of value.split(';')) {
+  for (const part of segments) {
     const hit = /\b(spf|dkim|dmarc|arc|compauth)=(\w+)/i.exec(part)
     if (!hit) continue
     out.push({
       mechanism: hit[1].toLowerCase(),
       result: hit[2].toLowerCase(),
-      detail: part.slice(hit.index + hit[0].length).trim()
+      detail: part.slice(hit.index + hit[0].length).trim(),
+      assertedBy: servid
     })
   }
   return out
@@ -203,11 +228,26 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
     if (prev && here) hops[i].delaySec = Math.round((Date.parse(here) - Date.parse(prev)) / 1000)
   }
 
-  const auth = [...all('authentication-results'), ...all('arc-authentication-results')].flatMap(parseAuth)
+  // ARC results are an intermediary's claim about what SOMEONE ELSE saw, not
+  // the receiver's own check, so they are labelled as such rather than mixed
+  // in as if the delivering MTA had asserted them.
+  const auth = [
+    ...all('authentication-results').flatMap((v) => parseAuth(v)),
+    ...all('arc-authentication-results').flatMap((v) =>
+      parseAuth(v).map((r) => ({ ...r, assertedBy: `${r.assertedBy} (ARC — relayed claim)` }))
+    )
+  ]
   const receivedSpf = first('received-spf')
   if (receivedSpf && !auth.some((a) => a.mechanism === 'spf')) {
     const word = /^\s*(\w+)/.exec(receivedSpf)
-    if (word) auth.push({ mechanism: 'spf', result: word[1].toLowerCase(), detail: 'from Received-SPF' })
+    if (word) {
+      auth.push({
+        mechanism: 'spf',
+        result: word[1].toLowerCase(),
+        detail: receivedSpf.slice(word[0].length).trim(),
+        assertedBy: 'Received-SPF, no asserting host stated'
+      })
+    }
   }
 
   const fromAddr = addressOf(first('from'))
@@ -227,6 +267,36 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
   }
   compare('From', fromAddr, 'Return-Path', returnAddr)
   compare('From', fromAddr, 'Reply-To', replyAddr)
+
+  // A pass is a pass FOR A DOMAIN. SPF and DKIM passing for the bulk sender
+  // that delivered the mail says nothing about the name in the From line, and
+  // a pane reading `SPF pass / DKIM pass` with no domain beside it is the
+  // single easiest way to wave a lookalike through.
+  const fromDomain = domainOf(fromAddr)
+  for (const result of auth) {
+    if (result.result !== 'pass' || !fromDomain) continue
+    const signed = /(?:header\.d|smtp\.mailfrom|header\.from|envelope-from)=<?([^\s;>]+)/i.exec(result.detail)
+    if (!signed) continue
+    const signedDomain = domainOf(signed[1].includes('@') ? signed[1] : `x@${signed[1]}`)
+    if (!signedDomain) continue
+    observations.push(
+      signedDomain === fromDomain
+        ? `${result.mechanism.toUpperCase()} passed for ${signedDomain}, which is the From domain.`
+        : `${result.mechanism.toUpperCase()} passed for ${signedDomain}; From is at ${fromDomain}. They differ.`
+    )
+  }
+
+  // Which copy of a header a client uses is not agreed between clients, so a
+  // second From is not a footnote: it is a fork in what the reader is looking
+  // at, and the analyst has to know it is there.
+  for (const key of ['from', 'return-path', 'reply-to', 'authentication-results', 'subject'] as const) {
+    const count = all(key).length
+    if (count > 1) {
+      observations.push(
+        `There are ${count} ${key} headers. Only the first is shown above; mail clients do not agree on which one wins.`
+      )
+    }
+  }
 
   // The display name is everything before the real address. An address hiding
   // in there is the oldest trick in the file — a client shows the display name
@@ -253,33 +323,79 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
 }
 
 /** The analysis as markdown, for the clipboard or a case note. */
+/**
+ * Quarantine an untrusted value inside inline code.
+ *
+ * Everything this module reports — a subject, a filename, a header value, a
+ * hop's own text — was written by the sender, and the report it lands in gets
+ * written into a note that Obsidian renders as markdown. Left bare, a Subject
+ * of `![[secret-note]]` embeds another note into the case, `<img src=...>`
+ * fires a request the moment the case is opened (which is exactly the beacon
+ * this whole feature exists to avoid), and a `[[link]]` rewires the graph.
+ *
+ * Inline code renders none of those. The fence is a backtick run one longer
+ * than the longest inside the value, so the value cannot close its own
+ * quoting, and newlines are flattened because inline code cannot span lines.
+ */
+export function quoteUntrusted(value: string): string {
+  const flat = value.replace(/[\r\n\u2028\u2029]+/g, ' ')
+  if (!flat) return '(empty)'
+  let longest = 0
+  for (const run of flat.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
+  const fence = '`'.repeat(longest + 1)
+  // A value starting or ending with a backtick needs a space inside the fence.
+  const pad = flat.startsWith('`') || flat.endsWith('`') ? ' ' : ''
+  return `${fence}${pad}${flat}${pad}${fence}`
+}
+
+/** The analysis as markdown. Every sender-controlled value is quarantined. */
 export function formatHeaderReport(a: HeaderAnalysis): string {
   const lines: string[] = ['## Email headers', '', '### Identities', '']
-  for (const id of a.identities) lines.push(`- ${id.label}: ${id.value}`)
+  for (const id of a.identities) lines.push(`- ${id.label}: ${quoteUntrusted(id.value)}`)
   lines.push('', '### Authentication', '')
   if (a.auth.length) {
-    for (const r of a.auth) lines.push(`- ${r.mechanism.toUpperCase()}: ${r.result}${r.detail ? ` — ${r.detail}` : ''}`)
+    for (const r of a.auth) {
+      lines.push(
+        `- ${r.mechanism.toUpperCase()}: ${r.result} — asserted by ${quoteUntrusted(r.assertedBy)}` +
+          `${r.detail ? ` — ${quoteUntrusted(r.detail)}` : ''}`
+      )
+    }
   } else {
     lines.push('Not recorded.')
   }
   lines.push('', '### Path', '')
   if (a.hops.length) {
     for (const h of a.hops) {
-      const delay = h.delaySec === null ? '' : ` (+${h.delaySec}s)`
-      lines.push(`${h.n}. from ${h.from} by ${h.by} with ${h.via} — ${h.at ?? 'no time recorded'}${delay}`)
+      lines.push(
+        `${h.n}. from ${quoteUntrusted(h.from)} by ${quoteUntrusted(h.by)} with ${quoteUntrusted(h.via)} — ` +
+          `${h.at ?? 'no time recorded'}${formatDelay(h.delaySec)}`
+      )
     }
   } else {
     lines.push('Not recorded.')
   }
   lines.push('', '### Observations', '')
-  if (a.observations.length) for (const o of a.observations) lines.push(`- ${o}`)
+  // Observations are OUR sentences, but they interpolate sender-controlled
+  // domains, so they are quarantined too.
+  if (a.observations.length) for (const o of a.observations) lines.push(`- ${quoteUntrusted(o)}`)
   else lines.push('Nothing to compare.')
   lines.push('', '### Indicators', '')
-  if (a.indicators.length) for (const i of a.indicators) lines.push(`- ${i}`)
+  if (a.indicators.length) for (const i of a.indicators) lines.push(`- ${quoteUntrusted(i)}`)
   else lines.push('None found.')
   if (a.notes.length) {
     lines.push('', '### Not in this paste', '')
-    for (const n of a.notes) lines.push(`- ${n}`)
+    for (const n of a.notes) lines.push(`- ${quoteUntrusted(n)}`)
   }
   return lines.join('\n')
+}
+
+/**
+ * A hop gap, rendered. A negative one is a fact about the headers — forged
+ * hops and skewed clocks both produce it — so it is named rather than printed
+ * as the nonsense "(+-3600s)".
+ */
+export function formatDelay(delaySec: number | null): string {
+  if (delaySec === null) return ''
+  if (delaySec < 0) return ` (${Math.abs(delaySec)}s EARLIER than the hop before it — clock skew or a forged hop)`
+  return ` (+${delaySec}s)`
 }

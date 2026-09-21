@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentFacts, extractLinks, hostFacts, skeleton, unwrapUrl } from './phish'
+import { attachmentFacts, contentMismatch, extractLinks, hostFacts, skeleton, sniffType, unwrapUrl } from './phish'
 
 describe('unwrapUrl', () => {
   it('unwraps Microsoft Safe Links back to the address the sender wrote', () => {
@@ -68,7 +68,7 @@ describe('hostFacts', () => {
 
 describe('extractLinks', () => {
   const html = '<a href="http://evil.test/go">https://paypal.test/account</a><img src="http://track.example/p.gif">'
-  const links = extractLinks('Visit https://paypa1.test/payment', html, ['paypal'])
+  const { links } = extractLinks('Visit https://paypa1.test/payment', html, ['paypal'])
 
   it('finds links in the plain text and in the HTML source', () => {
     expect(links.map((l) => l.raw).sort()).toEqual([
@@ -95,7 +95,8 @@ describe('attachmentFacts', () => {
     contentType: 'application/octet-stream',
     size: 1,
     bytes: new Uint8Array(1),
-    inline
+    inline,
+    undecodable: false
   })
 
   it('names macro-capable, executable and archive types', () => {
@@ -115,5 +116,106 @@ describe('attachmentFacts', () => {
   it('never calls anything malicious', () => {
     const all = [att('invoice.docm'), att('a.exe'), att('b.zip')].flatMap(attachmentFacts)
     expect(all.join(' ')).not.toMatch(/malicious|phish|suspicious|dangerous/i)
+  })
+})
+
+describe('link evasions that used to mislead or hide', () => {
+  const links = (text: string, html: string, brands: string[] = []) => extractLinks(text, html, brands).links
+
+  it('a gateway name in the QUERY does not make the link a gateway link', () => {
+    // Substring matching handed the attacker the label: this reported
+    // "unwrapped from Microsoft Safe Links → paypal.test" for a link that
+    // goes to evil.test.
+    const crafted = 'https://evil.test/?x=safelinks.protection.outlook.com&url=https%3A%2F%2Fpaypal.test'
+    expect(unwrapUrl(crafted)).toEqual({ target: crafted, wrappedBy: '' })
+  })
+
+  it('finds an unquoted href', () => {
+    expect(links('', '<a href=http://evil.test/go>Sign in</a>').map((l) => l.target)).toEqual(['http://evil.test/go'])
+  })
+
+  it('decodes character references before reading the URL', () => {
+    const html = '<a href="http&#58;&#x2F;&#x2F;evil.test&#x2F;go">x</a>'
+    expect(links('', html).map((l) => l.target)).toEqual(['http://evil.test/go'])
+  })
+
+  it('keeps a non-http link instead of reporting "none found"', () => {
+    const found = links('', '<a href="data:text/html;base64,PGh0bWw+">Open</a>')
+    expect(found).toHaveLength(1)
+    expect(found[0].flags.join(' ')).toContain('data: URL')
+  })
+
+  it('finds a URL in a form action, a CSS url() and a srcset', () => {
+    const html =
+      '<form action="http://collect.test/p"></form>' +
+      '<div style="background:url(http://beacon.test/b.gif)"></div>' +
+      '<img srcset="http://cdn.test/a.png 1x, http://cdn.test/b.png 2x">'
+    const targets = links('', html)
+      .map((l) => l.target)
+      .sort()
+    expect(targets).toContain('http://collect.test/p')
+    expect(targets).toContain('http://beacon.test/b.gif')
+    expect(targets).toContain('http://cdn.test/a.png')
+  })
+
+  it('names userinfo for what it is', () => {
+    const found = links('', '<a href="https://paypal.test@evil.test/go">x</a>')
+    expect(found[0].flags.join(' ')).toContain('username, not the site')
+  })
+
+  it('folds a literal Unicode host, which URL parsing would have punycoded away', () => {
+    const found = links('', '<a href="https://рaypal.test/login">x</a>', ['paypal'])
+    expect(found[0].flags).toContain('reads as "paypal" once look-alike characters are folded')
+  })
+
+  it('compares against the right label under a two-part suffix', () => {
+    expect(hostFacts('login.paypa1.co.uk', ['paypal'])).toContain(
+      'reads as "paypal" once look-alike characters are folded'
+    )
+  })
+
+  it('says nothing about a brand listed only as a name on its own domain', () => {
+    // With bare names there is nothing to tell the real site from a look-alike
+    // TLD, so the tool stays quiet rather than crying wolf on genuine mail.
+    expect(hostFacts('paypal.test', ['paypal'])).toEqual([])
+  })
+
+  it('flags the brand on another domain once a known-good domain is listed', () => {
+    expect(hostFacts('paypal.co', ['paypal.test'])).toContain(
+      'the name "paypal" on paypal.co, which is not paypal.test or a subdomain of it'
+    )
+    expect(hostFacts('mail.paypal.test', ['paypal.test'])).toEqual([])
+  })
+
+  it('does not hang on thousands of unclosed anchors', () => {
+    const html = '<a href="http://evil.test/go">text'.repeat(20_000)
+    const started = performance.now()
+    const found = links('', html)
+    expect(performance.now() - started).toBeLessThan(2000)
+    expect(found.map((l) => l.target)).toEqual(['http://evil.test/go'])
+  })
+
+  it('caps the link list and says how many it left out', () => {
+    const html = Array.from({ length: 600 }, (_, i) => `<a href="http://e${i}.test/">x</a>`).join('')
+    const out = extractLinks('', html, [])
+    expect(out.links).toHaveLength(500)
+    expect(out.dropped).toBe(100)
+  })
+})
+
+describe('what a file actually is', () => {
+  const bytes = (...b: number[]) => Uint8Array.from(b)
+
+  it('reads the type from the first bytes', () => {
+    expect(sniffType(bytes(0x4d, 0x5a, 0x90, 0x00))).toBe('Windows executable (MZ)')
+    expect(sniffType(bytes(0x25, 0x50, 0x44, 0x46))).toBe('PDF')
+    expect(sniffType(bytes(0x01, 0x02))).toBe('')
+  })
+
+  it('states the disagreement between the name and the bytes', () => {
+    expect(contentMismatch('invoice.pdf', 'application/pdf', 'Windows executable (MZ)')).toBe(
+      'named .pdf but the bytes begin as Windows executable (MZ)'
+    )
+    expect(contentMismatch('invoice.pdf', 'application/pdf', 'PDF')).toBe('')
   })
 })

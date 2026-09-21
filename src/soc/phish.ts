@@ -1,6 +1,6 @@
 import { type Attachment, hashBytes, parseEml } from './eml'
-import { type HeaderAnalysis, analyseHeaders, formatHeaderReport } from './emailHeaders'
-import { defangIoc } from './ioc'
+import { type HeaderAnalysis, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
+import { defangIoc, extractIocsFromText, formatIocLine } from './ioc'
 import { decodePercentEscapes } from './toolbox'
 
 /**
@@ -32,15 +32,26 @@ export interface LinkFinding {
   shownAs: string
 }
 
-const GATEWAYS: { name: string; test: RegExp; extract(url: string): string }[] = [
+/**
+ * Gateways are matched on the HOST, never on a substring of the URL.
+ *
+ * Substring matching handed the attacker the label: a link to
+ * `https://evil.test/?x=safelinks.protection.outlook.com&url=https://paypal.test`
+ * was reported as "unwrapped from Microsoft Safe Links → paypal.test", so the
+ * analysis named a brand domain as the destination of a link that goes
+ * nowhere near it. The host is the only part of a URL the attacker does not
+ * control on the defender's behalf.
+ */
+const GATEWAYS: { name: string; host: RegExp; path?: RegExp; extract(url: string): string }[] = [
   {
     name: 'Microsoft Safe Links',
-    test: /safelinks\.protection\.outlook\.com/i,
+    host: /(^|\.)safelinks\.protection\.outlook\.com$/i,
     extract: (url) => new URL(url).searchParams.get('url') ?? ''
   },
   {
     name: 'Google redirect',
-    test: /\/\/(www\.)?google\.[a-z.]+\/url/i,
+    host: /(^|\.)google\.[a-z.]+$/i,
+    path: /^\/url/i,
     extract: (url) => {
       const params = new URL(url).searchParams
       return params.get('q') ?? params.get('url') ?? ''
@@ -48,12 +59,12 @@ const GATEWAYS: { name: string; test: RegExp; extract(url: string): string }[] =
   },
   {
     name: 'Barracuda LinkProtect',
-    test: /linkprotect\.cudasvc\.com/i,
+    host: /(^|\.)linkprotect\.cudasvc\.com$/i,
     extract: (url) => new URL(url).searchParams.get('a') ?? ''
   },
   {
     name: 'Proofpoint URL Defense',
-    test: /urldefense\.(com|proofpoint\.com)/i,
+    host: /(^|\.)urldefense(\.proofpoint)?\.com$/i,
     extract: (url) => {
       // v3: …/v3/__<real url>__;<base64 of replaced chars>!!…
       const v3 = /\/v3\/__(.+?)__;/.exec(url)
@@ -65,7 +76,7 @@ const GATEWAYS: { name: string; test: RegExp; extract(url: string): string }[] =
   },
   {
     name: 'Mimecast',
-    test: /protect(-[a-z0-9]+)?\.mimecast\.com/i,
+    host: /(^|\.)protect(-[a-z0-9]+)?\.mimecast\.com$/i,
     extract: () => '' // the target is an opaque id; there is nothing to unwrap
   }
 ]
@@ -81,7 +92,14 @@ export function unwrapUrl(url: string): { target: string; wrappedBy: string } {
   let current = url
   let wrappedBy = ''
   for (let i = 0; i < 5; i++) {
-    const gateway = GATEWAYS.find((g) => g.test.test(current))
+    let parsed: URL
+    try {
+      parsed = new URL(current)
+    } catch {
+      break
+    }
+    const host = parsed.hostname.toLowerCase()
+    const gateway = GATEWAYS.find((g) => g.host.test(host) && (!g.path || g.path.test(parsed.pathname)))
     if (!gateway) break
     let next = ''
     try {
@@ -153,64 +171,269 @@ function editDistanceAtMostOne(a: string, b: string): boolean {
   return edits + (a.length - i) + (b.length - j) <= 1
 }
 
-/** The registrable-ish label: `login.paypa1.test` → `paypa1`. */
+const URL_RE = /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s<>"'`)\]]+/gi
+/** Every HTML attribute that can carry a URL a click or a load will follow. */
+const ATTR_RE = /\b(?:href|src|action|background|poster|formaction|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))/gi
+const CSS_URL_RE = /url\(\s*["']?([^)"']+)/gi
+const SRCSET_RE = /\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
+/**
+ * Anchors, with every scan BOUNDED.
+ *
+ * The unbounded lazy form was quadratic: a body of anchors with no closing
+ * tag made the regex engine restart the tail scan from every one of them, and
+ * fifty thousand of them froze the UI thread for tens of seconds. Bounding it
+ * fails toward "the anchor text was not compared", which is an absence the
+ * report states — never a fabricated match.
+ */
+const ANCHOR_RE =
+  /<a\b[^>]{0,2000}?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))[^>]{0,2000}?>([\s\S]{0,2000}?)<\/a>/gi
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  sol: '/',
+  commat: '@',
+  colon: ':',
+  period: '.',
+  lpar: '(',
+  rpar: ')',
+  tab: '\t',
+  newline: '\n',
+  num: '#'
+}
+
+/**
+ * Decode HTML character references.
+ *
+ * A browser decodes these before it follows the link, so a reader that only
+ * knows `&amp;` sees a different URL from the one the victim visits — and an
+ * href written entirely in `&#x2F;` and `&#64;` was dropped as "not a URL"
+ * altogether, which reported a phishing mail as containing no links at all.
+ */
+export function decodeEntities(text: string): string {
+  return text.replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z]{2,10});/gi, (whole, body: string) => {
+    if (body[0] === '#') {
+      const code = body[1] === 'x' || body[1] === 'X' ? Number.parseInt(body.slice(2), 16) : Number(body.slice(1))
+      if (!Number.isFinite(code) || code < 1 || code > 0x10ffff) return whole
+      try {
+        return String.fromCodePoint(code)
+      } catch {
+        return whole
+      }
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? whole
+  })
+}
+
+/** Tabs and newlines inside a URL are stripped by the parser, so strip them here too. */
+function normaliseUrl(value: string): string {
+  return decodeEntities(value)
+    .replace(/[\t\r\n]/g, '')
+    .trim()
+}
+
+/**
+ * Suffixes under which the registrable name is the THIRD label from the right.
+ *
+ * ponytail: a short hand-written list, not the public suffix list — that is a
+ * 15k-entry file that would have to ship and be kept current, and this is a
+ * heuristic feeding a stated fact, not a gate. Names the ceiling: a look-alike
+ * under a multi-label suffix not on this list is compared against the wrong
+ * label and simply gets no fact, which is an absence, not a wrong answer.
+ */
+const TWO_LABEL_SUFFIXES = new Set([
+  'co.uk',
+  'org.uk',
+  'me.uk',
+  'gov.uk',
+  'ac.uk',
+  'net.uk',
+  'sch.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'gov.au',
+  'edu.au',
+  'id.au',
+  'co.nz',
+  'net.nz',
+  'org.nz',
+  'govt.nz',
+  'co.za',
+  'org.za',
+  'net.za',
+  'co.jp',
+  'or.jp',
+  'ne.jp',
+  'ac.jp',
+  'go.jp',
+  'co.kr',
+  'or.kr',
+  'com.br',
+  'com.mx',
+  'com.ar',
+  'com.sg',
+  'com.hk',
+  'com.cn',
+  'net.cn',
+  'org.cn',
+  'gov.cn',
+  'co.in',
+  'net.in',
+  'org.in',
+  'com.tr',
+  'com.tw',
+  'co.il',
+  'com.pl',
+  'com.ua'
+])
+
+/** The registrable-ish label: `login.paypa1.co.uk` → `paypa1`. */
 function brandLabel(host: string): string {
-  const parts = host.toLowerCase().split('.').filter(Boolean)
-  return parts.length >= 2 ? parts[parts.length - 2] : (parts[0] ?? '')
+  const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
+  if (parts.length < 2) return parts[0] ?? ''
+  const lastTwo = parts.slice(-2).join('.')
+  if (parts.length >= 3 && TWO_LABEL_SUFFIXES.has(lastTwo)) return parts[parts.length - 3]
+  return parts[parts.length - 2]
 }
 
 /**
  * Stated facts about a host. `brands` is the analyst's own list of names worth
  * impersonating — empty by default, because a shipped brand list would be this
  * plugin deciding whose customers matter.
+ *
+ * `rawHost` is the authority exactly as it appeared in the mail, BEFORE the
+ * URL parser normalised it. It matters: `new URL()` punycodes a Unicode host,
+ * so by the time the parsed host arrives the confusable characters are already
+ * gone and folding it could never match anything. Both spellings are folded.
  */
-export function hostFacts(host: string, brands: string[]): string[] {
+export function hostFacts(host: string, brands: string[], rawHost = ''): string[] {
   const facts: string[] = []
-  if (!host) return facts
-  if (/^xn--/i.test(host) || host.split('.').some((l) => /^xn--/i.test(l))) {
+  const subject = (host || rawHost).replace(/\.$/, '')
+  if (!subject) return facts
+  if (host.endsWith('.') || rawHost.endsWith('.')) {
+    facts.push('trailing dot on the host — the same site, written so it does not match a block list')
+  }
+  if (subject.split('.').some((label) => /^xn--/i.test(label))) {
     facts.push('punycode host — the name shown in a client may not be the name here')
   }
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) facts.push('link points at a bare IP address, not a name')
-  const label = brandLabel(host)
-  const folded = skeleton(label)
-  for (const brand of brands) {
-    const target = skeleton(brand.toLowerCase())
-    if (!target || label === brand.toLowerCase()) continue
-    if (folded === target) facts.push(`reads as "${brand}" once look-alike characters are folded`)
-    else if (editDistanceAtMostOne(folded, target)) facts.push(`one character away from "${brand}"`)
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(subject)) facts.push('link points at a bare IP address, not a name')
+  const labels = [brandLabel(subject), rawHost ? brandLabel(rawHost) : ''].filter(Boolean)
+  const said = new Set<string>()
+  for (const entry of brands) {
+    // An entry may be a bare name (`paypal`) or a known-good domain
+    // (`paypal.test`). Only a domain entry lets this tell the real site from
+    // the same name on another TLD — with bare names alone there is nothing
+    // to compare against, so that fact stays unsaid rather than firing on
+    // every genuine mail from the brand.
+    const isDomain = entry.includes('.')
+    const brand = isDomain ? brandLabel(entry) : entry.toLowerCase()
+    const target = skeleton(brand)
+    if (!target) continue
+    const knownGood = isDomain && (subject === entry.toLowerCase() || subject.endsWith(`.${entry.toLowerCase()}`))
+    if (knownGood) continue
+    for (const label of labels) {
+      const folded = skeleton(label)
+      let fact = ''
+      if (label === brand) {
+        if (!isDomain) continue
+        fact = `the name "${brand}" on ${subject}, which is not ${entry} or a subdomain of it`
+      } else if (folded === target) {
+        fact = `reads as "${brand}" once look-alike characters are folded`
+      } else if (editDistanceAtMostOne(folded, target)) {
+        fact = `one character away from "${brand}"`
+      }
+      if (fact && !said.has(fact)) {
+        said.add(fact)
+        facts.push(fact)
+      }
+    }
   }
   return facts
 }
 
-const URL_RE = /\bhttps?:\/\/[^\s<>"')]+/gi
-const HREF_RE = /\b(?:href|src)\s*=\s*["']([^"']+)["']/gi
+/** Cap on links carried into the report, so one mail cannot render forever. */
+const MAX_LINKS = 500
 
-/** Every link in the mail: bare ones in the text, and the href/src in the HTML source. */
-export function extractLinks(text: string, html: string, brands: string[]): LinkFinding[] {
+/**
+ * Every link in the mail: bare ones in the text AND in the HTML, plus every
+ * URL-bearing attribute, CSS `url()` and `srcset` candidate.
+ */
+export function extractLinks(text: string, html: string, brands: string[]): { links: LinkFinding[]; dropped: number } {
   const raws = new Set<string>()
-  for (const m of text.matchAll(URL_RE)) raws.add(m[0])
-  for (const m of html.matchAll(HREF_RE)) {
-    const value = m[1].replace(/&amp;/gi, '&').trim()
-    if (/^https?:\/\//i.test(value)) raws.add(value)
+  const add = (value: string): void => {
+    const url = normaliseUrl(value)
+    // Any scheme, not just http(s): a mail whose only link is `data:` or
+    // `javascript:` used to report "None found.", which reads as a clean mail.
+    if (/^[a-z][a-z0-9+.-]{1,15}:/i.test(url)) raws.add(url)
   }
-  // Anchor text that is itself a URL: `<a href="http://evil">http://paypal.test</a>`
-  // is the oldest display trick there is, so the two are compared.
-  const shown = new Map<string, string>()
-  for (const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
-    const label = m[2].replace(/<[^>]*>/g, '').trim()
-    if (/^https?:\/\//i.test(label)) shown.set(m[1].replace(/&amp;/gi, '&').trim(), label)
+  // Bare URLs in BOTH bodies. The HTML is scanned with its tags stripped, so a
+  // URL sitting in visible text or in a <meta refresh> content= is not missed.
+  for (const m of text.matchAll(URL_RE)) add(m[0])
+  for (const m of decodeEntities(html)
+    .replace(/<[^>]{0,2000}>/g, ' ')
+    .matchAll(URL_RE)) {
+    add(m[0])
+  }
+  for (const m of html.matchAll(ATTR_RE)) add(m[1] ?? m[2] ?? m[3] ?? '')
+  for (const m of html.matchAll(CSS_URL_RE)) add(m[1])
+  for (const m of html.matchAll(SRCSET_RE)) {
+    for (const candidate of (m[1] ?? m[2] ?? '').split(',')) add(candidate.trim().split(/\s+/)[0] ?? '')
   }
 
+  // Anchor text that is itself a URL is compared against where the link goes.
+  // Keyed on the NORMALISED href so an entity-encoded or unquoted attribute
+  // still lines up with the row it belongs to.
+  const shown = new Map<string, string>()
+  const hrefs = new Set<string>()
+  for (const m of html.matchAll(ANCHOR_RE)) {
+    const href = normaliseUrl(m[1] ?? m[2] ?? m[3] ?? '')
+    if (href) hrefs.add(href)
+    const label = normaliseUrl(
+      decodeEntities(m[4] ?? '')
+        .replace(/<[^>]{0,500}>/g, '')
+        .trim()
+    )
+    if (href && /^https?:\/\//i.test(label)) shown.set(href, label)
+  }
+  // The text of an anchor is what the victim is SHOWN, not anywhere they can
+  // go. Listing it beside the real destinations would put the decoy in the
+  // indicator list as though the mail pointed there — so it is dropped unless
+  // it is also a destination somewhere in the message.
+  for (const label of shown.values()) if (!hrefs.has(label)) raws.delete(label)
+
+  const all = [...raws]
+  const kept = all.slice(0, MAX_LINKS)
   const out: LinkFinding[] = []
-  for (const raw of raws) {
+  for (const raw of kept) {
     const { target, wrappedBy } = unwrapUrl(raw)
+    const scheme = (/^([a-z][a-z0-9+.-]{1,15}):/i.exec(target)?.[1] ?? '').toLowerCase()
+    // The authority as WRITTEN, before the parser punycodes or lowercases it.
+    const rawHost = (/^[a-z][a-z0-9+.-]{1,15}:\/\/(?:[^/?#@]*@)?([^/?#:]+)/i.exec(target)?.[1] ?? '').toLowerCase()
     let host = ''
+    let userinfo = ''
     try {
-      host = new URL(target).hostname.toLowerCase()
+      const parsed = new URL(target)
+      host = parsed.hostname.toLowerCase()
+      userinfo = parsed.username
     } catch {
       host = ''
     }
-    const flags = hostFacts(host, brands)
+    const flags = hostFacts(host, brands, rawHost)
+    if (userinfo) {
+      flags.push(`text before the @ is a username, not the site — this link goes to ${host || 'an unreadable host'}`)
+    }
+    if (scheme && !['http', 'https'].includes(scheme)) {
+      flags.push(
+        scheme === 'data'
+          ? 'data: URL — the page is carried inside the link itself, so there is no host to look up'
+          : `${scheme}: link, not a web address`
+      )
+    }
     const label = shown.get(raw) ?? ''
     let labelHost = ''
     try {
@@ -223,7 +446,7 @@ export function extractLinks(text: string, html: string, brands: string[]): Link
     }
     out.push({ raw, target, wrappedBy, host, flags, shownAs: label })
   }
-  return out
+  return { links: out, dropped: all.length - kept.length }
 }
 
 const MACRO_CAPABLE = /\.(docm|dotm|xlsm|xltm|xlam|pptm|potm|ppam|xls|doc|ppt)$/i
@@ -245,6 +468,21 @@ export function attachmentFacts(attachment: Attachment): string[] {
   return facts
 }
 
+/** What an attachment turns out to be, beyond what it claims. */
+export interface AttachmentReport {
+  filename: string
+  contentType: string
+  size: number
+  /** Hex, or '' when the part could not be decoded — never the empty-file hash. */
+  sha256: string
+  sha1: string
+  /** What the first bytes say it is, independent of name and declared type. */
+  sniffed: string
+  facts: string[]
+  /** Defanged indicators found INSIDE the file's bytes, kept separate from the mail's own. */
+  inside: string[]
+}
+
 /** Everything the analyser knows about one message. */
 export interface PhishReport {
   headers: HeaderAnalysis
@@ -252,67 +490,258 @@ export interface PhishReport {
   text: string
   htmlSource: string
   links: LinkFinding[]
-  attachments: {
-    filename: string
-    contentType: string
-    size: number
-    sha256: string
-    sha1: string
-    facts: string[]
-  }[]
+  /** Links beyond the render cap, counted rather than silently dropped. */
+  droppedLinks: number
+  attachments: AttachmentReport[]
+  /** Look-alike facts about the SENDER's domain, same folding the links get. */
+  senderFacts: string[]
+  /**
+   * Defanged indicators, built from the PARSED message.
+   *
+   * Not from the raw paste: the raw text of a base64 body is base64, so
+   * scanning it found indicators that are not in the mail and missed every
+   * one that is — including, on a quoted-printable body, the phishing URL
+   * itself, because a soft line break had cut it in half.
+   */
+  indicators: string[]
   notes: string[]
 }
 
 /**
- * Read one message end to end: headers, body, links, attachments.
+ * What the first bytes say the file is, whatever it is named or declared.
  *
- * Async only because attachments are hashed — every hash is computed HERE, so
- * a hash printed next to a file is one this machine worked out from the bytes,
- * never one a tool reported. Nothing is fetched.
+ * ponytail: a short table of the signatures that actually turn up on reported
+ * mail, not a libmagic port. It answers one question — does the content agree
+ * with the label — and an unrecognised file returns '' so the report says
+ * nothing rather than guessing.
  */
+const SIGNATURES: { magic: number[]; label: string }[] = [
+  { magic: [0x4d, 0x5a], label: 'Windows executable (MZ)' },
+  { magic: [0x7f, 0x45, 0x4c, 0x46], label: 'Linux executable (ELF)' },
+  { magic: [0x25, 0x50, 0x44, 0x46], label: 'PDF' },
+  { magic: [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1], label: 'legacy Office document (OLE)' },
+  { magic: [0x50, 0x4b, 0x03, 0x04], label: 'ZIP archive or modern Office document' },
+  { magic: [0x50, 0x4b, 0x05, 0x06], label: 'empty ZIP archive' },
+  { magic: [0x52, 0x61, 0x72, 0x21], label: 'RAR archive' },
+  { magic: [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c], label: '7-Zip archive' },
+  { magic: [0x1f, 0x8b], label: 'gzip archive' },
+  { magic: [0xff, 0xd8, 0xff], label: 'JPEG image' },
+  { magic: [0x89, 0x50, 0x4e, 0x47], label: 'PNG image' },
+  { magic: [0x47, 0x49, 0x46, 0x38], label: 'GIF image' },
+  { magic: [0x7b, 0x5c, 0x72, 0x74, 0x66], label: 'RTF document' },
+  { magic: [0x23, 0x21], label: 'script with a shebang' }
+]
+
+export function sniffType(bytes: Uint8Array): string {
+  for (const signature of SIGNATURES) {
+    if (signature.magic.every((byte, i) => bytes[i] === byte)) return signature.label
+  }
+  return ''
+}
+
+const EXT_EXPECTS: { ext: RegExp; label: RegExp }[] = [
+  { ext: /\.pdf$/i, label: /PDF/ },
+  { ext: /\.(docx|xlsx|pptx|zip|jar|apk)$/i, label: /ZIP/ },
+  { ext: /\.(doc|xls|ppt|msg)$/i, label: /OLE/ },
+  { ext: /\.(jpg|jpeg)$/i, label: /JPEG/ },
+  { ext: /\.png$/i, label: /PNG/ },
+  { ext: /\.gif$/i, label: /GIF/ },
+  { ext: /\.rtf$/i, label: /RTF/ },
+  { ext: /\.(rar)$/i, label: /RAR/ },
+  { ext: /\.7z$/i, label: /7-Zip/ },
+  { ext: /\.gz$/i, label: /gzip/ }
+]
+
+/** One fact when the bytes disagree with the name or the declared type. */
+export function contentMismatch(filename: string, contentType: string, sniffed: string): string {
+  if (!sniffed) return ''
+  const expectation = EXT_EXPECTS.find((e) => e.ext.test(filename))
+  if (expectation && !expectation.label.test(sniffed)) {
+    return `named ${filename.slice(filename.lastIndexOf('.'))} but the bytes begin as ${sniffed}`
+  }
+  if (/pdf$/i.test(contentType) && !/PDF/.test(sniffed)) {
+    return `declared ${contentType} but the bytes begin as ${sniffed}`
+  }
+  if (/^image\//i.test(contentType) && !/image/i.test(sniffed)) {
+    return `declared ${contentType} but the bytes begin as ${sniffed}`
+  }
+  return ''
+}
+
+/** Bytes read as text for indicator extraction. Capped: this is a scan, not a load. */
+const STRINGS_CAP = 1_000_000
+
 export async function analysePhishing(raw: string, owned: string[], brands: string[]): Promise<PhishReport> {
   const eml = parseEml(raw)
   const headers = analyseHeaders(raw, owned)
-  const links = extractLinks(eml.text, eml.html, brands)
-  const attachments = await Promise.all(
-    eml.attachments.map(async (a) => ({
-      filename: a.filename,
-      contentType: a.contentType,
-      size: a.size,
-      sha256: await hashBytes(a.bytes),
-      sha1: await hashBytes(a.bytes, 'SHA-1'),
-      facts: attachmentFacts(a)
-    }))
-  )
-  return { headers, text: eml.text, htmlSource: eml.html, links, attachments, notes: eml.notes }
+  const { links, dropped } = extractLinks(eml.text, eml.html, brands)
+  const notes = [...eml.notes]
+  if (dropped > 0) notes.push(`${dropped} further links are in this message and are not listed.`)
+
+  const attachments = await Promise.all(eml.attachments.map((a) => readAttachment(a, owned)))
+
+  // The sender's own domain gets the folding the link hosts get. Five of the
+  // shipped classifications are impersonation of one kind or another, and the
+  // domain being impersonated is usually in the From line, not in a link.
+  const fromValue = headers.identities.find((i) => i.label === 'From')?.value ?? ''
+  const at = fromValue.lastIndexOf('@')
+  const senderHost =
+    at < 0
+      ? ''
+      : fromValue
+          .slice(at + 1)
+          .replace(/[>\s].*$/, '')
+          .toLowerCase()
+  const senderFacts = senderHost ? hostFacts(senderHost, brands, senderHost) : []
+
+  // Built once, from what was actually parsed, and used by both the copy
+  // button and the case — one source, so the two can never disagree.
+  const seen = new Set<string>()
+  const indicators: string[] = []
+  const push = (line: string): void => {
+    if (line && !seen.has(line)) {
+      seen.add(line)
+      indicators.push(line)
+    }
+  }
+  const headerBlock = raw.split(/\n\s*\n/)[0] ?? ''
+  for (const ioc of extractIocsFromText(`${headerBlock}\n${eml.text}`, [])) push(formatIocLine(ioc, owned))
+  for (const link of links) {
+    if (link.target) push(formatIocLine({ type: 'url', value: link.target }, owned))
+  }
+  for (const attachment of attachments) {
+    if (attachment.sha256) push(formatIocLine({ type: 'hash', value: attachment.sha256 }, owned))
+  }
+
+  return {
+    headers,
+    text: eml.text,
+    htmlSource: eml.html,
+    links,
+    droppedLinks: dropped,
+    attachments,
+    senderFacts,
+    indicators,
+    notes: dedupe(notes)
+  }
 }
 
-/** The whole analysis as markdown, for the clipboard or a case description. */
+/** Notes repeat once per malformed part; a 4MB mail produced 120,000 identical lines. */
+function dedupe(lines: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const line of lines) {
+    if (seen.has(line)) continue
+    seen.add(line)
+    out.push(line)
+    if (out.length >= 40) {
+      out.push('Further parser notes are not listed.')
+      break
+    }
+  }
+  return out
+}
+
+async function readAttachment(a: Attachment, owned: string[]): Promise<AttachmentReport> {
+  const facts = attachmentFacts(a)
+  if (a.undecodable) {
+    // Nothing was read, so nothing is claimed. Hashing zero bytes would print
+    // the SHA-256 of the empty string under "computed here from the bytes in
+    // the file", and that digest reads as a clean result in any sandbox for a
+    // payload no one has looked at.
+    return {
+      filename: a.filename,
+      contentType: a.contentType,
+      size: 0,
+      sha256: '',
+      sha1: '',
+      sniffed: '',
+      facts: [...facts, 'this part could not be decoded, so its size, hashes and type are not recorded'],
+      inside: []
+    }
+  }
+  const sniffed = sniffType(a.bytes)
+  const mismatch = contentMismatch(a.filename, a.contentType, sniffed)
+  return {
+    filename: a.filename,
+    contentType: a.contentType,
+    size: a.size,
+    sha256: await hashBytes(a.bytes),
+    sha1: await hashBytes(a.bytes, 'SHA-1'),
+    sniffed,
+    facts: mismatch ? [mismatch, ...facts] : facts,
+    inside: stringsInside(a.bytes, owned)
+  }
+}
+
+/**
+ * Indicators carried INSIDE an attachment's bytes.
+ *
+ * Kept as its own list and never merged into the mail's own links: where an
+ * indicator was found is half of what it means, and an analyst reading "this
+ * URL was in the message" when it was really inside a spreadsheet has been
+ * told something untrue.
+ */
+function stringsInside(bytes: Uint8Array, owned: string[]): string[] {
+  if (!bytes.length) return []
+  const slice = bytes.length > STRINGS_CAP ? bytes.subarray(0, STRINGS_CAP) : bytes
+  let text = ''
+  try {
+    text = new TextDecoder('utf-8').decode(slice)
+  } catch {
+    return []
+  }
+  return extractIocsFromText(text, [])
+    .slice(0, 100)
+    .map((ioc) => formatIocLine(ioc, owned))
+}
+
+/**
+ * The whole analysis as markdown, for the clipboard or a case description.
+ *
+ * Every sender-controlled value goes through quoteUntrusted, because this text
+ * is written into a note Obsidian renders: a filename of `![[x]]` would embed
+ * a note into the case and an `<img>` in a subject would fire a request the
+ * moment it was opened.
+ */
 export function formatPhishReport(report: PhishReport): string {
-  const lines = [formatHeaderReport(report.headers), '', '### Links', '']
+  const lines = [formatHeaderReport(report.headers), '']
+  if (report.senderFacts.length) {
+    lines.push('### Sender domain', '')
+    for (const fact of report.senderFacts) lines.push(`- ${quoteUntrusted(fact)}`)
+    lines.push('')
+  }
+  lines.push('### Links', '')
   if (report.links.length) {
     for (const link of report.links) {
       const wrapped = link.wrappedBy ? ` (unwrapped from ${link.wrappedBy})` : ''
-      lines.push(`- ${defangIoc(link.target, 'url')}${wrapped}`)
-      for (const flag of link.flags) lines.push(`  - ${flag}`)
+      lines.push(`- ${quoteUntrusted(defangIoc(link.target, 'url'))}${wrapped}`)
+      for (const flag of link.flags) lines.push(`  - ${quoteUntrusted(flag)}`)
     }
+    if (report.droppedLinks > 0) lines.push(`- ${report.droppedLinks} further links are not listed.`)
   } else {
     lines.push('None found.')
   }
   lines.push('', '### Attachments', '')
   if (report.attachments.length) {
     for (const a of report.attachments) {
-      lines.push(`- ${a.filename} — ${a.contentType}, ${a.size} bytes`)
-      lines.push(`  - SHA-256 ${a.sha256} (computed here)`)
-      lines.push(`  - SHA-1 ${a.sha1} (computed here)`)
-      for (const fact of a.facts) lines.push(`  - ${fact}`)
+      const size = a.sha256 ? `${a.size} bytes` : 'size not recorded'
+      lines.push(`- ${quoteUntrusted(a.filename)} — ${quoteUntrusted(a.contentType)}, ${size}`)
+      lines.push(`  - SHA-256 ${a.sha256 || 'not recorded'}${a.sha256 ? ' (computed here)' : ''}`)
+      lines.push(`  - SHA-1 ${a.sha1 || 'not recorded'}${a.sha1 ? ' (computed here)' : ''}`)
+      if (a.sniffed) lines.push(`  - bytes begin as ${a.sniffed}`)
+      for (const fact of a.facts) lines.push(`  - ${quoteUntrusted(fact)}`)
+      for (const found of a.inside) lines.push(`  - found inside the file: ${quoteUntrusted(found)}`)
     }
   } else {
     lines.push('None.')
   }
+  lines.push('', '### Indicators', '')
+  if (report.indicators.length) for (const i of report.indicators) lines.push(`- ${quoteUntrusted(i)}`)
+  else lines.push('None found.')
   if (report.notes.length) {
     lines.push('', '### Parser notes', '')
-    for (const note of report.notes) lines.push(`- ${note}`)
+    for (const note of report.notes) lines.push(`- ${quoteUntrusted(note)}`)
   }
   return lines.join('\n')
 }

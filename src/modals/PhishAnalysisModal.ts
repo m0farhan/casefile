@@ -22,9 +22,15 @@ import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
  * you opened it. No remote image is fetched, no link is resolved, nothing
  * leaves the vault.
  */
+/** How much body is painted on screen. The full text always reaches the report. */
+const BODY_PREVIEW = 4000
+
 class PhishAnalysisModal extends Modal {
   private report: PhishReport | null = null
   private raw = ''
+  /** Monotonic: a slow run must never overwrite the result of a newer one. */
+  private runId = 0
+  private debounce: number | null = null
   /** Ids the analyst ticked. They become tags on the case, nothing more. */
   private readonly chosen = new Set<string>()
 
@@ -71,17 +77,28 @@ class PhishAnalysisModal extends Modal {
     const caseBtn = new ButtonComponent(row).setButtonText('Create case').setCta().setDisabled(true)
 
     const refresh = safeAsync(async () => {
-      this.raw = input.value
-      this.report = this.raw.trim()
-        ? await analysePhishing(this.raw, this.plugin.settings.ownedAssets, this.plugin.settings.phishBrands)
+      const run = ++this.runId
+      const raw = input.value
+      const report = raw.trim()
+        ? await analysePhishing(raw, this.plugin.settings.ownedAssets, this.plugin.settings.phishBrands)
         : null
-      copyBtn.setDisabled(!this.report)
-      caseBtn.setDisabled(!this.report)
-      iocBtn.setDisabled(!this.report?.headers.indicators.length)
+      // A newer keystroke already started: drop this result on the floor
+      // rather than painting a stale message over the current one.
+      if (run !== this.runId) return
+      this.raw = raw
+      this.report = report
+      copyBtn.setDisabled(!report)
+      caseBtn.setDisabled(!report)
+      iocBtn.setDisabled(!report?.indicators.length)
       this.render(out)
     })
 
-    input.addEventListener('input', refresh)
+    // Debounced: the full parse hashes every attachment, and running it on
+    // each keystroke of a pasted 4MB message locks the UI thread.
+    input.addEventListener('input', () => {
+      if (this.debounce !== null) window.clearTimeout(this.debounce)
+      this.debounce = window.setTimeout(refresh, 300)
+    })
     loadBtn.onClick(
       safeAsync(async () => {
         const files = this.app.vault.getFiles().filter((f) => f.extension.toLowerCase() === 'eml')
@@ -106,7 +123,7 @@ class PhishAnalysisModal extends Modal {
     )
     iocBtn.onClick(
       safeAsync(async () => {
-        const lines = this.report?.headers.indicators ?? []
+        const lines = this.report?.indicators ?? []
         if (!lines.length) return
         await navigator.clipboard.writeText(lines.join('\n'))
         new Notice(`Copied ${lines.length} indicator${lines.length === 1 ? '' : 's'}`)
@@ -133,7 +150,10 @@ class PhishAnalysisModal extends Modal {
     }
     const subject = this.report.headers.identities.find((i) => i.label === 'Subject')?.value ?? ''
     const title = subject && subject !== 'not recorded' ? subject : 'Reported phishing email'
-    const iocs: Ioc[] = extractIocsFromText(this.raw, [])
+    // Built from the PARSED message, not the raw paste — the same set the
+    // Indicators panel and the copy button show, so the three cannot diverge.
+    const headerBlock = this.raw.split(/\n\s*\n/)[0] ?? ''
+    const iocs: Ioc[] = extractIocsFromText(`${headerBlock}\n${this.report.text}`, [])
     const seen = new Set(iocs.map((i) => i.value.toLowerCase()))
     for (const link of this.report.links) {
       if (link.target && !seen.has(link.target.toLowerCase())) {
@@ -142,7 +162,7 @@ class PhishAnalysisModal extends Modal {
       }
     }
     for (const attachment of this.report.attachments) {
-      if (!seen.has(attachment.sha256)) {
+      if (attachment.sha256 && !seen.has(attachment.sha256)) {
         seen.add(attachment.sha256)
         iocs.push({ type: 'hash', value: attachment.sha256, note: `${attachment.filename} (hashed here)` })
       }
@@ -208,6 +228,11 @@ class PhishAnalysisModal extends Modal {
     if (a.observations.length) for (const o of a.observations) obs.createDiv({ cls: 'pm-headers-note', text: o })
     else obs.createDiv({ cls: 'pm-headers-empty', text: 'Nothing to compare.' })
 
+    if (report.senderFacts.length) {
+      const sender = section('Sender domain')
+      for (const fact of report.senderFacts) sender.createDiv({ cls: 'pm-headers-flag', text: fact })
+    }
+
     const links = section(`Links (${report.links.length})`)
     if (report.links.length) {
       for (const link of report.links) {
@@ -219,6 +244,12 @@ class PhishAnalysisModal extends Modal {
         }
         for (const flag of link.flags) line.createDiv({ cls: 'pm-headers-flag', text: flag })
       }
+      if (report.droppedLinks > 0) {
+        links.createDiv({
+          cls: 'pm-headers-note',
+          text: `${report.droppedLinks} further links are in this message and are not listed.`
+        })
+      }
     } else {
       links.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
     }
@@ -229,29 +260,53 @@ class PhishAnalysisModal extends Modal {
         const line = atts.createDiv('pm-headers-link')
         line.createDiv({
           cls: 'pm-headers-value',
-          text: `${attachment.filename} — ${attachment.contentType}, ${attachment.size} bytes`
+          text:
+            `${attachment.filename} — ${attachment.contentType}, ` +
+            (attachment.sha256 ? `${attachment.size} bytes` : 'size not recorded')
         })
-        line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${attachment.sha256}` })
-        line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-1   ${attachment.sha1}` })
-        line.createDiv({ cls: 'pm-headers-note', text: 'hash computed here, from the bytes in the file' })
+        if (attachment.sha256) {
+          line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${attachment.sha256}` })
+          line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-1   ${attachment.sha1}` })
+          line.createDiv({ cls: 'pm-headers-note', text: 'hashes computed here, from the bytes in the file' })
+        } else {
+          line.createDiv({ cls: 'pm-headers-note', text: 'hashes not recorded — this part could not be decoded' })
+        }
+        if (attachment.sniffed) {
+          line.createDiv({ cls: 'pm-headers-note', text: `bytes begin as ${attachment.sniffed}` })
+        }
         for (const fact of attachment.facts) line.createDiv({ cls: 'pm-headers-flag', text: fact })
+        for (const found of attachment.inside) {
+          line.createDiv({ cls: 'pm-headers-flag', text: `found inside the file: ${found}` })
+        }
       }
     } else {
       atts.createDiv({ cls: 'pm-headers-empty', text: 'None.' })
     }
 
-    if (report.text.trim()) {
-      const body = section('Body (plain text)')
-      body.createEl('pre', { cls: 'pm-headers-pre', text: report.text.trim().slice(0, 4000) })
+    // Truncation is SAID, not silent. A body cut at 4,000 characters with no
+    // marker reads as the whole body, and the part an analyst needs is as
+    // likely to be past the cut as before it.
+    const showBody = (title: string, value: string): void => {
+      const trimmed = value.trim()
+      if (!trimmed) return
+      const body = section(title)
+      body.createEl('pre', { cls: 'pm-headers-pre', text: trimmed.slice(0, BODY_PREVIEW) })
+      if (trimmed.length > BODY_PREVIEW) {
+        body.createDiv({
+          cls: 'pm-headers-note',
+          text: `Showing the first ${BODY_PREVIEW.toLocaleString()} of ${trimmed.length.toLocaleString()} characters. The copied report carries the rest.`
+        })
+      }
     }
-    if (report.htmlSource.trim()) {
-      const body = section('Body (HTML source — not rendered)')
-      body.createEl('pre', { cls: 'pm-headers-pre', text: report.htmlSource.trim().slice(0, 4000) })
-    }
+    showBody('Body (plain text)', report.text)
+    showBody('Body (HTML source — not rendered)', report.htmlSource)
 
-    const iocs = section(`Indicators (${a.indicators.length})`)
-    if (a.indicators.length) for (const i of a.indicators) iocs.createDiv({ cls: 'pm-headers-ioc', text: i })
-    else iocs.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
+    const iocs = section(`Indicators (${report.indicators.length})`)
+    if (report.indicators.length) {
+      for (const i of report.indicators) iocs.createDiv({ cls: 'pm-headers-ioc', text: i })
+    } else {
+      iocs.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
+    }
 
     const notes = [...a.notes, ...report.notes]
     if (notes.length) {

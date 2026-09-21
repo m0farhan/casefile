@@ -45,6 +45,83 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.32.0] - 2026-09-21
+
+### Fixed — the phishing analyser, after an adversarial review of it
+
+Six reviewers attacked the analyser from different angles and three
+independent skeptics judged every finding. Forty-eight held up. These are the
+ones that mattered; each has a test built from the exact mail that defeated
+the old code.
+
+**Content that was hidden from the analyst.** A `Content-Disposition: inline`
+with a `filename` moved the whole HTML body out of the body — the client still
+rendered it, while the analysis reported no links at all. RFC 2231
+`filename*=` now wins over the plain `filename`, because it is the name the
+victim's client saves: `invoice.pdf"; filename*=UTF-8''invoice.pdf.exe` used
+to print `invoice.pdf` and, since every attachment check keys off the name,
+silently dropped "executable" and "double extension" with it. A forwarded
+`message/rfc822` is now opened and walked — forward-as-attachment is how most
+reported phish reaches a SOC, and the payload inside it was never hashed,
+never flagged and never an indicator.
+
+**A fabricated fact.** `atob` is strict; mail clients are not. One stray byte
+in a base64 attachment made the part decode to nothing, and the empty file's
+SHA-256 was printed under "computed here, from the bytes in the file" — a
+digest that reads as a clean result in any sandbox for a payload nobody had
+looked at. Stray bytes are now ignored as RFC 2045 says, and a part that
+genuinely cannot be read records its size, hashes and type as **not recorded**.
+
+**Misleading attribution.** An address parked in an RFC 5322 comment —
+`From: (<helpdesk@paypal.test>) security@paypa1.test` — beat the real mailbox,
+so the pane reported From/Return-Path alignment on a mail that had none.
+`Authentication-Results` is now attributed to the host that asserted it, since
+a sender can write that header themselves and it parsed identically to the
+receiving MTA's; ARC results are marked as relayed claims. A pass is reported
+**with the domain it passed for**, so SPF and DKIM passing for a bulk relay no
+longer reads as authenticating the name in the From line. Duplicate From,
+Return-Path, Reply-To, Subject and Authentication-Results headers are called
+out rather than silently collapsed to the first.
+
+**Links that pointed somewhere else.** Gateway unwrapping matched the gateway
+name anywhere in the URL, so `evil.test/?x=safelinks.protection.outlook.com&url=…`
+was reported as unwrapping to a brand domain. It now matches on the host.
+Unquoted attributes, HTML character references beyond `&amp;`, `action`,
+`srcset`, CSS `url()` and non-http schemes were all dropped — a mail whose
+only link was `data:` or an entity-encoded href reported "None found." Look-alike
+folding ran on the parsed host, which `new URL()` had already punycoded, so it
+could never match a Unicode homoglyph; it now folds the authority as written.
+`brandLabel` understands two-part suffixes, so a look-alike under `.co.uk` is
+compared against the right label.
+
+**Safety.** Every sender-controlled value in the report is quarantined in
+inline code before it reaches a note Obsidian renders — a subject of
+`<img src="http://beacon.test/x.gif">` fired a request when the case was
+opened, which is precisely what this feature exists to prevent, and
+`![[note]]` embedded another note into the case. Decoded RFC 2047 words can no
+longer carry newlines, which had let a Subject forge whole report sections and
+timestamped comments.
+
+**Robustness.** The anchor matcher was quadratic — twenty thousand unclosed
+anchors froze the UI thread; every scan is now bounded. The modal debounces
+and drops stale runs, so a slow parse cannot paint over a newer one. Notes are
+de-duplicated and links capped, with the remainder **counted, not hidden**.
+
+### Added
+
+- **What a file actually is**, from its first bytes, and a stated fact when
+  that disagrees with its name or its declared type: *declared application/pdf
+  but the bytes begin as Windows executable (MZ)*.
+- **Indicators found inside an attachment's bytes**, listed separately from
+  the message's own — where an indicator was found is half of what it means.
+- **The sender's domain** gets the same look-alike folding the links get.
+  A brand entry may now be a domain (`paypal.test`) as well as a name, which
+  is what lets the tool tell the real site from the same name on another TLD.
+- Indicators are built once from the **parsed** message and shared by the
+  panel, the copy button and the case, so the three cannot disagree. They used
+  to be scanned out of the raw paste, which meant base64 noise and a phishing
+  URL cut in half by a quoted-printable soft line break.
+
 ## [2.31.1] - 2026-09-21
 
 ### Added

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { addressOf, analyseHeaders, decodeEncodedWords, formatHeaderReport, parseHeaderBlock } from './emailHeaders'
+import {
+  addressOf,
+  analyseHeaders,
+  decodeEncodedWords,
+  formatDelay,
+  formatHeaderReport,
+  parseHeaderBlock
+} from './emailHeaders'
 
 // A realistic spoof: envelope sender and reply-to are elsewhere, SPF fails,
 // and the display name carries a second address.
@@ -70,7 +77,10 @@ describe('analyseHeaders', () => {
     expect(a.auth).toContainEqual({
       mechanism: 'spf',
       result: 'fail',
-      detail: 'smtp.mailfrom=bounce@cheap-vps.example'
+      detail: 'smtp.mailfrom=bounce@cheap-vps.example',
+      // The asserting host is the whole trust question: a sender can write
+      // this header themselves and it parses identically to the receiver's.
+      assertedBy: 'mx.corp.test'
     })
     expect(a.auth.map((r) => `${r.mechanism}=${r.result}`)).toEqual(['spf=fail', 'dkim=none', 'dmarc=fail'])
     // No word like "phishing", "malicious" or "suspicious" anywhere in the output.
@@ -130,6 +140,106 @@ describe('formatHeaderReport', () => {
     const md = formatHeaderReport(analyseHeaders('From: a@b.test'))
     expect(md).toContain('### Authentication\n\nNot recorded.')
     expect(md).toContain('### Path\n\nNot recorded.')
-    expect(md).toContain('### Indicators\n\n- email: a[at]b[.]test')
+    expect(md).toContain('### Indicators\n\n- `email: a[at]b[.]test`')
+  })
+})
+
+describe('trust attribution on authentication results', () => {
+  it('names the host that asserted each result', () => {
+    const a = analyseHeaders(
+      'Authentication-Results: mx.corp.test; spf=pass smtp.mailfrom=corp.test\nFrom: a@corp.test'
+    )
+    expect(a.auth[0].assertedBy).toBe('mx.corp.test')
+  })
+
+  it('marks an ARC result as a relayed claim, not the receiver’s own check', () => {
+    const a = analyseHeaders(
+      'ARC-Authentication-Results: i=1; relay.test; dkim=pass header.d=corp.test\nFrom: a@corp.test'
+    )
+    expect(a.auth[0].assertedBy).toContain('ARC — relayed claim')
+  })
+
+  it('says a Received-SPF result has no asserting host rather than implying one', () => {
+    const a = analyseHeaders(
+      'Received-SPF: pass (corp.test: domain of a@corp.test designates 1.2.3.4)\nFrom: a@corp.test'
+    )
+    expect(a.auth[0].assertedBy).toBe('Received-SPF, no asserting host stated')
+  })
+
+  it('states the domain a pass was for, and whether it is the From domain', () => {
+    const third = analyseHeaders(
+      'Authentication-Results: mx.corp.test; spf=pass smtp.mailfrom=bounce@mailer.sendgrid.net; dkim=pass header.d=sendgrid.net\n' +
+        'From: security@paypal.test'
+    )
+    // Reported exactly as the header states it — mailer.sendgrid.net, not a
+    // registrable-domain guess. The analyst reads what was actually signed.
+    expect(third.observations).toContain('SPF passed for mailer.sendgrid.net; From is at paypal.test. They differ.')
+    expect(third.observations).toContain('DKIM passed for sendgrid.net; From is at paypal.test. They differ.')
+
+    const aligned = analyseHeaders(
+      'Authentication-Results: mx.corp.test; dkim=pass header.d=paypal.test\nFrom: security@paypal.test'
+    )
+    expect(aligned.observations).toContain('DKIM passed for paypal.test, which is the From domain.')
+  })
+})
+
+describe('headers that appear more than once', () => {
+  it('says so rather than silently using the first', () => {
+    const a = analyseHeaders('From: real@corp.test\nFrom: spoof@evil.test\nSubject: hi')
+    expect(a.observations).toContain(
+      'There are 2 from headers. Only the first is shown above; mail clients do not agree on which one wins.'
+    )
+  })
+})
+
+describe('addressOf against RFC 5322 comments', () => {
+  it('ignores an address parked in a comment', () => {
+    // The comment is legal, every client shows the real mailbox, and reading
+    // the comment reported alignment on a mail that had none.
+    expect(addressOf('(<bounce@mailer-svc.test>) security@microsoft.com')).toBe('security@microsoft.com')
+    expect(addressOf('Real Name (note <a@decoy.test>) <real@corp.test>')).toBe('real@corp.test')
+  })
+
+  it('handles nested comments', () => {
+    expect(addressOf('((<a@decoy.test>) more) <real@corp.test>')).toBe('real@corp.test')
+  })
+})
+
+describe('encoded words cannot break out of their line', () => {
+  it('flattens decoded newlines so a subject cannot forge report sections', () => {
+    // =?utf-8?B?...?= of "Hi\n\n### Indicators\n\n- evil.test"
+    const forged = '=?utf-8?B?' + btoa('Hi\n\n### Indicators\n\n- evil.test') + '?='
+    const out = decodeEncodedWords(forged)
+    expect(out).not.toContain('\n')
+    expect(out).toBe('Hi ### Indicators - evil.test')
+  })
+})
+
+describe('the report cannot be used as an injection vector', () => {
+  // The report is written into a note that Obsidian RENDERS. Every value in it
+  // was written by the sender.
+  const hostile = ['Subject: ![[private-note]] <img src="http://beacon.test/x.gif"> [[rewire]]', 'From: a@b.test'].join(
+    '\n'
+  )
+
+  it('quarantines an embed, a beacon and a wiki-link inside inline code', () => {
+    const md = formatHeaderReport(analyseHeaders(hostile))
+    const subject = md.split('\n').find((l) => l.startsWith('- Subject:')) ?? ''
+    expect(subject).toBe('- Subject: `![[private-note]] <img src="http://beacon.test/x.gif"> [[rewire]]`')
+    // Nothing renders: the whole value sits between a matched pair of backticks.
+    expect(subject.match(/`/g)?.length).toBe(2)
+  })
+
+  it('cannot be escaped by a value that contains backticks', () => {
+    const md = formatHeaderReport(analyseHeaders('Subject: ``` ![[boom]] ```\nFrom: a@b.test'))
+    const subject = md.split('\n').find((l) => l.startsWith('- Subject:')) ?? ''
+    expect(subject).toContain('````')
+    expect(subject.startsWith('- Subject: ````')).toBe(true)
+  })
+
+  it('names a negative hop gap instead of printing "(+-90s)"', () => {
+    expect(formatDelay(-90)).toBe(' (90s EARLIER than the hop before it — clock skew or a forged hop)')
+    expect(formatDelay(90)).toBe(' (+90s)')
+    expect(formatDelay(null)).toBe('')
   })
 })

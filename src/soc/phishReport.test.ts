@@ -98,3 +98,38 @@ describe('analysePhishing over a whole message', () => {
     expect(markdown).not.toContain('https://login.paypa1.test/verify')
   })
 })
+
+describe('the whole-message report after hardening', () => {
+  it('builds indicators from the parsed message, not the raw paste', async () => {
+    const report = await analysePhishing(MAIL, ['corp.test'], ['paypal'])
+    const joined = report.indicators.join('\n')
+    // The phishing URL is split by a quoted-printable soft line break in the
+    // raw text, so scanning `raw` missed it entirely.
+    expect(joined).toContain('login[.]paypa1[.]test')
+    // And nothing from the base64 of the HTML part leaks in as an "indicator".
+    expect(report.indicators.some((i) => i.includes('PGh0bWw'))).toBe(false)
+  })
+
+  it('carries the sender domain’s own look-alike facts', async () => {
+    const report = await analysePhishing(MAIL, [], ['paypal'])
+    expect(report.senderFacts).toContain('reads as "paypal" once look-alike characters are folded')
+  })
+
+  it('quarantines hostile values so the case note cannot be used as a beacon', async () => {
+    const hostile = MAIL.replace(
+      'Subject: =?utf-8?B?QWN0aW9uIHJlcXVpcmVkOiB5b3VyIGFjY291bnQgaXMgbGltaXRlZA==?=',
+      'Subject: ![[private]] <img src="http://beacon.test/x.gif">'
+    )
+    const markdown = formatPhishReport(await analysePhishing(hostile, [], []))
+    // Every line carrying the hostile string must have it inside inline code.
+    const carrying = markdown.split('\n').filter((line) => line.includes('beacon.test'))
+    expect(carrying.length).toBeGreaterThan(0)
+    expect(carrying.every((line) => /`[^`]*beacon\.test[^`]*`/.test(line))).toBe(true)
+    expect(markdown).not.toMatch(/^- Subject: !\[\[/m)
+  })
+
+  it('still reaches no verdict', async () => {
+    const markdown = formatPhishReport(await analysePhishing(MAIL, ['corp.test'], ['paypal']))
+    expect(markdown).not.toMatch(/malicious|phishing|suspicious|spoofed|dangerous|threat/i)
+  })
+})
