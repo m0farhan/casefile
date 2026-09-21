@@ -47,6 +47,14 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ## [2.29.1] - 2026-09-21
 
+### Changed
+
+- **The assignee avatar moved to the bottom-right of the card.** It rides the
+  end of the chip row rather than sitting beside the title, so it lands in the
+  card's corner however the chips above it wrap, the title gets the full card
+  width back (two-line titles often become one), and the card is no taller for
+  it. A due date, which travelled with the avatar, moves with it.
+
 ### Fixed (two things a live pass through the boards turned up)
 
 - **Opening a case and closing it again no longer claims you edited it.** The

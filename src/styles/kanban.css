@@ -232,11 +232,14 @@
   justify-content: space-between;
   gap: 8px;
 }
+/* Last item on the chip row, pushed to the far edge so the avatar reads as the
+   card's bottom-right corner however the chips above it happen to wrap. */
 .pm-kanban-card-owner {
   display: flex;
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 /* Every counter, chip and tag the card carries, wrapping in one row.

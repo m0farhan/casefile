@@ -109,15 +109,9 @@ export class KanbanCard {
       if (props.parentKey && props.parentTitle) setTooltip(bc, props.parentTitle)
     }
 
-    // ── Row 1: what it is, and whose it is ───────────────────────────────────
+    // ── Row 1: what it is ────────────────────────────────────────────────────
     const head = body.createDiv('pm-kanban-card-head')
     head.createDiv({ text: task.title, cls: 'pm-kanban-card-title' })
-    const owner = head.createDiv('pm-kanban-card-owner')
-    new AvatarStack(owner).setNames(task.assignees).setMax(3).setSize('sm')
-    if (task.due) {
-      renderDueChip(owner, formatDateShort(task.due), props.overdue ? 'overdue' : 'normal', 'sm')
-    }
-    if (!owner.hasChildNodes()) owner.remove()
 
     if (props.descriptionPreview) {
       body.createDiv({ cls: 'pm-kanban-card-description', text: props.descriptionPreview })
@@ -196,6 +190,15 @@ export class KanbanCard {
       setIcon(recurEl, 'repeat')
       setTooltip(recurEl, recurrenceLabel(task.recurrence))
     }
+    // Whose it is, and when it is due, ride the end of the chip row rather than
+    // sitting beside the title: the title gets the full card width back, and
+    // the avatar lands bottom-right without costing the card a row of its own.
+    const owner = chips.createDiv('pm-kanban-card-owner')
+    new AvatarStack(owner).setNames(task.assignees).setMax(3).setSize('sm')
+    if (task.due) {
+      renderDueChip(owner, formatDateShort(task.due), props.overdue ? 'overdue' : 'normal', 'sm')
+    }
+    if (!owner.hasChildNodes()) owner.remove()
     if (!chips.hasChildNodes()) chips.remove()
 
     // ── The card's own bottom edge, not a row ────────────────────────────────
