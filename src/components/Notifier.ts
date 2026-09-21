@@ -19,7 +19,15 @@ export class Notifier {
   constructor(private plugin: PMPlugin) {}
 
   start(): void {
-    void this.tick()
+    // The launch pass waits for layout. start() is called from onload(), and at
+    // that point Obsidian has not finished indexing the vault: loadAllProjects
+    // came back with ZERO projects, so the launch run of both the notification
+    // pass and the archive sweep walked an empty list and silently did nothing
+    // (PS-07). Every later tick was fine, which is what made it invisible — the
+    // sweep looked like it had run and found nothing to do.
+    this.plugin.app.workspace.onLayoutReady(() => {
+      void this.tick()
+    })
     this.intervalId = window.setInterval(() => {
       void this.tick()
     }, CHECK_INTERVAL_MS)
@@ -40,7 +48,14 @@ export class Notifier {
    * they asked for closed cases to file themselves away.
    */
   private async tick(): Promise<void> {
-    await this.check()
+    // Independent passes: whether the analyst gets toast messages has nothing
+    // to do with whether closed cases file themselves away, so a throw in one
+    // must not skip the other.
+    try {
+      await this.check()
+    } catch (e) {
+      console.error('Casefile: notification pass failed', e)
+    }
     await this.sweepArchive()
   }
 

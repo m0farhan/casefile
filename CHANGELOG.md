@@ -64,6 +64,20 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   date. Still off until you set a window (`0` = off), in **Settings →
   Auto-archive**.
 
+### Fixed (the launch pass was walking an empty vault)
+
+- **The notification and auto-archive pass that runs at launch did nothing at
+  all.** It was started from `onload()`, before Obsidian had finished indexing
+  the vault, so the project walk came back with zero boards and both passes
+  returned having found nothing to do. It now waits for layout. This is why
+  auto-archive appeared not to work even with a window set: the launch sweep
+  was dead and the only live passes were the five-minute ticks. Due-date and
+  SLA-breach notices were missing their launch pass for the same reason.
+- **A failure in the notification pass no longer takes the archive sweep down
+  with it.** They ran in one chain, so a throw in the first skipped the second
+  silently. They are independent now, and a failure is logged rather than
+  swallowed.
+
 ### Fixed (two things a live pass through the boards turned up)
 
 - **Opening a case and closing it again no longer claims you edited it.** The
