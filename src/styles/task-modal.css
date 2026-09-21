@@ -723,22 +723,3 @@ button.pm-verdict-cancel:hover {
   padding: 8px;
   border-radius: 4px;
 }
-.pm-headers-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-.pm-headers-chip {
-  font-size: var(--font-ui-smaller);
-  padding: 2px 8px;
-  border: 1px solid var(--gs-hairline-strong);
-  border-radius: 10px;
-  color: var(--gs-ink-subtle);
-  cursor: pointer;
-}
-.pm-headers-chip.is-on {
-  color: var(--gs-ink);
-  border-color: var(--gs-hairline-3);
-  background: var(--gs-surface-3);
-}

@@ -45,6 +45,19 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.33.1] - 2026-09-21
+
+### Removed
+
+- **The classification tick boxes are gone from the analyser.** Twenty-three
+  chips over five rows sat between the paste box and the buttons and pushed the
+  analysis — the part you actually read — off the bottom of the modal. The
+  analysis now gets the whole pane: identities, authentication, path,
+  observations and the sender domain are all visible without scrolling.
+- The setting, the shipped taxonomy and the stored list went with it. Every one
+  of them existed only to feed those chips, and a setting with no consumer is
+  worse than no setting. A case still takes any tag you type.
+
 ## [2.33.0] - 2026-09-21
 
 ### Changed (the analyser is readable at a glance now)
