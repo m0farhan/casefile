@@ -1,5 +1,6 @@
 import { ButtonComponent, Modal, Notice, SuggestModal, type TFile, setTooltip } from 'obsidian'
 import type PMPlugin from '../main'
+import { formatDelay } from '../soc/emailHeaders'
 import { type PhishReport, analysePhishing, formatPhishReport } from '../soc/phish'
 import { extractIocsFromText } from '../soc/ioc'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
@@ -50,7 +51,7 @@ class PhishAnalysisModal extends Modal {
 
     const input = contentEl.createEl('textarea', {
       cls: 'pm-headers-input',
-      attr: { placeholder: 'Received: from …', rows: '7', spellcheck: 'false' }
+      attr: { placeholder: 'Received: from …', rows: '5', spellcheck: 'false' }
     })
     const out = contentEl.createDiv('pm-headers-out')
     // PhishTool resolves a case against a classification set, which is what
@@ -196,37 +197,64 @@ class PhishAnalysisModal extends Modal {
       out.createEl('h4', { cls: 'pm-headers-h', text: title })
       return out.createDiv('pm-headers-body')
     }
-    const row = (parent: HTMLElement, label: string, value: string, extra?: string): void => {
-      const line = parent.createDiv('pm-headers-row')
-      line.createSpan({ cls: 'pm-headers-label', text: label })
-      line.createSpan({ cls: 'pm-headers-value', text: value })
-      if (extra) line.createSpan({ cls: 'pm-headers-result', text: extra })
-    }
 
     const ids = section('Identities')
-    for (const id of a.identities) row(ids, id.label, id.value)
+    for (const id of a.identities) {
+      const line = ids.createDiv('pm-headers-row')
+      line.createSpan({ cls: 'pm-headers-label', text: id.label })
+      // "not recorded" is an absence, and it should not read like a value.
+      line.createSpan({
+        cls: id.value === 'not recorded' ? 'pm-headers-value pm-headers-absent' : 'pm-headers-value',
+        text: id.value
+      })
+    }
 
     const auth = section('Authentication')
-    if (a.auth.length) for (const r of a.auth) row(auth, r.mechanism.toUpperCase(), r.result, r.detail)
-    else auth.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
+    if (a.auth.length) {
+      for (const r of a.auth) {
+        const line = auth.createDiv('pm-headers-row')
+        line.createSpan({ cls: 'pm-headers-label', text: r.mechanism.toUpperCase() })
+        // The word the header states, coloured as what it states. This is a
+        // faithful rendering of a stated result, not a judgement on the mail:
+        // an SPF fail really is a fail. The plugin still reaches no verdict.
+        line.createSpan({ cls: `pm-headers-result ${resultClass(r.result)}`, text: r.result })
+        line.createSpan({ cls: 'pm-headers-detail', text: r.detail })
+        line.createSpan({ cls: 'pm-headers-by', text: `asserted by ${r.assertedBy}` })
+      }
+    } else {
+      auth.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
+    }
 
     const path = section('Path')
     if (a.hops.length) {
       for (const hop of a.hops) {
-        row(
-          path,
-          String(hop.n),
-          `from ${hop.from} by ${hop.by} with ${hop.via}`,
-          hop.at ? (hop.delaySec === null ? hop.at : `${hop.at} (+${hop.delaySec}s)`) : 'no time recorded'
-        )
+        const line = path.createDiv('pm-headers-row')
+        line.createSpan({ cls: 'pm-headers-label pm-headers-hop', text: String(hop.n) })
+        line.createSpan({ cls: 'pm-headers-value', text: `from ${hop.from} by ${hop.by} with ${hop.via}` })
+        if (!hop.at) {
+          line.createSpan({ cls: 'pm-headers-absent', text: 'no time recorded' })
+        } else if (hop.delaySec !== null && hop.delaySec < 0) {
+          line.createSpan({ cls: 'pm-headers-result pm-headers-warn', text: `${hop.at} ${formatDelay(hop.delaySec)}` })
+        } else {
+          line.createSpan({
+            cls: 'pm-headers-result',
+            text: hop.delaySec === null ? hop.at : `${hop.at} (+${hop.delaySec}s)`
+          })
+        }
       }
     } else {
       path.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
     }
 
     const obs = section('Observations')
-    if (a.observations.length) for (const o of a.observations) obs.createDiv({ cls: 'pm-headers-note', text: o })
-    else obs.createDiv({ cls: 'pm-headers-empty', text: 'Nothing to compare.' })
+    if (a.observations.length) {
+      for (const o of a.observations) {
+        // Coloured from the comparison's own outcome, not from its wording.
+        obs.createDiv({ cls: o.aligned ? 'pm-headers-ok' : 'pm-headers-warn', text: o.text })
+      }
+    } else {
+      obs.createDiv({ cls: 'pm-headers-empty', text: 'Nothing to compare.' })
+    }
 
     if (report.senderFacts.length) {
       const sender = section('Sender domain')
@@ -355,6 +383,15 @@ function openEmlPicker(plugin: PMPlugin, files: TFile[], onChoose: (file: TFile)
 /** `CRED_HARV` → `cred-harv`: a tag, lowercase and hyphenated like every other. */
 function classificationTag(id: string): string {
   return id.toLowerCase().replace(/_/g, '-')
+}
+
+/** The stated result word, mapped to how it reads. Nothing is inferred. */
+function resultClass(result: string): string {
+  if (result === 'pass') return 'pm-headers-ok'
+  if (['fail', 'softfail', 'permerror', 'temperror', 'reject', 'quarantine'].includes(result)) {
+    return 'pm-headers-warn'
+  }
+  return 'pm-headers-neutral'
 }
 
 export function openPhishAnalysis(plugin: PMPlugin): void {

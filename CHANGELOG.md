@@ -45,6 +45,33 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.33.0] - 2026-09-21
+
+### Changed (the analyser is readable at a glance now)
+
+Colour was added where it renders **what the headers state**, and nowhere
+else. The analyser still has no score, no verdict and no opinion about whether
+a message is malicious — a test still asserts that no such word appears in its
+output.
+
+- Section headings carry the accent and a rule, so the panes separate.
+- An authentication result is coloured as the word the header states: `pass`
+  green, `fail`/`softfail`/`permerror`/`reject` amber, anything else neutral.
+  An SPF fail really is a fail; showing it in the colour of one is a faithful
+  reading, not a judgement on the mail.
+- An observation is coloured from **its own outcome**, carried as data rather
+  than grepped out of its wording — a view that reads its own prose for the
+  word "differ" breaks the first time the sentence is reworded.
+- Every flag is amber with a left rule. `hostFacts` and `attachmentFacts` emit
+  nothing at all when a host or a file is unremarkable, so the class marks
+  "read this line", never "this mail is bad".
+- URLs and hashes are cyan monospace, so an indicator is distinguishable from
+  the sentence describing it.
+- **"not recorded" is faint italic**: an absence is not a value and should not
+  read like one.
+- The analysis pane gets more of the modal and the paste box less, because the
+  analysis is what gets read and the paste box is a doorway.
+
 ## [2.32.2] - 2026-09-21
 
 ### Changed

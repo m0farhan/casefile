@@ -43,12 +43,22 @@ export interface AuthResult {
   assertedBy: string
 }
 
+/**
+ * One stated comparison. `aligned` is what the comparison CAME OUT AS, carried
+ * as data so the view can colour it without reading the sentence — a view that
+ * greps its own prose for "differ" breaks the first time the wording changes.
+ */
+export interface Observation {
+  text: string
+  aligned: boolean
+}
+
 export interface HeaderAnalysis {
   identities: { label: string; value: string }[]
   auth: AuthResult[]
   hops: Hop[]
   /** Stated comparisons — facts about the headers, never a verdict on them. */
-  observations: string[]
+  observations: Observation[]
   /** Defanged, asset-marked, ready to paste into a case's indicators. */
   indicators: string[]
   /** What this paste does not contain, said out loud. */
@@ -253,7 +263,7 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
   const fromAddr = addressOf(first('from'))
   const returnAddr = addressOf(first('return-path'))
   const replyAddr = addressOf(first('reply-to'))
-  const observations: string[] = []
+  const observations: Observation[] = []
   const compare = (aLabel: string, a: string, bLabel: string, b: string): void => {
     if (!a || !b) return
     const da = domainOf(a)
@@ -261,8 +271,8 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
     if (!da || !db) return
     observations.push(
       da === db
-        ? `${aLabel} and ${bLabel} are both at ${da}.`
-        : `${aLabel} is at ${da}; ${bLabel} is at ${db}. They differ.`
+        ? { text: `${aLabel} and ${bLabel} are both at ${da}.`, aligned: true }
+        : { text: `${aLabel} is at ${da}; ${bLabel} is at ${db}. They differ.`, aligned: false }
     )
   }
   compare('From', fromAddr, 'Return-Path', returnAddr)
@@ -281,8 +291,14 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
     if (!signedDomain) continue
     observations.push(
       signedDomain === fromDomain
-        ? `${result.mechanism.toUpperCase()} passed for ${signedDomain}, which is the From domain.`
-        : `${result.mechanism.toUpperCase()} passed for ${signedDomain}; From is at ${fromDomain}. They differ.`
+        ? {
+            text: `${result.mechanism.toUpperCase()} passed for ${signedDomain}, which is the From domain.`,
+            aligned: true
+          }
+        : {
+            text: `${result.mechanism.toUpperCase()} passed for ${signedDomain}; From is at ${fromDomain}. They differ.`,
+            aligned: false
+          }
     )
   }
 
@@ -292,9 +308,10 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
   for (const key of ['from', 'return-path', 'reply-to', 'authentication-results', 'subject'] as const) {
     const count = all(key).length
     if (count > 1) {
-      observations.push(
-        `There are ${count} ${key} headers. Only the first is shown above; mail clients do not agree on which one wins.`
-      )
+      observations.push({
+        text: `There are ${count} ${key} headers. Only the first is shown above; mail clients do not agree on which one wins.`,
+        aligned: false
+      })
     }
   }
 
@@ -307,7 +324,10 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
   const hidden = /([\w.+-]+@[\w.-]+)/.exec(displayPart)
   const hiddenDomain = hidden ? domainOf(hidden[1]) : ''
   if (hiddenDomain && hiddenDomain !== domainOf(fromAddr)) {
-    observations.push(`The display name contains an address at ${hiddenDomain}, which is not the sending domain.`)
+    observations.push({
+      text: `The display name contains an address at ${hiddenDomain}, which is not the sending domain.`,
+      aligned: false
+    })
   }
 
   const notes: string[] = []
@@ -377,7 +397,7 @@ export function formatHeaderReport(a: HeaderAnalysis): string {
   lines.push('', '### Observations', '')
   // Observations are OUR sentences, but they interpolate sender-controlled
   // domains, so they are quarantined too.
-  if (a.observations.length) for (const o of a.observations) lines.push(`- ${quoteUntrusted(o)}`)
+  if (a.observations.length) for (const o of a.observations) lines.push(`- ${quoteUntrusted(o.text)}`)
   else lines.push('Nothing to compare.')
   lines.push('', '### Indicators', '')
   if (a.indicators.length) for (const i of a.indicators) lines.push(`- ${quoteUntrusted(i)}`)

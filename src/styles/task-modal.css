@@ -601,15 +601,21 @@ button.pm-verdict-cancel:hover {
   font-size: var(--font-ui-smaller);
   resize: vertical;
 }
+/* The analysis is what gets read; the paste box is a doorway. */
 .pm-headers-out {
-  max-height: 46vh;
+  max-height: 54vh;
   overflow-y: auto;
   margin-top: 8px;
+  padding-right: 4px;
 }
 .pm-headers-h {
-  color: var(--gs-ink-subtle);
+  color: var(--gs-accent-hover);
   font-size: var(--font-ui-smaller);
-  margin: 12px 0 4px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 14px 0 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--gs-hairline);
 }
 .pm-headers-row {
   display: flex;
@@ -627,12 +633,50 @@ button.pm-verdict-cancel:hover {
   font-size: var(--font-ui-smaller);
   overflow-wrap: anywhere;
 }
-/* Deliberately one neutral colour: a stated SPF fail is a fact to read, not an
-   alarm this plugin is entitled to raise on the analyst's behalf. */
+/* Colour here renders WHAT THE HEADER STATES, never a conclusion about the
+   mail. An SPF fail really is a fail, and showing it in the colour of a fail
+   is a faithful reading — the analyser still has no verdict, no score, and no
+   opinion about whether the message is malicious. Every one of these classes
+   is chosen from a value (a result word, an alignment boolean), never from the
+   wording of a sentence. */
 .pm-headers-result {
   color: var(--gs-ink-muted);
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
+}
+.pm-headers-ok {
+  color: var(--gs-green);
+}
+.pm-headers-warn {
+  color: var(--gs-amber);
+}
+.pm-headers-neutral {
+  color: var(--gs-ink-subtle);
+}
+/* An absence is not a value and must not read like one. */
+.pm-headers-absent {
+  color: var(--gs-ink-tertiary);
+  font-style: italic;
+  font-size: var(--font-ui-smaller);
+}
+.pm-headers-detail {
+  color: var(--gs-ink-subtle);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+.pm-headers-by {
+  color: var(--gs-ink-tertiary);
+  font-size: var(--font-ui-smaller);
+  margin-left: auto;
+  padding-left: 12px;
+  white-space: nowrap;
+}
+.pm-headers-hop {
+  color: var(--gs-accent-hover);
+  font-family: var(--font-monospace);
+  flex: 0 0 24px;
+  text-align: right;
 }
 .pm-headers-note,
 .pm-headers-ioc,
@@ -642,7 +686,7 @@ button.pm-verdict-cancel:hover {
 }
 .pm-headers-ioc {
   font-family: var(--font-monospace);
-  color: var(--gs-ink);
+  color: var(--gs-sky);
   overflow-wrap: anywhere;
 }
 .pm-headers-note {
@@ -658,13 +702,16 @@ button.pm-verdict-cancel:hover {
 .pm-headers-link:last-child {
   border-bottom: 0;
 }
-/* Facts, not alarms: the same muted treatment as every other stated line. The
-   analyst decides what a fact means, so nothing here is coloured to pre-empt
-   that judgement. */
+/* A flag is only ever emitted when there IS something to say — hostFacts and
+   attachmentFacts return nothing when a host or a file is unremarkable. So the
+   whole class carries the attention hue: it marks "read this line", not "this
+   mail is bad". */
 .pm-headers-flag {
-  color: var(--gs-ink-muted);
+  color: var(--gs-amber);
   font-size: var(--font-ui-smaller);
   padding-left: 12px;
+  border-left: 2px solid var(--gs-amber-tint);
+  margin-left: 2px;
 }
 .pm-headers-pre {
   max-height: 180px;

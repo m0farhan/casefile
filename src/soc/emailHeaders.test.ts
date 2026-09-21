@@ -100,9 +100,13 @@ describe('analyseHeaders', () => {
   })
 
   it('states the identity mismatches as comparisons', () => {
-    expect(a.observations).toContain('From is at paypa1.test; Return-Path is at cheap-vps.example. They differ.')
-    expect(a.observations).toContain('From is at paypa1.test; Reply-To is at mail-verify.test. They differ.')
-    expect(a.observations).toContain(
+    expect(a.observations.map((o) => o.text)).toContain(
+      'From is at paypa1.test; Return-Path is at cheap-vps.example. They differ.'
+    )
+    expect(a.observations.map((o) => o.text)).toContain(
+      'From is at paypa1.test; Reply-To is at mail-verify.test. They differ.'
+    )
+    expect(a.observations.map((o) => o.text)).toContain(
       'The display name contains an address at paypal.test, which is not the sending domain.'
     )
   })
@@ -173,20 +177,24 @@ describe('trust attribution on authentication results', () => {
     )
     // Reported exactly as the header states it — mailer.sendgrid.net, not a
     // registrable-domain guess. The analyst reads what was actually signed.
-    expect(third.observations).toContain('SPF passed for mailer.sendgrid.net; From is at paypal.test. They differ.')
-    expect(third.observations).toContain('DKIM passed for sendgrid.net; From is at paypal.test. They differ.')
+    expect(third.observations.map((o) => o.text)).toContain(
+      'SPF passed for mailer.sendgrid.net; From is at paypal.test. They differ.'
+    )
+    expect(third.observations.map((o) => o.text)).toContain(
+      'DKIM passed for sendgrid.net; From is at paypal.test. They differ.'
+    )
 
     const aligned = analyseHeaders(
       'Authentication-Results: mx.corp.test; dkim=pass header.d=paypal.test\nFrom: security@paypal.test'
     )
-    expect(aligned.observations).toContain('DKIM passed for paypal.test, which is the From domain.')
+    expect(aligned.observations.map((o) => o.text)).toContain('DKIM passed for paypal.test, which is the From domain.')
   })
 })
 
 describe('headers that appear more than once', () => {
   it('says so rather than silently using the first', () => {
     const a = analyseHeaders('From: real@corp.test\nFrom: spoof@evil.test\nSubject: hi')
-    expect(a.observations).toContain(
+    expect(a.observations.map((o) => o.text)).toContain(
       'There are 2 from headers. Only the first is shown above; mail clients do not agree on which one wins.'
     )
   })

@@ -64,7 +64,7 @@ describe('analysePhishing over a whole message', () => {
     ])
     expect(report.headers.hops[0].from).toContain('203.0.113.77')
     expect(report.headers.hops[1].delaySec).toBe(90)
-    expect(report.headers.observations).toContain(
+    expect(report.headers.observations.map((o) => o.text)).toContain(
       'The display name contains an address at paypal.test, which is not the sending domain.'
     )
 
