@@ -723,3 +723,77 @@ button.pm-verdict-cancel:hover {
   padding: 8px;
   border-radius: 4px;
 }
+
+/* ── Analyser tabs ───────────────────────────────────────────────────────── */
+.pm-headers-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 1px solid var(--gs-hairline);
+  margin-bottom: 4px;
+}
+.pm-headers-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--gs-ink-subtle);
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+  padding: 6px 10px;
+}
+.pm-headers-tab:hover {
+  color: var(--gs-ink);
+  background: transparent;
+}
+.pm-headers-tab.is-on {
+  color: var(--gs-accent-hover);
+  border-bottom-color: var(--gs-accent-hover);
+}
+.pm-headers-panel {
+  padding-top: 2px;
+}
+
+/* ── Attachment cards ────────────────────────────────────────────────────── */
+.pm-att-card {
+  border: 1px solid var(--gs-hairline);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: var(--gs-surface-2);
+}
+.pm-att-name {
+  color: var(--gs-ink);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* A checkerboard behind it: a lure is often a mostly-white screenshot, and on
+   a dark surface its edges are invisible without one. */
+.pm-att-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  margin: 8px 0 4px;
+  border: 1px solid var(--gs-hairline-strong);
+  border-radius: 4px;
+  background-color: var(--gs-surface-4);
+  background-image:
+    linear-gradient(45deg, var(--gs-surface-3) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--gs-surface-3) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--gs-surface-3) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--gs-surface-3) 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+.pm-att-hex {
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+}

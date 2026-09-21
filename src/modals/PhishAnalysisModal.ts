@@ -1,6 +1,7 @@
 import { ButtonComponent, Modal, Notice, SuggestModal, type TFile, setTooltip } from 'obsidian'
 import type PMPlugin from '../main'
 import { formatDelay } from '../soc/emailHeaders'
+import { IMAGE_CAP, hexDump, imageDataUrl, previewKind, previewText } from '../soc/preview'
 import { type PhishReport, analysePhishing, formatPhishReport } from '../soc/phish'
 import { extractIocsFromText } from '../soc/ioc'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
@@ -26,12 +27,15 @@ import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
 /** How much body is painted on screen. The full text always reaches the report. */
 const BODY_PREVIEW = 4000
 
+type TabId = 'message' | 'links' | 'attachments' | 'body' | 'indicators'
+
 class PhishAnalysisModal extends Modal {
   private report: PhishReport | null = null
   private raw = ''
   /** Monotonic: a slow run must never overwrite the result of a newer one. */
   private runId = 0
   private debounce: number | null = null
+  private tab: TabId = 'message'
 
   constructor(private plugin: PMPlugin) {
     super(plugin.app)
@@ -170,89 +174,121 @@ class PhishAnalysisModal extends Modal {
     })
   }
 
+  /**
+   * One pane at a time, because a phishing analysis is five different
+   * questions and answering them in one scroll means the analyst reads the
+   * first and scrolls past the rest.
+   */
   private render(out: HTMLElement): void {
     out.empty()
     const report = this.report
     if (!report) return
-    const a = report.headers
 
-    const section = (title: string): HTMLElement => {
-      out.createEl('h4', { cls: 'pm-headers-h', text: title })
-      return out.createDiv('pm-headers-body')
-    }
-
-    const ids = section('Identities')
-    for (const id of a.identities) {
-      const line = ids.createDiv('pm-headers-row')
-      line.createSpan({ cls: 'pm-headers-label', text: id.label })
-      // "not recorded" is an absence, and it should not read like a value.
-      line.createSpan({
-        cls: id.value === 'not recorded' ? 'pm-headers-value pm-headers-absent' : 'pm-headers-value',
-        text: id.value
+    const tabs: { id: TabId; label: string }[] = [
+      { id: 'message', label: 'Message' },
+      { id: 'links', label: `Links (${report.links.length})` },
+      { id: 'attachments', label: `Attachments (${report.attachments.length})` },
+      { id: 'body', label: 'Body' },
+      { id: 'indicators', label: `Indicators (${report.indicators.length})` }
+    ]
+    const strip = out.createDiv('pm-headers-tabs')
+    const panel = out.createDiv('pm-headers-panel')
+    for (const tab of tabs) {
+      const button = strip.createEl('button', { cls: 'pm-headers-tab', text: tab.label })
+      button.toggleClass('is-on', this.tab === tab.id)
+      button.addEventListener('click', () => {
+        this.tab = tab.id
+        this.render(out)
       })
     }
+    this.renderPanel(panel, report)
+  }
 
-    const auth = section('Authentication')
-    if (a.auth.length) {
-      for (const r of a.auth) {
-        const line = auth.createDiv('pm-headers-row')
-        line.createSpan({ cls: 'pm-headers-label', text: r.mechanism.toUpperCase() })
-        // The word the header states, coloured as what it states. This is a
-        // faithful rendering of a stated result, not a judgement on the mail:
-        // an SPF fail really is a fail. The plugin still reaches no verdict.
-        line.createSpan({ cls: `pm-headers-result ${resultClass(r.result)}`, text: r.result })
-        line.createSpan({ cls: 'pm-headers-detail', text: r.detail })
-        line.createSpan({ cls: 'pm-headers-by', text: `asserted by ${r.assertedBy}` })
-      }
-    } else {
-      auth.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
+  private renderPanel(panel: HTMLElement, report: PhishReport): void {
+    const section = (title: string): HTMLElement => {
+      panel.createEl('h4', { cls: 'pm-headers-h', text: title })
+      return panel.createDiv('pm-headers-body')
     }
+    const a = report.headers
+    if (this.tab === 'message') {
+      const ids = section('Identities')
+      for (const id of a.identities) {
+        const line = ids.createDiv('pm-headers-row')
+        line.createSpan({ cls: 'pm-headers-label', text: id.label })
+        // "not recorded" is an absence, and it should not read like a value.
+        line.createSpan({
+          cls: id.value === 'not recorded' ? 'pm-headers-value pm-headers-absent' : 'pm-headers-value',
+          text: id.value
+        })
+      }
 
-    const path = section('Path')
-    if (a.hops.length) {
-      for (const hop of a.hops) {
-        const line = path.createDiv('pm-headers-row')
-        line.createSpan({ cls: 'pm-headers-label pm-headers-hop', text: String(hop.n) })
-        line.createSpan({ cls: 'pm-headers-value', text: `from ${hop.from} by ${hop.by} with ${hop.via}` })
-        if (!hop.at) {
-          line.createSpan({ cls: 'pm-headers-absent', text: 'no time recorded' })
-        } else if (hop.delaySec !== null && hop.delaySec < 0) {
-          line.createSpan({ cls: 'pm-headers-result pm-headers-warn', text: `${hop.at} ${formatDelay(hop.delaySec)}` })
-        } else {
-          line.createSpan({
-            cls: 'pm-headers-result',
-            text: hop.delaySec === null ? hop.at : `${hop.at} (+${hop.delaySec}s)`
-          })
+      const auth = section('Authentication')
+      if (a.auth.length) {
+        for (const r of a.auth) {
+          const line = auth.createDiv('pm-headers-row')
+          line.createSpan({ cls: 'pm-headers-label', text: r.mechanism.toUpperCase() })
+          // The word the header states, coloured as what it states. A faithful
+          // rendering of a stated result, not a judgement on the mail.
+          line.createSpan({ cls: `pm-headers-result ${resultClass(r.result)}`, text: r.result })
+          line.createSpan({ cls: 'pm-headers-detail', text: r.detail })
+          line.createSpan({ cls: 'pm-headers-by', text: `asserted by ${r.assertedBy}` })
         }
+      } else {
+        auth.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
       }
-    } else {
-      path.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
-    }
 
-    const obs = section('Observations')
-    if (a.observations.length) {
-      for (const o of a.observations) {
-        // Coloured from the comparison's own outcome, not from its wording.
-        obs.createDiv({ cls: o.aligned ? 'pm-headers-ok' : 'pm-headers-warn', text: o.text })
+      const path = section('Path')
+      if (a.hops.length) {
+        for (const hop of a.hops) {
+          const line = path.createDiv('pm-headers-row')
+          line.createSpan({ cls: 'pm-headers-label pm-headers-hop', text: String(hop.n) })
+          line.createSpan({ cls: 'pm-headers-value', text: `from ${hop.from} by ${hop.by} with ${hop.via}` })
+          if (!hop.at) {
+            line.createSpan({ cls: 'pm-headers-absent', text: 'no time recorded' })
+          } else if (hop.delaySec !== null && hop.delaySec < 0) {
+            line.createSpan({
+              cls: 'pm-headers-result pm-headers-warn',
+              text: `${hop.at} ${formatDelay(hop.delaySec)}`
+            })
+          } else {
+            line.createSpan({
+              cls: 'pm-headers-result',
+              text: hop.delaySec === null ? hop.at : `${hop.at} (+${hop.delaySec}s)`
+            })
+          }
+        }
+      } else {
+        path.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
       }
-    } else {
-      obs.createDiv({ cls: 'pm-headers-empty', text: 'Nothing to compare.' })
+
+      const obs = section('Observations')
+      if (a.observations.length) {
+        for (const o of a.observations) {
+          // Coloured from the comparison's own outcome, not from its wording.
+          obs.createDiv({ cls: o.aligned ? 'pm-headers-ok' : 'pm-headers-warn', text: o.text })
+        }
+      } else {
+        obs.createDiv({ cls: 'pm-headers-empty', text: 'Nothing to compare.' })
+      }
+
+      if (report.senderFacts.length) {
+        const sender = section('Sender domain')
+        for (const fact of report.senderFacts) sender.createDiv({ cls: 'pm-headers-flag', text: fact })
+      }
+      return
     }
 
-    if (report.senderFacts.length) {
-      const sender = section('Sender domain')
-      for (const fact of report.senderFacts) sender.createDiv({ cls: 'pm-headers-flag', text: fact })
-    }
-
-    const links = section(`Links (${report.links.length})`)
-    if (report.links.length) {
+    if (this.tab === 'links') {
+      const links = section('Links')
+      if (!report.links.length) {
+        links.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
+        return
+      }
       for (const link of report.links) {
         const line = links.createDiv('pm-headers-link')
         // Defanged and inert: this is a phishing link and it is never clickable.
         line.createDiv({ cls: 'pm-headers-ioc', text: link.target.replace(/\./g, '[.]') })
-        if (link.wrappedBy) {
-          line.createDiv({ cls: 'pm-headers-note', text: `unwrapped from ${link.wrappedBy}` })
-        }
+        if (link.wrappedBy) line.createDiv({ cls: 'pm-headers-note', text: `unwrapped from ${link.wrappedBy}` })
         for (const flag of link.flags) line.createDiv({ cls: 'pm-headers-flag', text: flag })
       }
       if (report.droppedLinks > 0) {
@@ -261,69 +297,124 @@ class PhishAnalysisModal extends Modal {
           text: `${report.droppedLinks} further links are in this message and are not listed.`
         })
       }
-    } else {
-      links.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
+      return
     }
 
-    const atts = section(`Attachments (${report.attachments.length})`)
-    if (report.attachments.length) {
-      for (const attachment of report.attachments) {
-        const line = atts.createDiv('pm-headers-link')
-        line.createDiv({
-          cls: 'pm-headers-value',
-          text:
-            `${attachment.filename} — ${attachment.contentType}, ` +
-            (attachment.sha256 ? `${attachment.size} bytes` : 'size not recorded')
-        })
-        if (attachment.sha256) {
-          line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${attachment.sha256}` })
-          line.createDiv({ cls: 'pm-headers-ioc', text: `SHA-1   ${attachment.sha1}` })
-          line.createDiv({ cls: 'pm-headers-note', text: 'hashes computed here, from the bytes in the file' })
-        } else {
-          line.createDiv({ cls: 'pm-headers-note', text: 'hashes not recorded — this part could not be decoded' })
+    if (this.tab === 'attachments') {
+      this.renderAttachments(section('Attachments'))
+      return
+    }
+
+    if (this.tab === 'body') {
+      const showBody = (title: string, value: string): void => {
+        const trimmed = value.trim()
+        const body = section(title)
+        if (!trimmed) {
+          body.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
+          return
         }
-        if (attachment.sniffed) {
-          line.createDiv({ cls: 'pm-headers-note', text: `bytes begin as ${attachment.sniffed}` })
-        }
-        for (const fact of attachment.facts) line.createDiv({ cls: 'pm-headers-flag', text: fact })
-        for (const found of attachment.inside) {
-          line.createDiv({ cls: 'pm-headers-flag', text: `found inside the file: ${found}` })
+        body.createEl('pre', { cls: 'pm-headers-pre', text: trimmed.slice(0, BODY_PREVIEW) })
+        if (trimmed.length > BODY_PREVIEW) {
+          body.createDiv({
+            cls: 'pm-headers-note',
+            text: `Showing the first ${BODY_PREVIEW.toLocaleString()} of ${trimmed.length.toLocaleString()} characters. The copied report carries the rest.`
+          })
         }
       }
-    } else {
-      atts.createDiv({ cls: 'pm-headers-empty', text: 'None.' })
+      showBody('Plain text', report.text)
+      showBody('HTML source — read, never rendered', report.htmlSource)
+      return
     }
 
-    // Truncation is SAID, not silent. A body cut at 4,000 characters with no
-    // marker reads as the whole body, and the part an analyst needs is as
-    // likely to be past the cut as before it.
-    const showBody = (title: string, value: string): void => {
-      const trimmed = value.trim()
-      if (!trimmed) return
-      const body = section(title)
-      body.createEl('pre', { cls: 'pm-headers-pre', text: trimmed.slice(0, BODY_PREVIEW) })
-      if (trimmed.length > BODY_PREVIEW) {
-        body.createDiv({
-          cls: 'pm-headers-note',
-          text: `Showing the first ${BODY_PREVIEW.toLocaleString()} of ${trimmed.length.toLocaleString()} characters. The copied report carries the rest.`
-        })
-      }
-    }
-    showBody('Body (plain text)', report.text)
-    showBody('Body (HTML source — not rendered)', report.htmlSource)
-
-    const iocs = section(`Indicators (${report.indicators.length})`)
+    const iocs = section('Indicators')
     if (report.indicators.length) {
       for (const i of report.indicators) iocs.createDiv({ cls: 'pm-headers-ioc', text: i })
     } else {
       iocs.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
     }
-
     const notes = [...a.notes, ...report.notes]
     if (notes.length) {
       const el = section('Not in this paste')
       for (const n of notes) el.createDiv({ cls: 'pm-headers-note', text: n })
     }
+  }
+
+  /**
+   * Each attachment, with what it is and — where it is safe — what it looks like.
+   *
+   * A raster image is drawn from its own bytes as a data URL, which reaches
+   * nothing and runs nothing. Everything else is read: SVG and HTML are shown
+   * as source because they are documents a browser would execute, and anything
+   * else falls back to its header bytes, which is where the answer usually is.
+   */
+  private renderAttachments(host: HTMLElement): void {
+    const report = this.report
+    if (!report) return
+    if (!report.attachments.length) {
+      host.createDiv({ cls: 'pm-headers-empty', text: 'None.' })
+      return
+    }
+    for (const attachment of report.attachments) {
+      const card = host.createDiv('pm-att-card')
+      card.createDiv({ cls: 'pm-att-name', text: attachment.filename })
+      card.createDiv({
+        cls: 'pm-headers-note',
+        text: `${attachment.contentType} · ${attachment.sha256 ? `${attachment.size.toLocaleString()} bytes` : 'size not recorded'}`
+      })
+      if (attachment.sha256) {
+        card.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${attachment.sha256}` })
+        card.createDiv({ cls: 'pm-headers-ioc', text: `SHA-1   ${attachment.sha1}` })
+        card.createDiv({ cls: 'pm-headers-note', text: 'hashes computed here, from the bytes in the file' })
+      } else {
+        card.createDiv({ cls: 'pm-headers-note', text: 'hashes not recorded — this part could not be decoded' })
+      }
+      if (attachment.sniffed) card.createDiv({ cls: 'pm-headers-note', text: `bytes begin as ${attachment.sniffed}` })
+      for (const fact of attachment.facts) card.createDiv({ cls: 'pm-headers-flag', text: fact })
+      for (const found of attachment.inside) {
+        card.createDiv({ cls: 'pm-headers-flag', text: `found inside the file: ${found}` })
+      }
+      this.renderPreview(card, attachment)
+    }
+  }
+
+  private renderPreview(card: HTMLElement, attachment: PhishReport['attachments'][number]): void {
+    if (!attachment.bytes.length) return
+    const kind = previewKind(attachment.contentType, attachment.filename, attachment.sniffed, attachment.bytes)
+    if (kind === 'image') {
+      const url = imageDataUrl(attachment.bytes, attachment.sniffed)
+      if (!url) {
+        card.createDiv({
+          cls: 'pm-headers-note',
+          text: `Image is larger than ${(IMAGE_CAP / 1_000_000).toFixed(0)}MB, so it is not drawn here.`
+        })
+        return
+      }
+      card.createEl('img', {
+        cls: 'pm-att-image',
+        attr: { src: url, alt: `Attachment ${attachment.filename}` }
+      })
+      // Said out loud, because "nothing is rendered" is this screen's promise
+      // and an image on it looks like an exception to that promise.
+      card.createDiv({
+        cls: 'pm-headers-note',
+        text: 'Drawn from the bytes in the file. Its own bytes say it is a raster image, so there is nothing in it to fetch or run.'
+      })
+      return
+    }
+    if (kind === 'text') {
+      const { text, truncated } = previewText(attachment.bytes)
+      card.createEl('pre', { cls: 'pm-headers-pre', text })
+      card.createDiv({
+        cls: 'pm-headers-note',
+        text: truncated ? 'Read as text, never rendered. Cut at 20,000 characters.' : 'Read as text, never rendered.'
+      })
+      return
+    }
+    card.createEl('pre', { cls: 'pm-headers-pre pm-att-hex', text: hexDump(attachment.bytes) })
+    card.createDiv({
+      cls: 'pm-headers-note',
+      text: `First ${Math.min(attachment.bytes.length, 512)} bytes. Nothing here is executed or opened.`
+    })
   }
 
   onClose(): void {

@@ -481,6 +481,11 @@ export interface AttachmentReport {
   facts: string[]
   /** Defanged indicators found INSIDE the file's bytes, kept separate from the mail's own. */
   inside: string[]
+  /**
+   * The decoded bytes, for the preview pane. In memory only — nothing on this
+   * path writes them to disk, and formatPhishReport never emits them.
+   */
+  bytes: Uint8Array
 }
 
 /** Everything the analyser knows about one message. */
@@ -657,7 +662,8 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
       sha1: '',
       sniffed: '',
       facts: [...facts, 'this part could not be decoded, so its size, hashes and type are not recorded'],
-      inside: []
+      inside: [],
+      bytes: new Uint8Array()
     }
   }
   const sniffed = sniffType(a.bytes)
@@ -670,7 +676,8 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
     sha1: await hashBytes(a.bytes, 'SHA-1'),
     sniffed,
     facts: mismatch ? [mismatch, ...facts] : facts,
-    inside: stringsInside(a.bytes, owned)
+    inside: stringsInside(a.bytes, owned),
+    bytes: a.bytes
   }
 }
 

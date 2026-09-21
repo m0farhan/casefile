@@ -45,6 +45,37 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.34.0] - 2026-09-21
+
+### Added — tabs, and an attachment pane that shows you the file
+
+The analyser is five panes now — **Message · Links · Attachments · Body ·
+Indicators** — with counts on the tabs. A phishing analysis is five different
+questions, and answering them in one scroll means the first gets read and the
+rest get scrolled past.
+
+**Attachments** gives each file a card: name, declared type, size, both hashes
+computed here, what the bytes say it is, every stated fact, the indicators
+found inside it — and a preview.
+
+The preview rule is the part worth knowing, because "nothing is rendered" is
+this screen's promise and an image on it looks like an exception:
+
+- **A raster image is drawn — but only when its own BYTES say it is one.** Not
+  when the filename says so, not when the Content-Type says so; both are
+  written by the sender. It is drawn from a `data:` URL built out of the bytes
+  already in the message, so there is nothing in it to fetch and nothing to
+  run, and the card says so underneath.
+- **SVG and HTML are read as source, never drawn.** An SVG is a picture to a
+  person and a script container to a browser. A tracking pixel inside one is
+  reported as an indicator instead of being requested.
+- **Everything else falls back to its header bytes** — offset, hex, ASCII —
+  which is where the answer usually is when nothing else can be said honestly.
+
+So a PE named `receipt.png` and declared `image/png` is not drawn: it is
+flagged *named .png but the bytes begin as Windows executable (MZ)*, its C2 URL
+is listed as found inside the file, and its first bytes are laid out to read.
+
 ## [2.33.1] - 2026-09-21
 
 ### Removed
