@@ -25,6 +25,7 @@ import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
 import { setQuerySlaPolicies } from '../store/QueryParser'
 import { taskFolderForProjectPath } from '../store/layout'
+import { openPhishAnalysis } from '../modals/PhishAnalysisModal'
 
 export const PM_PROJECT_VIEW_TYPE = 'casefile-project'
 
@@ -506,6 +507,14 @@ export class ProjectView extends ItemView {
         if (!this.project) return
         new AlertIntakeModal(this.plugin.app, this.plugin, this.project, () => this.refreshProject()).open()
       })
+
+    // Beside the paste door on purpose: both are intake. One takes the alert a
+    // tool raised, the other takes the mail a user reported, and an analyst
+    // reaching for either is looking at the same corner of the same toolbar.
+    new ExtraButtonComponent(right)
+      .setIcon('fish')
+      .setTooltip('Analyse a phishing email')
+      .onClick(() => openPhishAnalysis(this.plugin))
 
     // Vault-wide, not this project — the tooltip says so, because it sits in a
     // project toolbar. It is here because the board is what is on screen at the

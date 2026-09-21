@@ -45,6 +45,16 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.32.2] - 2026-09-21
+
+### Changed
+
+- **The phishing analyser is on the board toolbar and the ribbon**, not just in
+  the command palette. It sits next to the paste door because both are intake:
+  one takes the alert a tool raised, the other the mail a user reported. The
+  ribbon entry is there because the analyser is vault-wide and you may have no
+  board open when a report lands.
+
 ## [2.32.1] - 2026-09-21
 
 ### Changed (the property grid lines up now)

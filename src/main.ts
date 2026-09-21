@@ -99,6 +99,10 @@ export default class PMPlugin extends Plugin {
 
     // The handover is the one thing that has to be reachable from any screen at
     // the end of a shift — a palette command nobody knew the name of was not.
+    this.addRibbonIcon('fish', 'Analyse a phishing email', () => {
+      openPhishAnalysis(this)
+    })
+
     this.addRibbonIcon('clipboard-list', 'Shift handover', () => {
       openHandoverModal(this)
     })
