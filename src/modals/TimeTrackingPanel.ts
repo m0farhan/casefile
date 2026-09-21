@@ -46,8 +46,10 @@ export function renderTimeTrackingPanel(container: HTMLElement, task: Task, opts
   const logList = timeSection.createDiv('pm-time-log-list')
   const renderLogs = () => {
     logList.empty()
-    if (!task.timeLogs) task.timeLogs = []
-    const logs = task.timeLogs
+    // Read-only: creating the array here made every task look edited the moment
+    // its modal rendered, so Cancel asked "discard unsaved changes?" on a task
+    // nobody had touched. The Log time button creates it when there is a row.
+    const logs = task.timeLogs ?? []
     for (let i = 0; i < logs.length; i++) {
       const log = logs[i]
       const row = logList.createDiv('pm-time-log-row')

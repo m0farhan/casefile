@@ -76,13 +76,24 @@ describe('verdictBreakdown + slaCompliance', () => {
   it('splits met / breached / open / noData honestly', () => {
     const met = incident({ resolvedAt: '2026-07-30T03:00:00.000Z' }) // 3h < 4h target
     const breached = incident({ resolvedAt: '2026-07-30T09:00:00.000Z' }) // 9h > 4h
-    const open = incident({})
+    const open = incident({ detectedAt: '2026-07-30T11:00:00.000Z' }) // 1h in, 4h target
     const noPolicy = makeTask({ issueType: 'incident', severity: 'sev9' })
     const rows = slaCompliance([met, breached, open, noPolicy], POLICIES, NOW)
     expect(rows).toEqual([
       { severityId: 'sev1', met: 1, breached: 1, noData: 0, open: 1 },
       { severityId: 'sev9', met: 0, breached: 0, noData: 1, open: 0 }
     ])
+  })
+
+  it('counts a live case that is already past its deadline as breached, not open', () => {
+    // The regression: an overdue open case landed in `open` and dropped out of
+    // the met/breached denominator, so a board of overdue work read 100% met.
+    const overdue = incident({}) // detected 12h ago against a 4h resolution target
+    expect(slaCompliance([overdue], POLICIES, NOW)).toEqual([
+      { severityId: 'sev1', met: 0, breached: 1, noData: 0, open: 0 }
+    ])
+    const done = (statusId: string) => statusId === 'done'
+    expect(reportSummary([overdue], [overdue], done, POLICIES, NOW).slaMetPct).toBe(0)
   })
 })
 

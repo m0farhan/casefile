@@ -219,10 +219,14 @@ export function slaCompliance(incidents: Task[], policies: Record<string, SlaPol
     const state = slaState(t, policies, now)
     if (!state) {
       row.noData++
+    } else if (state.breached) {
+      // Breached beats open: a deadline that has already passed is a fact, not
+      // a pending outcome. Counting an overdue live case as merely "running"
+      // kept it out of the denominator, so the board could read 100% targets
+      // met while every open case sat hours past its clock.
+      row.breached++
     } else if (!state.done) {
       row.open++
-    } else if (state.breached) {
-      row.breached++
     } else {
       row.met++
     }
@@ -235,7 +239,7 @@ export interface ReportSummary {
   incidents: number
   closedThisWeek: number
   truePositives: number
-  /** met / (met + breached) across severities; null until a clock has finished. */
+  /** met / (met + breached) across severities; null until a clock has finished or breached. */
   slaMetPct: number | null
 }
 

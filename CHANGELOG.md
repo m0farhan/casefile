@@ -45,6 +45,25 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.29.1] - 2026-09-21
+
+### Fixed (two things a live pass through the boards turned up)
+
+- **Opening a case and closing it again no longer claims you edited it.** The
+  time-tracking panel created the empty log list while it was drawing itself,
+  so the case differed from the copy the editor opened with before you touched
+  anything: Cancel asked "discard unsaved changes?" on every case, and with
+  *Save on close* on, shutting an untouched case wrote the note and stamped it.
+  The panel now reads the list without creating it; the Log time button still
+  creates it when there is a row to put in it.
+- **A case that is already past its deadline counts as breached in Reports,
+  not as still running.** Compliance asked "has the clock stopped?" before "has
+  the deadline passed?", so a live overdue case fell out of the denominator
+  entirely — a board whose every open case was hours overdue still read
+  **100% targets met**. A deadline that has gone by is a fact, not a pending
+  outcome, so it now counts where it happened. On the LetsDefend board this
+  moves the tile from 100% to 80%.
+
 ## [2.29.0] - 2026-09-20
 
 ### Changed (two bits of furniture you can now turn off)
