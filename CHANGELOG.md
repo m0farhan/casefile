@@ -45,6 +45,43 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.37.0] - 2026-09-22
+
+### Added — parity with PhishTool's parsed model
+
+Read from PhishTool's own public API schema, field by field, and closed the
+gaps that were worth closing.
+
+- **MD5 beside SHA-256 and SHA-1.** WebCrypto does not implement it, so it is
+  hand-written from RFC 1321 and checked against that document's own test
+  vectors plus the padding boundaries at 55, 56 and 64 bytes — a hash that is
+  subtly wrong is worse than none, because it looks like an answer. Verified
+  again end to end: the digest the plugin computes for an attachment is
+  byte-identical to what the system `md5` reports for the same extracted file.
+  It is not a security claim; it is the key a lot of the lookup world still
+  uses.
+- **Sender, Cc, In-Reply-To and References** join the identity list. Nothing
+  read the thread headers before.
+- **A stated thread claim.** When a message names a parent, the analysis says
+  so — and says plainly that nothing in the headers tells a genuine reply apart
+  from a thread someone else joined, and that checking whether the conversation
+  is yours is the analyst's job. It does not guess.
+- **The hop id and the envelope recipient** now show on each Received hop: the
+  id is what a mail admin searches their own logs by, and the `for` clause is
+  often the only place an alias appears.
+- **The registrable domain beside the host** on every link — `login.paypa1.co.uk`
+  states `paypa1.co.uk` — because that is what a block list is written against
+  and what two links have in common when they share an owner.
+- **Inline images are listed apart from attachments**, as PhishTool separates
+  them. A signature logo among four files made the mail read as heavier than it
+  was; the tab now counts them separately, as `Attachments (2+1)`.
+
+### Still deliberately absent
+
+QR codes, sandbox submission and per-artifact verdict labels. The first needs a
+decoder under the zero-dependency rule; the second needs the network; the third
+is a verdict this tool has no business reaching.
+
 ## [2.36.0] - 2026-09-22
 
 ### Added — read the mail the way the victim read it

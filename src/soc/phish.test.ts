@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  apexDomain,
   attachmentFacts,
   contentMismatch,
   extractLinks,
@@ -327,5 +328,20 @@ describe('htmlToText — the words the victim read', () => {
     // A hidden-text flag would fire constantly and would be a verdict.
     const html = '<div style="display:none">preheader</div><p>Real text</p>'
     expect(htmlToText(html)).toBe('preheader\nReal text')
+  })
+})
+
+describe('PhishTool parity on the parsed model', () => {
+  it('names the registrable domain beside the host', () => {
+    expect(apexDomain('login.paypa1.test')).toBe('paypa1.test')
+    expect(apexDomain('a.b.paypa1.co.uk')).toBe('paypa1.co.uk')
+    expect(apexDomain('paypa1.test')).toBe('paypa1.test')
+    expect(apexDomain('localhost')).toBe('localhost')
+  })
+
+  it('carries it on every link row', () => {
+    const [link] = extractLinks('', '<a href="https://login.paypa1.co.uk/x">y</a>', []).links
+    expect(link.host).toBe('login.paypa1.co.uk')
+    expect(link.apexDomain).toBe('paypa1.co.uk')
   })
 })

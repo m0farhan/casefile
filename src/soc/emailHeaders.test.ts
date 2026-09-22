@@ -254,3 +254,50 @@ describe('the report cannot be used as an injection vector', () => {
     expect(formatDelay(null)).toBe('')
   })
 })
+
+describe('PhishTool parity on the header model', () => {
+  const MAIL = [
+    'Received: from a.test (a.test [1.2.3.4]) by mx.corp.test with ESMTP id 4b1abc',
+    '\tfor <alias@corp.test>; Mon, 21 Sep 2026 09:12:00 +0000',
+    'From: Real Person <real@corp.test>',
+    'Sender: bounces@mailer.test',
+    'To: analyst@corp.test',
+    'Cc: team@corp.test',
+    'In-Reply-To: <parent-123@corp.test>',
+    'References: <a@corp.test> <parent-123@corp.test>',
+    'Subject: Re: invoice'
+  ].join('\n')
+
+  it('surfaces Sender, Cc and the thread headers', () => {
+    const labels = analyseHeaders(MAIL).identities
+    const value = (l: string) => labels.find((i) => i.label === l)?.value
+    expect(value('Sender')).toBe('bounces@mailer.test')
+    expect(value('Cc')).toBe('team@corp.test')
+    expect(value('In-Reply-To')).toBe('<parent-123@corp.test>')
+    expect(value('References')).toContain('parent-123@corp.test')
+  })
+
+  it('states the thread claim without judging it', () => {
+    const texts = analyseHeaders(MAIL).observations.map((o) => o.text)
+    const claim = texts.find((t) => t.includes('claims to reply'))
+    expect(claim).toContain('<parent-123@corp.test>')
+    // Says a genuine reply is indistinguishable here, and hands the question
+    // to the analyst rather than answering it.
+    expect(claim).toContain('tells a genuine reply apart')
+    expect(claim).toContain('check whether that conversation is yours')
+    expect(texts.join(' ')).not.toMatch(/hijack|malicious|suspicious/i)
+  })
+
+  it('carries the hop id and the envelope recipient', () => {
+    const [hop] = analyseHeaders(MAIL).hops
+    expect(hop.id).toBe('4b1abc')
+    expect(hop.forWhom).toBe('alias@corp.test')
+    expect(formatHeaderReport(analyseHeaders(MAIL))).toContain('id `4b1abc`')
+  })
+
+  it('says nothing for headers the mail does not carry', () => {
+    const labels = analyseHeaders('From: a@b.test').identities
+    expect(labels.find((i) => i.label === 'Cc')?.value).toBe('not recorded')
+    expect(labels.find((i) => i.label === 'In-Reply-To')?.value).toBe('not recorded')
+  })
+})

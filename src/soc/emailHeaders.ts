@@ -24,6 +24,10 @@ export interface Hop {
   from: string
   by: string
   via: string
+  /** The receiving MTA's own id for this hop — what a mail admin searches their logs by. */
+  id: string
+  /** The envelope recipient this hop was for; often the only place an alias is visible. */
+  forWhom: string
   /** ISO, or null when the hop stated no time. */
   at: string | null
   /** Seconds this hop took, or null when either end has no time. */
@@ -171,6 +175,8 @@ function parseHop(value: string, n: number): Hop {
   const fromName = /\bfrom\s+([^\s;()]+)/i.exec(value)
   const by = /\bby\s+([^\s;()]+)/i.exec(value)
   const via = /\bwith\s+([^\s;()]+)/i.exec(value)
+  const id = /\bid\s+([^\s;()]+)/i.exec(value)
+  const forWhom = /\bfor\s+<?([^\s;()<>]+)>?/i.exec(value)
   // The date is whatever follows the LAST semicolon: ids and `for` clauses can
   // carry semicolons of their own, and the timestamp is always the tail.
   const tail = value
@@ -183,6 +189,8 @@ function parseHop(value: string, n: number): Hop {
     from: [fromName?.[1], bracketed ? `[${bracketed[1]}]` : ''].filter(Boolean).join(' ') || 'not recorded',
     by: by?.[1] ?? 'not recorded',
     via: via?.[1] ?? 'not recorded',
+    id: id?.[1] ?? '',
+    forWhom: forWhom?.[1] ?? '',
     at: Number.isNaN(ms) ? null : new Date(ms).toISOString(),
     delaySec: null
   }
@@ -216,11 +224,19 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
   for (const [label, key] of [
     ['Subject', 'subject'],
     ['From', 'from'],
+    // `Sender:` is who actually submitted it when that differs from the author,
+    // and a mail carrying one is saying so out loud.
+    ['Sender', 'sender'],
     ['Return-Path', 'return-path'],
     ['Reply-To', 'reply-to'],
     ['To', 'to'],
+    ['Cc', 'cc'],
     ['Date', 'date'],
-    ['Message-ID', 'message-id']
+    ['Message-ID', 'message-id'],
+    // The thread headers. A reply that claims a parent is the shape of a
+    // hijacked thread, and until now nothing read them at all.
+    ['In-Reply-To', 'in-reply-to'],
+    ['References', 'references']
   ] as const) {
     identities.push({ label, value: first(key) || 'not recorded' })
   }
@@ -332,6 +348,20 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
     })
   }
 
+  // A reply that claims a parent, stated as what it is. Thread hijacking is a
+  // real shape and this is the evidence for it, but a genuine reply looks
+  // identical from the headers alone — so this says what the mail claims and
+  // stops, and the analyst decides whether the thread was really theirs.
+  const inReplyTo = first('in-reply-to')
+  if (inReplyTo) {
+    observations.push({
+      text:
+        `This message claims to reply to ${inReplyTo}. Nothing in the headers tells a genuine reply ` +
+        'apart from a thread someone else joined — check whether that conversation is yours.',
+      aligned: false
+    })
+  }
+
   const notes: string[] = []
   if (!fields.length) notes.push('No headers found in this paste.')
   if (!received.length) notes.push('No Received headers — the delivery path is not recorded.')
@@ -389,7 +419,8 @@ export function formatHeaderReport(a: HeaderAnalysis): string {
   if (a.hops.length) {
     for (const h of a.hops) {
       lines.push(
-        `${h.n}. from ${quoteUntrusted(h.from)} by ${quoteUntrusted(h.by)} with ${quoteUntrusted(h.via)} — ` +
+        `${h.n}. from ${quoteUntrusted(h.from)} by ${quoteUntrusted(h.by)} with ${quoteUntrusted(h.via)}` +
+          `${h.id ? ` id ${quoteUntrusted(h.id)}` : ''}${h.forWhom ? ` for ${quoteUntrusted(h.forWhom)}` : ''} — ` +
           `${h.at ?? 'no time recorded'}${formatDelay(h.delaySec)}`
       )
     }

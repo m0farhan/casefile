@@ -205,7 +205,10 @@ class PhishAnalysisModal extends Modal {
     const tabs: { id: TabId; label: string }[] = [
       { id: 'message', label: 'Message' },
       { id: 'links', label: `Links (${report.links.length})` },
-      { id: 'attachments', label: `Attachments (${report.attachments.length})` },
+      {
+        id: 'attachments',
+        label: `Attachments (${report.attachments.length}${report.inlineImages.length ? `+${report.inlineImages.length}` : ''})`
+      },
       { id: 'body', label: 'Body' },
       { id: 'indicators', label: `Indicators (${report.indicators.length})` }
     ]
@@ -307,6 +310,9 @@ class PhishAnalysisModal extends Modal {
         const line = links.createDiv('pm-headers-link')
         // Defanged and inert: this is a phishing link and it is never clickable.
         line.createDiv({ cls: 'pm-headers-ioc', text: link.target.replace(/\./g, '[.]') })
+        if (link.apexDomain && link.apexDomain !== link.host) {
+          line.createDiv({ cls: 'pm-headers-note', text: `domain ${link.apexDomain}` })
+        }
         if (link.wrappedBy) line.createDiv({ cls: 'pm-headers-note', text: `unwrapped from ${link.wrappedBy}` })
         for (const flag of link.flags) line.createDiv({ cls: 'pm-headers-flag', text: flag })
       }
@@ -320,7 +326,12 @@ class PhishAnalysisModal extends Modal {
     }
 
     if (this.tab === 'attachments') {
-      this.renderAttachments(section('Attachments'))
+      this.renderAttachments(section('Attachments'), report.attachments)
+      // Apart from the real attachments: a signature logo among four files
+      // makes the mail read as heavier than it is.
+      if (report.inlineImages.length) {
+        this.renderAttachments(section('Inline images — referenced by the body'), report.inlineImages)
+      }
       return
     }
 
@@ -370,14 +381,12 @@ class PhishAnalysisModal extends Modal {
    * as source because they are documents a browser would execute, and anything
    * else falls back to its header bytes, which is where the answer usually is.
    */
-  private renderAttachments(host: HTMLElement): void {
-    const report = this.report
-    if (!report) return
-    if (!report.attachments.length) {
+  private renderAttachments(host: HTMLElement, list: PhishReport['attachments']): void {
+    if (!list.length) {
       host.createDiv({ cls: 'pm-headers-empty', text: 'None.' })
       return
     }
-    for (const attachment of report.attachments) {
+    for (const attachment of list) {
       const card = host.createDiv('pm-att-card')
       card.createDiv({ cls: 'pm-att-name', text: attachment.filename })
       card.createDiv({

@@ -1,4 +1,5 @@
 import { type Attachment, hashBytes, parseEml } from './eml'
+import { md5 } from './md5'
 import { type HeaderAnalysis, addressOf, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
 import { defangIoc, extractIocsFromText, formatIocLine } from './ioc'
 import { decodePercentEscapes } from './toolbox'
@@ -26,6 +27,13 @@ export interface LinkFinding {
   wrappedBy: string
   /** Host of `target`, lowercased. */
   host: string
+  /**
+   * The registrable domain — `login.paypa1.co.uk` gives `paypa1.co.uk`. It is
+   * what a block list is usually written against and what two links have in
+   * common when they share an owner, so it is stated rather than left for the
+   * reader to work out from the host.
+   */
+  apexDomain: string
   /** Stated facts about the host — never a score. */
   flags: string[]
   /** Text the link was shown as, when that text is itself a URL that disagrees. */
@@ -403,6 +411,15 @@ const TWO_LABEL_SUFFIXES = new Set([
   'com.ua'
 ])
 
+/** The registrable domain: `login.paypa1.co.uk` → `paypa1.co.uk`. */
+export function apexDomain(host: string): string {
+  const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
+  if (parts.length < 2) return parts.join('.')
+  const lastTwo = parts.slice(-2).join('.')
+  if (parts.length >= 3 && TWO_LABEL_SUFFIXES.has(lastTwo)) return parts.slice(-3).join('.')
+  return lastTwo
+}
+
 /** The registrable-ish label: `login.paypa1.co.uk` → `paypa1`. */
 function brandLabel(host: string): string {
   const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
@@ -565,7 +582,7 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
     if (labelHost && labelHost !== host) {
       flags.push(`shown as a link to ${labelHost}, points at ${host || 'an unreadable host'}`)
     }
-    out.push({ raw, target, wrappedBy, host, flags, shownAs: label })
+    out.push({ raw, target, wrappedBy, host, apexDomain: apexDomain(host), flags, shownAs: label })
   }
   return { links: out, dropped: all.length - kept.length }
 }
@@ -597,6 +614,8 @@ export interface AttachmentReport {
   /** Hex, or '' when the part could not be decoded — never the empty-file hash. */
   sha256: string
   sha1: string
+  /** Broken as a security hash; still the key a lot of the lookup world uses. */
+  md5: string
   /** What the first bytes say it is, independent of name and declared type. */
   sniffed: string
   facts: string[]
@@ -624,6 +643,12 @@ export interface PhishReport {
   /** Links beyond the render cap, counted rather than silently dropped. */
   droppedLinks: number
   attachments: AttachmentReport[]
+  /**
+   * Images the body references rather than files the user was offered. Kept
+   * apart because a signature logo among four real attachments makes the list
+   * read as heavier than the mail actually is.
+   */
+  inlineImages: AttachmentReport[]
   /** Look-alike facts about the SENDER's domain, same folding the links get. */
   senderFacts: string[]
   /**
@@ -713,7 +738,10 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   const notes = [...eml.notes]
   if (dropped > 0) notes.push(`${dropped} further links are in this message and are not listed.`)
 
-  const attachments = await Promise.all(eml.attachments.map((a) => readAttachment(a, owned)))
+  const everyPart = await Promise.all(eml.attachments.map((a) => readAttachment(a, owned)))
+  const inlineFlags = new Set(eml.attachments.filter((a) => a.inline).map((a) => a.filename))
+  const attachments = everyPart.filter((a) => !inlineFlags.has(a.filename))
+  const inlineImages = everyPart.filter((a) => inlineFlags.has(a.filename))
 
   // The sender's own domain gets the folding the link hosts get. Five of the
   // shipped classifications are impersonation of one kind or another, and the
@@ -756,6 +784,7 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
     links,
     droppedLinks: dropped,
     attachments,
+    inlineImages,
     senderFacts,
     indicators,
     notes: dedupe(notes)
@@ -802,6 +831,7 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
       size: 0,
       sha256: '',
       sha1: '',
+      md5: '',
       sniffed: '',
       facts: [...facts, 'this part could not be decoded, so its size, hashes and type are not recorded'],
       inside: [],
@@ -822,6 +852,7 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
     size: a.size,
     sha256: await hashBytes(a.bytes),
     sha1: await hashBytes(a.bytes, 'SHA-1'),
+    md5: md5(a.bytes),
     sniffed,
     facts: [
       ...(mismatch ? [mismatch] : []),
@@ -877,6 +908,9 @@ export function formatPhishReport(report: PhishReport): string {
     for (const link of report.links) {
       const wrapped = link.wrappedBy ? ` (unwrapped from ${link.wrappedBy})` : ''
       lines.push(`- ${quoteUntrusted(defangIoc(link.target, 'url'))}${wrapped}`)
+      if (link.apexDomain && link.apexDomain !== link.host) {
+        lines.push(`  - domain ${quoteUntrusted(defangIoc(link.apexDomain, 'domain'))}`)
+      }
       for (const flag of link.flags) lines.push(`  - ${quoteUntrusted(flag)}`)
     }
     if (report.droppedLinks > 0) lines.push(`- ${report.droppedLinks} further links are not listed.`)
@@ -890,6 +924,7 @@ export function formatPhishReport(report: PhishReport): string {
       lines.push(`- ${quoteUntrusted(a.filename)} — ${quoteUntrusted(a.contentType)}, ${size}`)
       lines.push(`  - SHA-256 ${a.sha256 || 'not recorded'}${a.sha256 ? ' (computed here)' : ''}`)
       lines.push(`  - SHA-1 ${a.sha1 || 'not recorded'}${a.sha1 ? ' (computed here)' : ''}`)
+      lines.push(`  - MD5 ${a.md5 || 'not recorded'}${a.md5 ? ' (computed here)' : ''}`)
       if (a.sniffed) lines.push(`  - bytes begin as ${a.sniffed}`)
       for (const fact of a.facts) lines.push(`  - ${quoteUntrusted(fact)}`)
       for (const found of a.inside) lines.push(`  - found inside the file: ${quoteUntrusted(found)}`)
@@ -903,6 +938,14 @@ export function formatPhishReport(report: PhishReport): string {
   // a mail whose text was nowhere. Fenced with a backtick run longer than
   // anything inside it, so hostile markdown cannot close its own block, and
   // nothing inside a fence autolinks.
+  if (report.inlineImages.length) {
+    lines.push('', '### Inline images', '')
+    for (const a of report.inlineImages) {
+      lines.push(`- ${quoteUntrusted(a.filename)} — ${quoteUntrusted(a.contentType)}, ${a.size} bytes`)
+      if (a.sha256) lines.push(`  - SHA-256 ${a.sha256} (computed here)`)
+    }
+  }
+
   lines.push('', '### Message body', '')
   if (report.text.trim() || report.htmlSource.trim()) {
     if (report.text.trim()) lines.push('Plain text:', '', fenced(report.text.trim()), '')
