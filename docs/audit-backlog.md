@@ -1,12 +1,12 @@
-# Casefile audit → Responder port checklist
+# Responder audit → Responder port checklist
 
-> Moved here from the parked Responder repo on 2026-09-20, when Farhan chose to improve Casefile itself
+> Moved here from the parked Responder repo on 2026-09-20, when Farhan chose to improve Responder itself
 > rather than replace it. This is the roadmap: 111 findings from the full 2.20 audit, 21 of them already
 > closed in 2.21.0. ★ marks a finding hand-verified against the source.
 >
 > Note on phase labels: "phase 1" was Responder's build phase for that item. Read it as "open".
 
-Generated 2026-09-19 from the 8-lens audit of Casefile 2.20 (111 findings). Verification agents died on a spend limit; items marked ★ were verified against source by hand, the rest are auditor-reported. Items marked ✓2.21 were fixed in Casefile 2.21.0 and must not regress in the port; everything else is a phase-1 requirement (the port fixes it by construction) unless marked "port as-is".
+Generated 2026-09-19 from the 8-lens audit of Responder 2.20 (111 findings). Verification agents died on a spend limit; items marked ★ were verified against source by hand, the rest are auditor-reported. Items marked ✓2.21 were fixed in Responder 2.21.0 and must not regress in the port; everything else is a phase-1 requirement (the port fixes it by construction) unless marked "port as-is".
 
 Full evidence and fixes per finding: session scratchpad `casefile-audit-findings.md` (copy into docs/ if the scratchpad is gone).
 
@@ -240,7 +240,7 @@ Protect (port verbatim where possible):
 | A1 | major | Panel autosave marks in-flight edits as persisted without writing them | phase 1 |
 | A2 | major | TaskModal still saves the whole stale clone; the panel's diff-patch fix was never ported | ★ ✓2.21 |
 | A3 | major | Cache invalidation cannot reach handed-out Project objects; a later save from a stale holder re-installs it as | phase 1 |
-| A4 | major | Renaming a case note or its folder in Obsidian's file explorer makes the case disappear from Casefile | ★ phase 1 |
+| A4 | major | Renaming a case note or its folder in Obsidian's file explorer makes the case disappear from Responder | ★ phase 1 |
 | A5 | major | Duplicate task ids on disk are collapsed silently — one file becomes invisible and is never cleaned up | phase 1 |
 | A6 | minor | Retired `priority` is still emitted into every NEW task file and threaded through 29 source files | phase 1 |
 | A7 | minor | Issue-key sequence can hand out the same key twice; nothing detects it on load | phase 1 |

@@ -223,7 +223,7 @@ describe('assetRule — the boundary that decides what is never sent', () => {
     expect(assetRule('8.8.8.8', [])).toBeNull()
   })
 
-  it('attributes a listed rule to the analyst and a built-in range to Casefile', () => {
+  it('attributes a listed rule to the analyst and a built-in range to Responder', () => {
     expect(assetRule('mail.corp.example', ['corp.example'])).toEqual({ rule: 'corp.example', builtIn: false })
     expect(assetRule('10.0.0.1', ['corp.example'])?.builtIn).toBe(true)
   })

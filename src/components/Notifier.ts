@@ -54,7 +54,7 @@ export class Notifier {
     try {
       await this.check()
     } catch (e) {
-      console.error('Casefile: notification pass failed', e)
+      console.error('Responder: notification pass failed', e)
     }
     await this.sweepArchive()
   }
@@ -104,21 +104,21 @@ export class Notifier {
             await this.plugin.store.archiveTask(project, task.id, 'auto')
             moved++
           } catch (e) {
-            console.error(`Casefile: could not auto-archive ${task.title}`, e)
+            console.error(`Responder: could not auto-archive ${task.title}`, e)
             failed++
           }
         }
       }
       if (failed) {
         new Notice(
-          `Casefile could not archive ${failed} case${failed === 1 ? '' : 's'}. ` +
+          `Responder could not archive ${failed} case${failed === 1 ? '' : 's'}. ` +
             'They stay on the board; the console has the reason for each.',
           8000
         )
       }
       if (moved) {
         new Notice(
-          `Casefile archived ${moved} closed case${moved === 1 ? '' : 's'} (${days}d). ` +
+          `Responder archived ${moved} closed case${moved === 1 ? '' : 's'} (${days}d). ` +
             'Each one has an "archived" entry in its timeline; unarchive from the case menu.',
           8000
         )

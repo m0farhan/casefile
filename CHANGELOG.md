@@ -45,6 +45,22 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.38.0] - 2026-09-22
+
+### Changed — the plugin is called Responder
+
+Every name the analyst sees: the entry in Community plugins, the settings tab,
+the prefix on every command in the palette, and every notice the plugin
+raises. The description was rewritten too — it still led with "Jira-style" and
+issue keys, which stopped being the point several releases ago; it now names
+what the thing actually does, phishing analyser included.
+
+**The plugin id and folder stay `casefile`, deliberately.** Obsidian keys your
+settings, your assigned hotkeys and the plugin folder on the id, so changing
+it orphans all three — and `responder` is already taken by a separate, parked
+plugin in this vault. The id is invisible in normal use; nothing on screen
+says Casefile any more.
+
 ## [2.37.0] - 2026-09-22
 
 ### Added — parity with PhishTool's parsed model

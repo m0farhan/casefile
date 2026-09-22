@@ -444,7 +444,7 @@ export default class PMPlugin extends Plugin {
       if (upgraded) {
         this.settings.statuses = upgraded
         new Notice(
-          'Casefile: added a User Response status, between In Progress and Done. ' +
+          'Responder: added a User Response status, between In Progress and Done. ' +
             'Nothing was removed. Settings → Statuses to rename, reorder or delete it.',
           8000
         )

@@ -1,7 +1,7 @@
 {
-  "name": "casefile",
-  "version": "2.37.0",
-  "description": "Casefile - Jira-style case and SOC incident tracking for Obsidian",
+  "name": "responder",
+  "version": "2.38.0",
+  "description": "Responder - Jira-style case and SOC incident tracking for Obsidian",
   "main": "main.js",
   "type": "module",
   "scripts": {

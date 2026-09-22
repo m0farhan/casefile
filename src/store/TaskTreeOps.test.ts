@@ -216,7 +216,7 @@ describe('totalLoggedHours', () => {
   })
 })
 
-describe('cloneTaskSubtree — Casefile field semantics', () => {
+describe('cloneTaskSubtree — Responder field semantics', () => {
   it('resets key, audit trail, verdict and lifecycle stamps; copies iocs/attack by value', () => {
     const source = makeTask({
       id: 'src-1',

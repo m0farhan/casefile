@@ -328,7 +328,7 @@ export function renderIocSection(
           text: `ASSET · ${asset.rule}`,
           attr: {
             title: asset.builtIn
-              ? 'A private, loopback or link-local range — built into Casefile, not from your settings. ' +
+              ? 'A private, loopback or link-local range — built into Responder, not from your settings. ' +
                 'Recorded here as evidence, never sent to a reputation provider, and not searched across cases.'
               : 'Matches your asset boundary — your own estate. Recorded here as evidence, never sent ' +
                 'to a reputation provider, and not searched across cases. Derived from your settings, ' +

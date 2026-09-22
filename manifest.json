@@ -1,9 +1,9 @@
 {
 	"id": "casefile",
-	"name": "Casefile",
-	"version": "2.37.0",
+	"name": "Responder",
+	"version": "2.38.0",
 	"minAppVersion": "1.8.7",
-	"description": "Jira-style case and SOC incident tracking: issue keys, epics, kanban swimlanes, SLA timers, IOC handling, reports and shift handover.",
+	"description": "SOC case and incident response in your vault: kanban boards, SLA timers, alert intake, a phishing analyser, indicator handling, reports and shift handover.",
 	"author": "Mohammed Farhan Aslam",
 	"isDesktopOnly": false
 }

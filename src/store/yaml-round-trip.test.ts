@@ -279,7 +279,7 @@ describe('hydration does not alias the source frontmatter', () => {
   })
 })
 
-describe('Casefile field round-trips', () => {
+describe('Responder field round-trips', () => {
   it('preserves every Jira/SOC field through serialize -> hydrate', () => {
     const original = makeTask({
       id: 'gs-1',

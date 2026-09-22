@@ -89,7 +89,7 @@ export class KanbanCard {
 
     const body = card.createDiv('pm-kanban-card-body')
 
-    // Two rows, not six. Casefile's card carried the same facts down a stack of
+    // Two rows, not six. Responder's card carried the same facts down a stack of
     // one-item rows — parent, title, soc chips, time, tags, progress, subtasks,
     // footer — and a routine incident card ran ~130px tall, so a column held
     // three of them. Farhan's one complaint about the old board. Nothing is

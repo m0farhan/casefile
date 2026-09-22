@@ -1,4 +1,4 @@
-# Casefile
+# Responder
 
 Jira-style case & SOC incident tracking, natively in your Obsidian vault.
 Cases and tasks are plain markdown with YAML frontmatter — portable,
@@ -42,7 +42,7 @@ trail, hand over cleanly.
   until you add your own API keys in settings (stored on this device only,
   never in the vault or `data.json`); the indicator value is sent to the
   provider only when you click the check button, never automatically.
-  Casefile itself makes exactly that one kind of request. Its case views
+  Responder itself makes exactly that one kind of request. Its case views
   never open links or load remote images from case text — a click on a link
   copies it defanged instead; opening the same note directly in Obsidian
   follows Obsidian's normal behaviour.
@@ -60,7 +60,7 @@ trail, hand over cleanly.
 One case/task = one markdown file (`pm-project` / `pm-task` frontmatter),
 stored under `Cases/` and `Tasks/<case>/`. If any other plugin that reads the
 same `pm-project`/`pm-task` frontmatter is ever installed in the same vault,
-keep it disabled while Casefile is enabled: both would write the same files.
+keep it disabled while Responder is enabled: both would write the same files.
 
 Works alongside SOC Toolkit: descriptions are plain notes, so its defang and
 IP-reputation commands work inside them.
