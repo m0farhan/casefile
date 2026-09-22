@@ -81,6 +81,10 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
   // A plain board records no severity and no verdict; the values stay on any
   // note that already has them and return if the board is switched back.
   const socBoard = boardType !== 'plain'
+  // Two columns, filled in order: every property takes the next free cell, so a
+  // property that does not apply (no parent, no severity, no verdict) leaves no
+  // hole behind — its neighbours close up instead. Which pairs share a row
+  // therefore depends on what this task shows, and that is the point.
   const grid = container.createDiv('pm-prop-grid')
 
   // Type — one merged control: the issue types plus the structural kinds.
@@ -116,8 +120,7 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     'shapes'
   )
 
-  // Parent task shares the type row: the picker shows only for subtasks; otherwise an empty
-  // cell holds the right column so switching the type never reflows the rest of the grid.
+  // Parent task — subtasks only; it follows Type straight into the next cell.
   if (task.type === 'subtask') {
     renderPropRow(
       grid,
@@ -150,8 +153,6 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       },
       'corner-up-right'
     )
-  } else {
-    grid.createDiv()
   }
 
   // Status | Severity — severity is the single urgency dial, optional on every task type.
@@ -196,10 +197,6 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       },
       'shield-alert'
     )
-  } else {
-    // The grid is two columns: Status took the left cell, so a spacer keeps
-    // everything below it aligned.
-    grid.createDiv()
   }
 
   // Verdict — incidents only, and only on a case board; the spacer keeps the
@@ -226,10 +223,9 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       },
       'scale'
     )
-    grid.createDiv()
   }
 
-  // Progress | Bucket share a row (milestones have no progress, so Bucket pairs with a spacer)
+  // Progress — milestones have none
   if (task.type !== 'milestone') {
     renderPropRow(
       grid,
@@ -270,7 +266,6 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     },
     'inbox'
   )
-  if (task.type === 'milestone') grid.createDiv()
 
   // Due (Date for milestones)
   renderPropRow(
@@ -293,8 +288,7 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     'calendar-clock'
   )
 
-  // Start shares the dates row with Due. Milestones have no start, so an empty cell holds the
-  // slot there so Assignees still leads the next row.
+  // Start — milestones have none
   if (task.type !== 'milestone') {
     renderPropRow(
       grid,
@@ -314,8 +308,6 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
       },
       'play'
     )
-  } else {
-    grid.createDiv()
   }
 
   // Assignees
