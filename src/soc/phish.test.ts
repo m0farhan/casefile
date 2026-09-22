@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentFacts, contentMismatch, extractLinks, hostFacts, skeleton, sniffType, unwrapUrl } from './phish'
+import {
+  attachmentFacts,
+  contentMismatch,
+  extractLinks,
+  hostFacts,
+  htmlToText,
+  skeleton,
+  sniffType,
+  unwrapUrl
+} from './phish'
 
 describe('unwrapUrl', () => {
   it('unwraps Microsoft Safe Links back to the address the sender wrote', () => {
@@ -269,5 +278,54 @@ describe('an anchor label is dropped only when nothing else found it', () => {
     const html = '<a href="http://evil.test/go">https://paypal.test/signin</a>'
     const targets = extractLinks('', html, []).links.map((l) => l.target)
     expect(targets).toEqual(['http://evil.test/go'])
+  })
+})
+
+describe('htmlToText — the words the victim read', () => {
+  it('drops stylesheet and script CONTENT, not just their tags', () => {
+    // Phishing HTML is mostly style block. Stripping tags alone leaves the CSS
+    // as the first thing in the pane, which defeats the whole point.
+    const html =
+      '<html><head><style>.a{color:#fff;background:url(http://x.test/b.gif)}</style></head>' +
+      '<body><script>var c2="http://evil.test"</script><p>Your account is limited.</p></body></html>'
+    expect(htmlToText(html)).toBe('Your account is limited.')
+  })
+
+  it('removes an Outlook conditional comment, which contains a >', () => {
+    // `<[^>]*>` closes this early and the rest leaks in as if it were read.
+    const html = '<!--[if mso]><table><tr><td><![endif]--><p>Verify now</p>'
+    expect(htmlToText(html)).toBe('Verify now')
+  })
+
+  it('keeps text the victim saw that only looks like markup', () => {
+    // Strip-then-decode. Decoding first would turn this into a tag and delete it.
+    expect(htmlToText('<p>Click &lt;here&gt; to continue</p>')).toBe('Click <here> to continue')
+  })
+
+  it('breaks block elements onto their own lines and collapses the rest', () => {
+    const html = '<div>Dear    user</div><p>Your account\n  is limited.</p><br><span>Act now</span>'
+    expect(htmlToText(html)).toBe('Dear user\nYour account is limited.\nAct now')
+  })
+
+  it('decodes the entities a lure hides its words in', () => {
+    expect(htmlToText('<p>P&#97;yP&#x61;l&nbsp;Security</p>')).toBe('PayPal Security')
+  })
+
+  it('treats an unterminated script as swallowing the rest, which is the safe direction', () => {
+    expect(htmlToText('<p>Hello</p><script>var x = 1; // never closed')).toBe('Hello')
+  })
+
+  it('does not hang on a large body full of unterminated opens', () => {
+    const html = '<script>x'.repeat(50_000) + '<p>text</p>'
+    const started = performance.now()
+    htmlToText(html)
+    expect(performance.now() - started).toBeLessThan(2000)
+  })
+
+  it('says nothing about whether any of it was styled invisible', () => {
+    // Preheader text is legitimate and on nearly every marketing-shaped mail.
+    // A hidden-text flag would fire constantly and would be a verdict.
+    const html = '<div style="display:none">preheader</div><p>Real text</p>'
+    expect(htmlToText(html)).toBe('preheader\nReal text')
   })
 })

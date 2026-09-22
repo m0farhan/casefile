@@ -45,6 +45,46 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.36.0] - 2026-09-22
+
+### Added — read the mail the way the victim read it
+
+A third section in the Body tab: **Text extracted from the HTML — not
+rendered**. Most phishing is HTML-only, and on those mails that tab printed
+"Not recorded." for plain text and then several kilobytes of markup. Real
+phishing HTML opens with a stylesheet and table scaffolding, so at a
+4,000-character preview the lure's first sentence was frequently not on screen
+at all — the only way to read it was to create the case first and open the
+note, which is deciding after filing.
+
+It is not a render and not a parse. Nothing reaches a DOM, nothing is fetched,
+no stylesheet applies and no script exists — the same inert string treatment
+every other part of this module gives hostile markup, just made legible.
+
+Three things it has to get right, none of which the existing tag-strip did:
+
+- **Strip, then decode.** `extractLinks` decodes entities FIRST so an href
+  written in `&#x2F;` is still found. This does the opposite, because
+  `&lt;click here&gt;` is text the victim SAW — decoding before the strip turns
+  it into a tag and deletes it.
+- **Drop `<script>` and `<style>` contents**, not just their tags, or the
+  readable pane opens with the stylesheet and the lure is buried again. Done by
+  scanning with `indexOf` rather than a lazy regex, which stays linear on a
+  multi-megabyte body full of unterminated opens.
+- **Remove comments in their own pass.** `<[^>]*>` closes early on a comment
+  containing `>`, and Outlook writes `<!--[if mso]>…<![endif]-->` on nearly
+  every message it sends, so that is the common case.
+
+Source newlines and indentation collapse the way a renderer collapses them;
+only block boundaries become line breaks. The extracted text is carried into
+the copied report and the case too, so the screen, the clipboard and the note
+say the same thing.
+
+It says **nothing** about whether any of that text was styled invisible.
+Preheader text is legitimate and on nearly every marketing-shaped mail, so a
+hidden-text flag would fire constantly — and it would be a verdict wearing a
+fact's clothes, which is the thing this analyser refuses to do.
+
 ## [2.35.1] - 2026-09-22
 
 ### Changed

@@ -340,7 +340,11 @@ class PhishAnalysisModal extends Modal {
           })
         }
       }
+      // Most readable first: on an HTML-only mail the first section is empty
+      // and the lure used to be somewhere inside several kilobytes of markup,
+      // past the preview cut.
       showBody('Plain text', report.text)
+      showBody('Text extracted from the HTML — not rendered', report.htmlText)
       showBody('HTML source — read, never rendered', report.htmlSource)
       return
     }

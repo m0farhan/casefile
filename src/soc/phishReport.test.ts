@@ -195,3 +195,25 @@ describe('the report carries the message body it says it carries', () => {
     expect(markdown).toContain('### Message body\n\nNot recorded.')
   })
 })
+
+describe('the extracted text travels with the analysis', () => {
+  it('is on the report, so the screen, the clipboard and the case agree', async () => {
+    const report = await analysePhishing(MAIL, [], [])
+    expect(report.htmlText).toContain('Your account is limited.')
+    // The markup itself is not in the extracted text.
+    expect(report.htmlText).not.toContain('<img')
+    expect(report.htmlText).not.toContain('track.paypa1.test/o.gif')
+
+    const md = formatPhishReport(report)
+    expect(md).toContain('Text extracted from the HTML, not rendered:')
+    expect(md).toContain('Your account is limited.')
+    // The source is still carried beside it, not replaced by it.
+    expect(md).toContain('HTML source, not rendered:')
+  })
+
+  it('is empty, not invented, when the mail has no HTML part', async () => {
+    const report = await analysePhishing('Content-Type: text/plain\n\nJust words.', [], [])
+    expect(report.htmlText).toBe('')
+    expect(formatPhishReport(report)).not.toContain('Text extracted from the HTML')
+  })
+})

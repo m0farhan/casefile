@@ -238,6 +238,108 @@ export function decodeEntities(text: string): string {
   })
 }
 
+/**
+ * Remove an element AND its contents, by scanning rather than matching.
+ *
+ * indexOf, not a regex: a lazy `[\s\S]{0,N}?` over a multi-megabyte body with
+ * many unterminated opens is the quadratic freeze ANCHOR_RE already carries a
+ * comment about. Scanning is linear and obviously bounded. An unterminated
+ * element swallows the rest of the document, which is the safe direction —
+ * everything after an unclosed `<script` really is inside it.
+ */
+function dropElement(html: string, tag: string): string {
+  const lower = html.toLowerCase()
+  const open = `<${tag}`
+  const close = `</${tag}`
+  let out = ''
+  let i = 0
+  for (;;) {
+    const start = lower.indexOf(open, i)
+    if (start < 0) return out + html.slice(i)
+    out += html.slice(i, start)
+    const closeAt = lower.indexOf(close, start + open.length)
+    if (closeAt < 0) return out
+    const gt = html.indexOf('>', closeAt)
+    if (gt < 0) return out
+    i = gt + 1
+  }
+}
+
+/**
+ * Remove HTML comments.
+ *
+ * Its own pass because `<[^>]*>` gets this wrong: a comment containing `>`
+ * closes early and the rest of it leaks into the text as if the victim had
+ * read it. Outlook generates `<!--[if mso]>…<![endif]-->` on almost every
+ * message it sends, so this is the common case, not an edge one.
+ */
+function dropComments(html: string): string {
+  let out = ''
+  let i = 0
+  for (;;) {
+    const start = html.indexOf('<!--', i)
+    if (start < 0) return out + html.slice(i)
+    out += html.slice(i, start)
+    const end = html.indexOf('-->', start + 4)
+    if (end < 0) return out
+    i = end + 3
+  }
+}
+
+/** Elements whose end means a line ended, so the text reads as it was laid out. */
+const BLOCK_TAGS =
+  /<\s*\/?\s*(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|article|header|footer|td|th|pre)\b[^>]{0,1000}>/gi
+const LINE_BREAKS = /<\s*(?:br|hr)\b[^>]{0,1000}>/gi
+
+/**
+ * The words the victim read, pulled out of the HTML body.
+ *
+ * NOT a render and not a parse. Nothing is handed to a DOM, nothing is
+ * fetched, no stylesheet is applied and no script exists — the same inert
+ * string treatment every other part of this module gives hostile markup, just
+ * made legible. Most phishing is HTML-only, and the one question a lure turns
+ * on is what it asks the user to do; reading that out of markup is the least
+ * legible thing on a screen that renders everything else well.
+ *
+ * The order is the opposite of extractLinks on purpose. That decodes entities
+ * FIRST so an href written in `&#x2F;` is still found. This strips first and
+ * decodes last, because `&lt;click here&gt;` is text the victim SAW: decoding
+ * it before the strip would turn it into a tag and delete it.
+ *
+ * Deliberately says nothing about whether any of this text was styled
+ * invisible. Preheader text is legitimate and on nearly every marketing-shaped
+ * mail, so a hidden-text flag would fire constantly — and it would be a
+ * verdict wearing a fact's clothes, which is the thing this module refuses.
+ */
+export function htmlToText(html: string): string {
+  // A break marker the document cannot contain: the source's own newlines are
+  // layout, not content — a renderer collapses them to a space — so the breaks
+  // WE insert at block boundaries have to be distinguishable from them after
+  // the collapse. Any that somehow survive decoding are dropped first.
+  const BREAK = '\u0001'
+  let text = html.split(BREAK).join('')
+  text = dropElement(text, 'script')
+  text = dropElement(text, 'style')
+  text = dropElement(text, 'noscript')
+  text = dropElement(text, 'head')
+  text = dropComments(text)
+  text = text.replace(LINE_BREAKS, BREAK)
+  text = text.replace(BLOCK_TAGS, BREAK)
+  text = text.replace(/<[^>]{0,2000}>/g, '')
+  text = decodeEntities(text)
+  // Everything a renderer treats as whitespace collapses to one space —
+  // including the source's newlines and indentation.
+  text = text.replace(/[\s\u200b-\u200d]+/g, ' ')
+  // Then the marked boundaries become the only real line breaks. split/join
+  // rather than a regex: a control character inside one is a lint error, and
+  // this reads better anyway — an empty block contributes no line.
+  return text
+    .split(BREAK)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
 /** Tabs and newlines inside a URL are stripped by the parser, so strip them here too. */
 function normaliseUrl(value: string): string {
   return decodeEntities(value)
@@ -513,6 +615,11 @@ export interface PhishReport {
   /** Plain-text body. The HTML body is deliberately NOT carried into the UI as markup. */
   text: string
   htmlSource: string
+  /**
+   * The words out of the HTML body — what the victim actually read. Empty when
+   * the mail had no HTML part. Derived, never a substitute for htmlSource.
+   */
+  htmlText: string
   links: LinkFinding[]
   /** Links beyond the render cap, counted rather than silently dropped. */
   droppedLinks: number
@@ -645,6 +752,7 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
     headers,
     text: eml.text,
     htmlSource: eml.html,
+    htmlText: htmlToText(eml.html),
     links,
     droppedLinks: dropped,
     attachments,
@@ -798,6 +906,9 @@ export function formatPhishReport(report: PhishReport): string {
   lines.push('', '### Message body', '')
   if (report.text.trim() || report.htmlSource.trim()) {
     if (report.text.trim()) lines.push('Plain text:', '', fenced(report.text.trim()), '')
+    if (report.htmlText.trim()) {
+      lines.push('Text extracted from the HTML, not rendered:', '', fenced(report.htmlText.trim()), '')
+    }
     if (report.htmlSource.trim()) lines.push('HTML source, not rendered:', '', fenced(report.htmlSource.trim()))
   } else {
     lines.push('Not recorded.')
