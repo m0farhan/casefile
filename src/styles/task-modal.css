@@ -655,22 +655,24 @@ button.pm-verdict-cancel:hover {
   color: var(--gs-green);
 }
 .pm-headers-warn {
-  color: var(--gs-amber);
+  color: var(--gs-yellow);
 }
-/* On a whole sentence it is not: three lines of solid amber is a wall nobody
-   reads, and it makes every observation look equally urgent. The marker
-   carries the colour and the sentence stays legible. */
+/* The line that differs is yellow AND ruled. The rule is what stops a run of
+   them reading as one undifferentiated block — it gives each line a left edge
+   to start from — while the colour keeps them findable at a glance, which is
+   the point of marking them at all. */
 .pm-obs {
-  color: var(--gs-ink);
   font-size: var(--font-ui-smaller);
   line-height: 1.5;
   padding: 3px 0 3px 10px;
   border-left: 2px solid var(--gs-hairline-strong);
 }
 .pm-obs--differ {
-  border-left-color: var(--gs-amber);
+  color: var(--gs-yellow);
+  border-left-color: var(--gs-yellow);
 }
 .pm-obs--match {
+  color: var(--gs-ink-muted);
   border-left-color: var(--gs-green);
 }
 .pm-headers-neutral {
@@ -729,12 +731,15 @@ button.pm-verdict-cancel:hover {
    attachmentFacts return nothing when a host or a file is unremarkable. So the
    whole class carries the attention hue: it marks "read this line", not "this
    mail is bad". */
+/* Every flag is something worth reading — hostFacts and attachmentFacts emit
+   nothing at all when a host or a file is unremarkable — so the whole class
+   carries the hue. It marks "read this line", never "this mail is bad". */
 .pm-headers-flag {
-  color: var(--gs-ink-muted);
+  color: var(--gs-yellow);
   font-size: var(--font-ui-smaller);
   line-height: 1.5;
   padding: 2px 0 2px 10px;
-  border-left: 2px solid var(--gs-amber);
+  border-left: 2px solid var(--gs-yellow);
 }
 .pm-headers-pre {
   max-height: 180px;

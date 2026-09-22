@@ -45,6 +45,18 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.35.1] - 2026-09-22
+
+### Changed
+
+- **The analyser's marked lines are yellow, and coloured again.** 2.34.1 had
+  taken the colour off the text and left it only on the rule; the lines are
+  yellow text with a yellow rule now. The rule stays because it is what stops a
+  run of them reading as one block — it gives each line a left edge — while the
+  colour is what makes them findable at a glance, which is the point of marking
+  them. A matched observation keeps its green rule with muted text, so the two
+  outcomes still read apart.
+
 ## [2.35.0] - 2026-09-21
 
 ### Fixed — an audit of everything built this session
