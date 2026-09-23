@@ -7,3 +7,6 @@ CLAUDE.md
 DESIGN.md
 dist/
 backups/
+
+# Internal roadmap: kept on disk, not published (open findings list)
+docs/audit-backlog.md
