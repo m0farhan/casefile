@@ -45,6 +45,24 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## Unreleased
+
+### Changed — the case card reads at a glance
+
+- SLA countdowns roll into days past 24 hours. A breached case showed
+  `Resolve +476h 46m`, which is nineteen and a half days and reads as
+  nothing at all; it now says `+19d 20h`. Applies everywhere the duration
+  is printed — cards, table, case report, handover, reports.
+- The countdown is drawn with the same chip primitive as the severity badge
+  beside it. It was the one hand-rolled chip left on the card: monospace, its
+  own radius, its own padding, so the loudest thing on the board matched
+  nothing else on it. Fixed-width digits are kept, so the row still cannot
+  shuffle sideways when the clock ticks.
+- Only the countdown is filled, and only while it wants something: a healthy
+  clock is quiet grey, at-risk is amber, breached is red. An overdue due date
+  is red text rather than a second red block competing with it.
+- Card tags are drawn at the size of the chips they share the row with.
+
 ## [2.38.0] - 2026-09-22
 
 ### Changed — the plugin is called Responder

@@ -88,6 +88,15 @@ describe('formatSlaRemaining', () => {
     expect(formatSlaRemaining(-72 * MIN)).toBe('+1h 12m')
     expect(formatSlaRemaining(0)).toBe('0m')
   })
+
+  it('rolls into days past 24 hours, because nobody reads 476 hours', () => {
+    expect(formatSlaRemaining(24 * 60 * MIN)).toBe('1d 0h')
+    expect(formatSlaRemaining(25 * 60 * MIN + 30 * MIN)).toBe('1d 1h')
+    // The live board case: a breached lab incident showing '+476h 46m'.
+    expect(formatSlaRemaining(-(476 * 60 + 46) * MIN)).toBe('+19d 20h')
+    // The boundary holds on the minute side: 23h 59m is still hours.
+    expect(formatSlaRemaining((23 * 60 + 59) * MIN)).toBe('23h 59m')
+  })
 })
 
 describe('defangIoc', () => {

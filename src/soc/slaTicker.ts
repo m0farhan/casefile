@@ -64,10 +64,16 @@ const registry = new Map<HTMLElement, ChipEntry>()
 export function renderSlaChip(el: HTMLElement, task: Task, policies: Record<string, SlaPolicy>): HTMLElement | null {
   const view = slaChipView(task, policies, Date.now())
   if (!view) return null
-  const chip = el.createSpan({ cls: 'pm-sla' })
-  paint(chip, view)
-  if (view.live) registry.set(chip, { task, policies })
-  return chip
+  // One chip primitive, like severity and due beside it (VD-03/VD-04). The
+  // countdown used to be the only hand-rolled span on the card: monospace,
+  // its own radius and its own padding, so the loudest thing on the board was
+  // also the one that matched nothing. It keeps tabular numerals instead —
+  // the width still cannot jitter as the clock ticks.
+  const chip = new Chip(el).setSize('sm')
+  chip.el.addClass('pm-sla')
+  paint(chip.el, view)
+  if (view.live) registry.set(chip.el, { task, policies })
+  return chip.el
 }
 
 function paint(chip: HTMLElement, view: SlaChipView): void {
@@ -76,7 +82,8 @@ function paint(chip: HTMLElement, view: SlaChipView): void {
     chip.addClass('gs-pulse-2')
     window.setTimeout(() => chip.removeClass('gs-pulse-2'), 2000)
   }
-  chip.setText(view.text)
+  const label = chip.querySelector<HTMLElement>('.pm-chip-label') ?? chip
+  label.setText(view.text)
   // setAttr('title', …) is the repo's plain-element tooltip idiom (TableRenderer.ts:335)
   // — no obsidian import, no stub change, no layout or CSS change.
   chip.setAttr(
@@ -87,6 +94,10 @@ function paint(chip: HTMLElement, view: SlaChipView): void {
   )
   chip.toggleClass('pm-sla--warn', view.warn)
   chip.toggleClass('pm-sla--breach', view.breach)
+  // Filled only while the clock is asking for something. A healthy countdown
+  // is a quiet grey reading; the tint is what makes at-risk and breached the
+  // one thing on the card that catches the eye.
+  chip.toggleClass('pm-chip--solid', view.warn || view.breach)
 }
 
 /**

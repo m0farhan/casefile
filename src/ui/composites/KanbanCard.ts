@@ -177,7 +177,9 @@ export class KanbanCard {
     }
     if (task.tags.length) {
       for (const tag of task.tags.slice(0, 3)) {
-        renderTagChip(chips, tag, props.showTagColors)
+        // sm, so the tag sits at the same height as the severity and SLA chips
+        // it shares the row with rather than a size of its own.
+        renderTagChip(chips, tag, props.showTagColors, 'sm')
       }
     }
     if (task.flagged) {

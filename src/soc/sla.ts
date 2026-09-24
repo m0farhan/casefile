@@ -95,6 +95,10 @@ export function formatSlaRemaining(remainingMs: number): string {
   const totalMins = Math.floor(Math.abs(remainingMs) / 60_000)
   const h = Math.floor(totalMins / 60)
   const m = totalMins % 60
-  const body = h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
+  // Past a day, hours stop being readable. A lab case sat on the board showing
+  // "+476h 46m", which is nineteen and a half days, and nobody reads it as
+  // that. Days first, one unit of detail behind them; minutes only matter
+  // while there is still an hour in which to act.
+  const body = h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
   return overshoot ? `+${body}` : body
 }
