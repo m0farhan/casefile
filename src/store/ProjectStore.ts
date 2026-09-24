@@ -307,36 +307,52 @@ export class ProjectStore implements TaskSource {
   }
 
   /**
-   * Enumerate candidate project files under the base folder ('' = vault root)
+   * Enumerate candidate board files under the base folder ('' = vault root)
    * across every layout without reading bodies: legacy `<base>/X.md`, v2
-   * `<base>/Cases/X.md`, v3 `<base>/<Name>/<Name>.md`. Files the metadataCache
-   * already knows are not pm-projects are skipped without a disk read;
-   * loadProject re-verifies the frontmatter of the rest.
+   * `<base>/Cases/X.md`, v3 `<base>/<Name>/<Name>.md`.
+   *
+   * The walk RECURSES. A board is whatever carries `pm-project: true`, and it
+   * is allowed to live wherever the analyst filed it — `Incident Response/
+   * Goals/Goals.md` is as much a board as `Goals/Goals.md`. The path rules
+   * themselves never cared about depth (`taskFolderForProjectPath` derives
+   * everything from wherever the board note sits); only this walk did, and it
+   * stopped one folder in, so a board moved into a folder of its own simply
+   * vanished from the plugin.
+   *
+   * Two ways in, because one of them has to work before Obsidian has indexed
+   * anything:
+   *  - the metadataCache says `pm-project: true` — a board, wherever it sits.
+   *  - the cache has nothing for this file yet (cold start) — then only paths
+   *    matching a layout we ship are candidates, and loadProject verifies them
+   *    by reading. That bound is what stops a cold cache turning this into a
+   *    full-vault read.
+   * A cached file that is NOT a board is skipped either way, with no disk read.
    */
   private findProjectFiles(base: string): TFile[] {
     const root = this.app.vault.getAbstractFileByPath(normalizePath(base || '/'))
     if (!(root instanceof TFolder)) return []
     const out: TFile[] = []
     const seen = new Set<string>()
-    const push = (f: TAbstractFile | null): void => {
+    const push = (f: TAbstractFile | null, knownShape: boolean): void => {
       if (!(f instanceof TFile) || f.extension !== 'md' || seen.has(f.path)) return
       const cached = this.app.metadataCache.getFileCache(f)?.frontmatter
-      if (cached && cached[FRONTMATTER_KEY] !== true) return
+      if (cached ? cached[FRONTMATTER_KEY] !== true : !knownShape) return
       seen.add(f.path)
       out.push(f)
     }
-    for (const child of root.children) {
-      if (child instanceof TFile) {
-        push(child) // legacy
-      } else if (child instanceof TFolder) {
-        push(this.app.vault.getAbstractFileByPath(`${child.path}/${child.name}.md`)) // v3
-        if (child.name === 'Cases') {
-          for (const c of child.children) {
-            if (c instanceof TFile) push(c) // v2
-          }
+    const walk = (folder: TFolder, depth: number): void => {
+      for (const child of folder.children) {
+        if (child instanceof TFile) {
+          // legacy (`<base>/X.md`) and v2 (`…/Cases/X.md`) are the shapes a
+          // loose file can take; anywhere else it has to be a cached board.
+          push(child, depth === 0 || folder.name === 'Cases')
+        } else if (child instanceof TFolder) {
+          push(this.app.vault.getAbstractFileByPath(`${child.path}/${child.name}.md`), true) // v3, at any depth
+          walk(child, depth + 1)
         }
       }
     }
+    walk(root, 0)
     return out
   }
 

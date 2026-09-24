@@ -177,6 +177,32 @@ export class ProjectModal extends Modal {
       })
     }
 
+    // ── Folder ────────────────────────────────────────────────────────────────
+    // Create-only. A board is found by its frontmatter, wherever it sits, so
+    // the settings folder is a default rather than a fence: type any path here
+    // and the board is created there instead. An existing board moves by
+    // dragging its folder in the file explorer — nothing here needs to know.
+    let folderInput: HTMLInputElement | null = null
+    if (this.isNew) {
+      const folderSection = el.createDiv('pm-project-modal-section')
+      folderSection.createEl('label', { text: 'Folder', cls: 'pm-label' })
+      folderInput = folderSection.createEl('input', {
+        type: 'text',
+        value: this.plugin.settings.projectsFolder,
+        cls: 'pm-input'
+      })
+      folderInput.placeholder = 'Vault root'
+      const folderHint = folderSection.createDiv({ cls: 'pm-modal-hint' })
+      const describeFolder = (): void => {
+        const name = projectFileName(titleInput.value.trim() || 'Board')
+        const base = (folderInput?.value ?? '').trim().replace(/^\/+|\/+$/g, '')
+        folderHint.setText(`Creates ${base ? `${base}/` : ''}${name}/${name}.md, with its cases inside.`)
+      }
+      describeFolder()
+      folderInput.addEventListener('input', describeFolder)
+      titleInput.addEventListener('input', describeFolder)
+    }
+
     // ── Issue keys ────────────────────────────────────────────────────────────
     const keySection = el.createDiv('pm-project-modal-section')
     keySection.createEl('label', { text: 'Issue key prefix', cls: 'pm-label' })
@@ -334,12 +360,13 @@ export class ProjectModal extends Modal {
 
           if (this.isNew) {
             const store = this.plugin.store
+            const base = (folderInput?.value ?? this.plugin.settings.projectsFolder).trim().replace(/^\/+|\/+$/g, '')
             const filePath =
-              store instanceof ProjectStore
-                ? store.newProjectFilePath(this.plugin.settings.projectsFolder, title)
-                : caseFilePath(this.plugin.settings.projectsFolder, title)
+              store instanceof ProjectStore ? store.newProjectFilePath(base, title) : caseFilePath(base, title)
             if (!filePath) {
-              new Notice(`A folder named "${projectFileName(title)}" already exists — pick another project name.`)
+              new Notice(
+                `${base ? `${base}/` : ''}${projectFileName(title)} already exists — pick another name or folder.`
+              )
               titleInput.addClass('pm-input-error')
               titleInput.focus()
               return

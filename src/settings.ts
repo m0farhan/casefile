@@ -27,8 +27,10 @@ export class PMSettingTab extends PluginSettingTab {
 
     // ── General ──────────────────────────────────────────────────────────────
     new Setting(containerEl)
-      .setName('Projects folder')
-      .setDesc('Vault folder that holds each project folder. Leave empty to use the vault root.')
+      .setName('Default folder for new boards')
+      .setDesc(
+        'Where a new board is created when you do not pick a folder yourself. Leave empty for the vault root. Boards are found by their frontmatter wherever they sit, so this is a starting point, not a fence — move a board folder in the file explorer and it keeps working.'
+      )
       .addText((text) =>
         text
           .setPlaceholder('Vault root')

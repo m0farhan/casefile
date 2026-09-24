@@ -1409,6 +1409,41 @@ describe('v3 self-contained project folders', () => {
     expect(found.map((p) => p.title)).toEqual(['Cases'])
   })
 
+  it('finds a board nested any number of folders deep', async () => {
+    const { store, vault } = newStore()
+    // The case this exists for: a board filed inside a folder of its own,
+    // which the one-level walk could not see.
+    await vault.create(
+      'Incident Response/Goals/Goals.md',
+      ['---', 'pm-project: true', 'id: g1', 'title: Goals', 'taskIds:', '  - t1', '---', ''].join('\n')
+    )
+    await vault.create(
+      'Incident Response/Goals/Tasks/one.md',
+      ['---', 'pm-task: true', 'id: t1', 'title: one', 'status: todo', '---', ''].join('\n')
+    )
+    // Deeper still, and outside any folder the plugin created.
+    await vault.create(
+      'Work/2026/Q3/Phishing/Phishing.md',
+      ['---', 'pm-project: true', 'id: p1', 'title: Phishing', 'taskIds: []', '---', ''].join('\n')
+    )
+
+    const found = await store.loadAllProjects('')
+    expect(found.map((p) => p.title)).toEqual(['Goals', 'Phishing'])
+    const goals = expectDefined(found.find((p) => p.title === 'Goals'))
+    // Its tasks come with it: the task folder is derived from the board's path.
+    expect(goals.tasks.map((t) => t.title)).toEqual(['one'])
+  })
+
+  it('a task file nested under a board is never mistaken for a board', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Acme', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await addNamed(store, project, 'Child', parent.id)
+
+    const found = await store.loadAllProjects('')
+    expect(found.map((p) => p.title)).toEqual(['Acme'])
+  })
+
   it('an existing old-slug task file is left in place on an unchanged-title save', async () => {
     const { store, vault } = newStore()
     // Fixture: a vault written by the pre-2.3 slug scheme — title "Bug Fix" on disk as bug-fix.md.

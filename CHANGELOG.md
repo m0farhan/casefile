@@ -47,6 +47,21 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ## Unreleased
 
+### Fixed — a board can live anywhere in the vault
+
+- Boards are found wherever they sit. The scan used to walk exactly one folder
+  deep from the configured root, so a board filed inside another folder —
+  `Incident Response/Goals/Goals.md` — simply vanished from the plugin, along
+  with every case in it. It now recurses, and a board is identified by its
+  `pm-project` frontmatter rather than by its depth. Nothing about the file
+  format changed: move a board's folder in the file explorer and it keeps
+  working, cases and all.
+- The New board dialog has a Folder field, prefilled from settings and
+  overridable per board, showing the path it will create.
+- The settings entry is now named "Default folder for new boards", because
+  that is what it does. It never was a fence and now it does not read like one.
+
+
 ### Changed — the case card reads at a glance
 
 - SLA countdowns roll into days past 24 hours. A breached case showed
