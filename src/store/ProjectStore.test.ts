@@ -1566,6 +1566,32 @@ describe('v3 self-contained project folders', () => {
   })
 })
 
+describe('moving a board to another folder', () => {
+  it('carries the board, its cases and its archive into a nested folder', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Goals', '')
+    const live = await addNamed(store, project, 'Ship 2.39')
+    const shelved = await addNamed(store, project, 'Old idea')
+    await store.archiveTask(project, shelved.id)
+    expect(project.filePath).toBe('Goals/Goals.md')
+
+    await store.ensureFolder('Incident Response')
+    const moved = await store.moveProjectToOwnFolder(project, 'Incident Response')
+
+    expect(moved).toMatchObject({ from: 'Goals/Goals.md', to: 'Incident Response/Goals/Goals.md' })
+    expect(project.filePath).toBe('Incident Response/Goals/Goals.md')
+    expect(vault.getAbstractFileByPath('Goals')).toBeNull()
+    expect(expectDefined(project.tasks.find((t) => t.id === live.id)).filePath).toBe(
+      'Incident Response/Goals/Tasks/Ship 2.39.md'
+    )
+
+    // And it is still a board afterwards, cases and archive intact.
+    const found = await store.loadAllProjects('')
+    const reloaded = expectDefined(found.find((p) => p.title === 'Goals'))
+    expect(reloaded.tasks.map((t) => t.title).sort()).toEqual(['Old idea', 'Ship 2.39'])
+  })
+})
+
 describe('v3 migration: moveProjectToOwnFolder', () => {
   const V2_FIXTURE: [string, string[]][] = [
     ['Projects/Cases/Mig.md', ['pm-project: true', 'id: mig', 'title: Mig', 'taskIds:', '  - p1']],

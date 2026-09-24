@@ -915,6 +915,27 @@ export default class PMPlugin extends Plugin {
   }
 
   /**
+   * Move a board to another folder, keeping everything it owns. One link-aware
+   * folder rename carries the board note, its cases, the archive and any
+   * attachments; path-keyed settings are re-keyed after it, exactly as a title
+   * rename does. Returns false when the target is occupied.
+   */
+  async moveProjectToFolder(project: Project, base: string): Promise<boolean> {
+    if (!(this.store instanceof ProjectStore)) return true
+    if (base) await this.store.ensureFolder(base)
+    const moved = await this.store.moveProjectToOwnFolder(project, base)
+    if (moved === 'occupied') {
+      this.showNotice(`${base ? `${base}/` : ''}${projectFileName(project.title)} already exists — board not moved.`)
+      return false
+    }
+    if (moved) {
+      await this.rekeyProjectPath(moved.from, moved.to)
+      await this.saveSettings()
+    }
+    return true
+  }
+
+  /**
    * One-time move of flat subtask files into their parent task's own folder
    * (`Tasks/<case>/<parent-slug>/<sub-slug>.md`). Link-aware renames, safe to
    * re-run; flat vaults keep loading fine without it.

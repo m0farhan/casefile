@@ -7,7 +7,7 @@ import { renderAddButton } from '../ui/composites/addButton'
 import { Avatar } from '../ui/primitives/Avatar'
 import { IconButton } from '../ui/primitives/IconButton'
 import { renderStatusListEditor } from '../ui/PaletteListEditor'
-import { caseFilePath, projectFileName } from '../store/layout'
+import { caseFilePath, projectFileName, projectFolderForProjectPath } from '../store/layout'
 
 const PROJECT_COLORS = [
   '#8b72be',
@@ -32,11 +32,23 @@ const PROJECT_ICONS = ['📋', '🚀', '💡', '🎯', '🔬', '🏗', '📊', '
  * Remaining inline styles are only for dynamic runtime values (computed colors,
  * avatar hashes, display toggles) that cannot be expressed in static CSS.
  */
+/**
+ * The folder a board sits IN — the parent of its own `<Name>/` folder under
+ * v3, or the folder holding the note in the older flat layouts. '' is the
+ * vault root.
+ */
+function parentFolderOf(filePath: string): string {
+  const own = projectFolderForProjectPath(filePath) ?? filePath.slice(0, filePath.lastIndexOf('/'))
+  return own.includes('/') ? own.slice(0, own.lastIndexOf('/')) : ''
+}
+
 export class ProjectModal extends Modal {
   private project: Project
   private isNew: boolean
   /** Title at open time — a differing title on save is a rename. */
   private originalTitle: string
+  /** Parent folder at open time — a differing folder on save is a move. */
+  private originalFolder: string
 
   constructor(
     app: App,
@@ -55,6 +67,7 @@ export class ProjectModal extends Modal {
       this.isNew = true
     }
     this.originalTitle = existingProject?.title ?? ''
+    this.originalFolder = existingProject ? parentFolderOf(existingProject.filePath) : ''
   }
 
   onOpen(): void {
@@ -178,30 +191,34 @@ export class ProjectModal extends Modal {
     }
 
     // ── Folder ────────────────────────────────────────────────────────────────
-    // Create-only. A board is found by its frontmatter, wherever it sits, so
-    // the settings folder is a default rather than a fence: type any path here
-    // and the board is created there instead. An existing board moves by
-    // dragging its folder in the file explorer — nothing here needs to know.
-    let folderInput: HTMLInputElement | null = null
-    if (this.isNew) {
-      const folderSection = el.createDiv('pm-project-modal-section')
-      folderSection.createEl('label', { text: 'Folder', cls: 'pm-label' })
-      folderInput = folderSection.createEl('input', {
-        type: 'text',
-        value: this.plugin.settings.projectsFolder,
-        cls: 'pm-input'
-      })
-      folderInput.placeholder = 'Vault root'
-      const folderHint = folderSection.createDiv({ cls: 'pm-modal-hint' })
-      const describeFolder = (): void => {
-        const name = projectFileName(titleInput.value.trim() || 'Board')
-        const base = (folderInput?.value ?? '').trim().replace(/^\/+|\/+$/g, '')
-        folderHint.setText(`Creates ${base ? `${base}/` : ''}${name}/${name}.md, with its cases inside.`)
+    // A board is found by its frontmatter, wherever it sits, so the settings
+    // folder is a default rather than a fence — on create it is where the
+    // board lands, and on an existing board changing it MOVES the board there,
+    // cases, archive and attachments with it, in one link-aware rename.
+    const folderSection = el.createDiv('pm-project-modal-section')
+    folderSection.createEl('label', { text: 'Folder', cls: 'pm-label' })
+    const folderInput = folderSection.createEl('input', {
+      type: 'text',
+      value: this.isNew ? this.plugin.settings.projectsFolder : this.originalFolder,
+      cls: 'pm-input'
+    })
+    folderInput.placeholder = 'Vault root'
+    const folderHint = folderSection.createDiv({ cls: 'pm-modal-hint' })
+    const describeFolder = (): void => {
+      const name = projectFileName(titleInput.value.trim() || 'Board')
+      const base = folderInput.value.trim().replace(/^\/+|\/+$/g, '')
+      const target = `${base ? `${base}/` : ''}${name}/${name}.md`
+      if (this.isNew) {
+        folderHint.setText(`Creates ${target}, with its cases inside.`)
+      } else if (base === this.originalFolder) {
+        folderHint.setText(`Lives at ${target}. Type another path to move it there.`)
+      } else {
+        folderHint.setText(`Moves to ${target} — cases, archive and attachments come with it.`)
       }
-      describeFolder()
-      folderInput.addEventListener('input', describeFolder)
-      titleInput.addEventListener('input', describeFolder)
     }
+    describeFolder()
+    folderInput.addEventListener('input', describeFolder)
+    titleInput.addEventListener('input', describeFolder)
 
     // ── Issue keys ────────────────────────────────────────────────────────────
     const keySection = el.createDiv('pm-project-modal-section')
@@ -358,9 +375,9 @@ export class ProjectModal extends Modal {
             return
           }
 
+          const base = folderInput.value.trim().replace(/^\/+|\/+$/g, '')
           if (this.isNew) {
             const store = this.plugin.store
-            const base = (folderInput?.value ?? this.plugin.settings.projectsFolder).trim().replace(/^\/+|\/+$/g, '')
             const filePath =
               store instanceof ProjectStore ? store.newProjectFilePath(base, title) : caseFilePath(base, title)
             if (!filePath) {
@@ -386,6 +403,17 @@ export class ProjectModal extends Modal {
             }
           }
           this.project.title = title
+
+          // Folder change on an existing board is a move, and it runs AFTER the
+          // rename: the move derives its target name from the file as it stands
+          // on disk, so renaming first means one board arrives with one name.
+          if (!this.isNew && base !== this.originalFolder) {
+            if (!(await this.plugin.moveProjectToFolder(this.project, base))) {
+              folderInput.addClass('pm-input-error')
+              folderInput.focus()
+              return
+            }
+          }
 
           await this.plugin.store.saveProject(this.project)
           await this.onSave(this.project)

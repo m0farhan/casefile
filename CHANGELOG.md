@@ -56,8 +56,11 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   `pm-project` frontmatter rather than by its depth. Nothing about the file
   format changed: move a board's folder in the file explorer and it keeps
   working, cases and all.
-- The New board dialog has a Folder field, prefilled from settings and
-  overridable per board, showing the path it will create.
+- Every board has a Folder field in its own settings (the gear on the board
+  toolbar, or Edit board in the boards list). On a new board it is where the
+  board is created; on an existing one, changing it MOVES the board there —
+  board note, cases, archive and attachments — in one link-aware rename, so
+  wiki-links keep resolving and saved views keep pointing at it.
 - The settings entry is now named "Default folder for new boards", because
   that is what it does. It never was a fence and now it does not read like one.
 
