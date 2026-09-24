@@ -257,20 +257,92 @@ export function decodeEntities(text: string): string {
  */
 function dropElement(html: string, tag: string): string {
   const lower = html.toLowerCase()
-  const open = `<${tag}`
-  const close = `</${tag}`
   let out = ''
   let i = 0
   for (;;) {
-    const start = lower.indexOf(open, i)
+    const start = findTagStart(html, lower, tag, i)
     if (start < 0) return out + html.slice(i)
     out += html.slice(i, start)
-    const closeAt = lower.indexOf(close, start + open.length)
+    const closeAt = findTagStart(html, lower, `/${tag}`, start + 1)
     if (closeAt < 0) return out
-    const gt = html.indexOf('>', closeAt)
-    if (gt < 0) return out
-    i = gt + 1
+    i = endOfTag(html, closeAt)
   }
+}
+
+/** A tag name ends at `>`, at `/`, at whitespace, or at the end of the input. */
+function nameEnds(ch: string): boolean {
+  return ch === '' || ch === '>' || ch === '/' || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f'
+}
+
+/**
+ * Index just past the tag opening at `lt`, with quoted attribute values
+ * skipped — `<img alt="a > b">` ends at the LAST `>`, not the one inside the
+ * quotes. Returns html.length for a tag that never closes.
+ */
+function endOfTag(html: string, lt: number): number {
+  let quote = ''
+  for (let i = lt + 1; i < html.length; i++) {
+    const ch = html[i] ?? ''
+    if (quote) {
+      if (ch === quote) quote = ''
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+    } else if (ch === '>') {
+      return i + 1
+    }
+  }
+  return -1
+}
+
+/**
+ * Remove every tag, quoted attribute values respected.
+ *
+ * The regex this replaces (`<[^>]{0,2000}>`) ended a tag at the first `>` it
+ * saw, so `<img alt="<script>">` left a stray `">` sitting in the analyst's
+ * text as if the sender had written it.
+ *
+ * A `<` with no `>` after it is left as the text it almost certainly is; only
+ * dropElement swallows on an unterminated open, and only because everything
+ * after an unclosed `<script` really is inside it.
+ */
+function stripTags(html: string): string {
+  let out = ''
+  let i = 0
+  while (i < html.length) {
+    const lt = html.indexOf('<', i)
+    if (lt < 0) return out + html.slice(i)
+    out += html.slice(i, lt)
+    const end = endOfTag(html, lt)
+    if (end < 0) return out + html.slice(lt)
+    i = end
+  }
+  return out
+}
+
+/**
+ * The next REAL start of `<tag` at or after `from`, or -1.
+ *
+ * Two bugs lived in the plain indexOf this replaces, and both silently emptied
+ * the analyst's text pane rather than failing loudly:
+ *  - no name boundary, so dropping `head` also dropped every `<header>` and
+ *    everything inside it. Ordinary marketing mail has one, and the lure is
+ *    usually in it.
+ *  - no quote awareness, so `<img alt="<script>">` looked like a script open
+ *    and swallowed the document to the next real `</script`.
+ * Scanning tag by tag fixes both: a match only counts where a tag can actually
+ * begin, and everything between `<` and its unquoted `>` is skipped wholesale.
+ */
+function findTagStart(html: string, lower: string, tag: string, from: number): number {
+  let i = from
+  while (i < html.length) {
+    const lt = html.indexOf('<', i)
+    if (lt < 0) return -1
+    if (lower.startsWith(tag, lt + 1) && nameEnds(lower[lt + 1 + tag.length] ?? '')) return lt
+    const end = endOfTag(html, lt)
+    if (end < 0) return -1
+    i = end
+  }
+  return -1
 }
 
 /**
@@ -333,7 +405,7 @@ export function htmlToText(html: string): string {
   text = dropComments(text)
   text = text.replace(LINE_BREAKS, BREAK)
   text = text.replace(BLOCK_TAGS, BREAK)
-  text = text.replace(/<[^>]{0,2000}>/g, '')
+  text = stripTags(text)
   text = decodeEntities(text)
   // Everything a renderer treats as whitespace collapses to one space —
   // including the source's newlines and indentation.
@@ -739,9 +811,13 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   if (dropped > 0) notes.push(`${dropped} further links are in this message and are not listed.`)
 
   const everyPart = await Promise.all(eml.attachments.map((a) => readAttachment(a, owned)))
-  const inlineFlags = new Set(eml.attachments.filter((a) => a.inline).map((a) => a.filename))
-  const attachments = everyPart.filter((a) => !inlineFlags.has(a.filename))
-  const inlineImages = everyPart.filter((a) => inlineFlags.has(a.filename))
+  // Split by POSITION, not by filename. everyPart is a map over eml.attachments
+  // so index i is the same part; a Set of filenames put both `image001.png`
+  // parts on whichever side the first one landed, and a message with a real
+  // attachment named like its own inline logo is a message that hid one.
+  const isInline = eml.attachments.map((a) => a.inline)
+  const attachments = everyPart.filter((_, i) => !isInline[i])
+  const inlineImages = everyPart.filter((_, i) => isInline[i])
 
   // The sender's own domain gets the folding the link hosts get. Five of the
   // shipped classifications are impersonation of one kind or another, and the

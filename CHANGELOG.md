@@ -47,6 +47,37 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ## Unreleased
 
+### Fixed — four defects found by red-teaming the analyser
+
+- The text pane dropped text with no attacker involved. The element scanner
+  matched `<head` against `<header`, so an ordinary marketing or phishing mail
+  lost its header block and everything in it — usually the lure. The same
+  scanner had no quote awareness, so `<img alt="<script>">` swallowed the rest
+  of the message, and the final tag strip left a stray `">` behind as if the
+  sender had written it. One tag walker now serves all of it: names must end at
+  a boundary, and quoted attribute values are skipped whole.
+- A defanged indicator could lie about where it went. `defangIoc` bracketed
+  only the ASCII dot, so `paypal。com.evil。co` — which Chromium resolves as
+  paypal.com.evil.co — came back with the decoy marked and the real apex
+  looking untouched. It now treats the ideographic, fullwidth and halfwidth
+  full stops as separators, strips bidi overrides and isolates, and
+  neutralises `javascript:`, `data:`, `vbscript:`, `file:`, `blob:` and `jar:`
+  by name. `data:text/html,<script>…</script>` previously passed through
+  completely unchanged.
+- Remote-content scrubbing was a nine-tag list, and lists are what get
+  bypassed: `<div style="background-image:url(…)">`, `<image>`, `<input
+  type=image>`, `<table background=…>`, inline SVG and reference-style
+  markdown images all walked past it. Alongside the list there is now a rule
+  that removes any tag naming a remote resource, whatever the element is.
+- A pasted alert that quotes a message is fenced when it is written, not
+  scrubbed when it is rendered. The scrub only ever ran inside the plugin;
+  opened as an ordinary note, nothing guarded it, and a reported-phish alert
+  is attacker-written markup by definition. Fencing keeps every byte verbatim
+  and renders none of it anywhere. Alerts without markup stay prose.
+- Inline parts and attachments are split by position, not by filename. A
+  message whose real attachment shared a name with its own inline logo put
+  both on one side, hiding one of them.
+
 ### Changed
 
 - The phishing analyser's section headings are banded. IDENTITIES,

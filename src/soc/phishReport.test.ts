@@ -49,6 +49,38 @@ ${btoa('fake macro document bytes')}
 --MIXED1--
 `
 
+describe('inline parts and attachments that share a filename', () => {
+  const COLLIDING = [
+    'From: a@evil.test',
+    'Subject: Invoice',
+    'Content-Type: multipart/mixed; boundary="B"',
+    '',
+    '--B',
+    'Content-Type: image/png',
+    'Content-Disposition: inline; filename="image001.png"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    'iVBORw0KGgo=',
+    '--B',
+    'Content-Type: application/octet-stream',
+    'Content-Disposition: attachment; filename="image001.png"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    'TVqQAAMAAAAEAAAA',
+    '--B--',
+    ''
+  ].join('\n')
+
+  it('keeps them apart, because a shared name used to merge them', async () => {
+    const report = await analysePhishing(COLLIDING, [], [])
+    expect(report.inlineImages).toHaveLength(1)
+    expect(report.attachments).toHaveLength(1)
+    // The one that matters: the real attachment is still on the attachment
+    // side, where its declared-vs-actual mismatch gets reported.
+    expect(report.attachments[0]?.sniffed).toContain('Windows executable')
+  })
+})
+
 describe('analysePhishing over a whole message', () => {
   it('reads every layer of it', async () => {
     const report = await analysePhishing(MAIL, ['corp.test'], ['paypal', 'microsoft'])

@@ -15,6 +15,31 @@ import {
 } from './ioc'
 import { makeTask, type Ioc } from '../types'
 
+describe('defangIoc — a defanged string must not lie about where it goes', () => {
+  it('brackets unicode label separators, not just the ASCII dot', () => {
+    // Chromium resolves this host as paypal.com.evil.co. Bracketing only the
+    // ASCII dot marked the decoy and left the real apex looking untouched.
+    expect(defangIoc('https://paypal\u3002com.evil\u3002co/', 'url')).toBe('hxxps://paypal[.]com[.]evil[.]co/')
+    expect(defangIoc('evil\uFF0Eco', 'domain')).toBe('evil[.]co')
+    expect(defangIoc('evil\uFF61co', 'domain')).toBe('evil[.]co')
+  })
+
+  it('strips direction-changing controls that reorder what the reader sees', () => {
+    expect(defangIoc('evil\u202Emoc.liame\u202Cco', 'domain')).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u061C]/)
+  })
+
+  it('neutralises schemes that execute rather than name a place', () => {
+    expect(defangIoc('javascript:fetch("//evil.co/")', 'url')).toBe('javascript[:]fetch("//evil[.]co/")')
+    expect(defangIoc('data:text/html,<b>x</b>', 'url')).toBe('data[:]text/html,<b>x</b>')
+    expect(defangIoc('file:///etc/passwd', 'url')).toBe('file[:]///etc/passwd')
+  })
+
+  it('leaves ordinary values defanged exactly as before', () => {
+    expect(defangIoc('https://evil.co/path', 'url')).toBe('hxxps://evil[.]co/path')
+    expect(defangIoc('a@evil.co', 'email')).toBe('a[at]evil[.]co')
+  })
+})
+
 describe('refangIoc', () => {
   it('undoes the standard defang forms', () => {
     expect(refangIoc('hxxp://evil[.]example[.]com/payload')).toBe('http://evil.example.com/payload')

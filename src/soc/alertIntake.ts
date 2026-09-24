@@ -118,7 +118,35 @@ export function parseAlertPaste(text: string, cfg: { severities: SeverityConfig[
     severityId: severity?.id ?? '',
     occurredAt,
     detectedAt,
-    description: text,
+    description: quarantineMarkup(text),
     iocs: extractIocsFromText(text, [])
   }
+}
+
+/** A `<` that begins something a renderer would treat as markup. */
+const LOOKS_LIKE_MARKUP = /<[a-z!/]/i
+
+/**
+ * A pasted alert becomes the case description verbatim, and the description
+ * becomes the body of a markdown note. When the alert quotes a phishing
+ * message — which is exactly what a reported-phish alert does — that body is
+ * attacker-written markup sitting in a file the analyst will open.
+ *
+ * Opened inside the plugin, `scrubRemoteEmbeds` guards the render. Opened as
+ * an ordinary note, nothing guards it at all: an `<img>`, a `background=` or a
+ * `style="background-image:url(…)"` fetches on sight, and that request tells
+ * the sender the mail reached an analyst, when, and from which address.
+ *
+ * So a paste carrying markup is fenced at the point it is written. Fencing is
+ * not sanitising: every byte is kept, verbatim, and a code block renders none
+ * of it anywhere — plugin, reading view, exported file or another vault.
+ * Alerts without markup are left as prose, because the field blocks analysts
+ * paste use markdown emphasis that is worth rendering.
+ */
+export function quarantineMarkup(text: string): string {
+  if (!LOOKS_LIKE_MARKUP.test(text)) return text
+  let longest = 0
+  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${fence}\n${text}\n${fence}`
 }

@@ -139,3 +139,26 @@ describe('parseAlertPaste, markdown-formatted alerts', () => {
     expect(parseAlertPaste('**Rule :** host_01 beaconing', CFG).title).toBe('host_01 beaconing')
   })
 })
+
+describe('a pasted alert that quotes a message', () => {
+  it('fences markup so it cannot load anything, wherever the note is opened', () => {
+    const paste = ['Rule : Reported phish', 'Body :', '<img src="https://evil.example/pixel?id=42">'].join('\n')
+    const out = parseAlertPaste(paste, CFG).description
+    expect(out.startsWith('```')).toBe(true)
+    expect(out.endsWith('```')).toBe(true)
+    // Verbatim: fencing keeps every byte, it does not sanitise.
+    expect(out).toContain('<img src="https://evil.example/pixel?id=42">')
+  })
+
+  it('opens a longer fence than any backtick run inside the paste', () => {
+    const paste = '<b>x</b>\n```\ncode\n```'
+    const out = parseAlertPaste(paste, CFG).description
+    expect(out.startsWith('````')).toBe(true)
+  })
+
+  it('leaves an ordinary alert as prose, so its emphasis still renders', () => {
+    const paste = ['Rule : SOC138 - Detected Suspicious Xls File', 'Severity : Medium'].join('\n')
+    const out = parseAlertPaste(paste, CFG).description
+    expect(out).toBe(paste)
+  })
+})

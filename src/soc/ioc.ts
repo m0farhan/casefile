@@ -24,11 +24,35 @@ export const IOC_TYPE_ICONS: Record<IocType, string> = {
  */
 export function defangIoc(value: string, type: IocType): string {
   if (type === 'hash') return value
-  let out = value.replace(/^(\s*)https?/i, (m) => m.replace(/http/i, (h) => (h === 'HTTP' ? 'HXXP' : 'hxxp')))
-  out = out.replace(/\./g, '[.]')
+  // Direction-changing and invisible controls go first: they reorder what the
+  // reader sees without changing what a browser resolves, so a defanged string
+  // carrying them is a string that lies about its own destination.
+  let out = value.replace(BIDI_CONTROLS, '')
+  out = out.replace(/^(\s*)https?/i, (m) => m.replace(/http/i, (h) => (h === 'HTTP' ? 'HXXP' : 'hxxp')))
+  // Every separator a host can be written with, not just the ASCII one.
+  // `paypal。com.evil。co` resolves to paypal.com.evil.co, so bracketing only
+  // the ASCII dot marked the decoy and left the real apex looking clean.
+  out = out.replace(DOT_SEPARATORS, '[.]')
+  // A scheme that executes or carries a payload is neutralised by name. It is
+  // not a host, so nothing above touches it, and `javascript:` copied out of a
+  // report is live wherever it lands.
+  out = out.replace(ACTIVE_SCHEME, (m) => `${m.slice(0, -1)}[:]`)
   if (type === 'email' || type === 'url') out = out.replace(/@/g, '[at]')
   return out
 }
+
+/**
+ * The separators a hostname can be written with. Chromium maps all of these to
+ * a label break: ideographic full stop, fullwidth full stop, halfwidth
+ * ideographic full stop.
+ */
+const DOT_SEPARATORS = /[.\u3002\uFF0E\uFF61]/g
+
+/** Bidi overrides and isolates, plus the Arabic letter mark. */
+const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069\u061C]/g
+
+/** Schemes that do something when followed, rather than naming a place. */
+const ACTIVE_SCHEME = /^(\s*)(javascript|data|vbscript|file|blob|jar):/i
 
 /**
  * Undo the common defang forms so pasted report indicators are stored real:

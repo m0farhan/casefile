@@ -220,6 +220,33 @@ describe('link evasions that used to mislead or hide', () => {
   })
 })
 
+describe('htmlToText — elements the scanner must not over-drop', () => {
+  it('keeps <header> when dropping <head>', () => {
+    // The live bug: `<head` matched `<header`, so the element most marketing
+    // mail puts its lure in vanished with everything inside it.
+    expect(htmlToText('<p>Hello</p><header>URGENT: verify your account</header><p>Regards</p>')).toBe(
+      'Hello\nURGENT: verify your account\nRegards'
+    )
+  })
+
+  it('still drops a real <head> and its contents', () => {
+    expect(htmlToText('<head><title>t</title></head><p>Body</p>')).toBe('Body')
+  })
+
+  it('does not treat a tag name inside a quoted attribute as a tag', () => {
+    // `<img alt="<script>">` used to swallow everything after it.
+    expect(htmlToText('<img alt="<script>"><p>Click here to reset</p>')).toBe('Click here to reset')
+  })
+
+  it('a tag whose attribute contains > still ends at the real >', () => {
+    expect(htmlToText('<img alt="a > b"><p>After</p>')).toBe('After')
+  })
+
+  it('an unterminated script still swallows the rest, which is the safe direction', () => {
+    expect(htmlToText('<p>Before</p><script>var x = 1')).toBe('Before')
+  })
+})
+
 describe('what a file actually is', () => {
   const bytes = (...b: number[]) => Uint8Array.from(b)
 
