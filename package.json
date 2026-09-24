@@ -1,6 +1,6 @@
 {
   "name": "responder",
-  "version": "2.38.0",
+  "version": "2.39.0",
   "description": "Responder - Jira-style case and SOC incident tracking for Obsidian",
   "main": "main.js",
   "type": "module",
