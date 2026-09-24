@@ -129,10 +129,16 @@ export class KanbanCard {
     // only the chips go.
     const socBoard = props.boardType !== 'plain'
     if (socBoard) {
-      renderSeverityBadge(
-        chips,
-        (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
-      )
+      const sev = (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
+      // Severity rides the card's left edge as a spine, so a column answers
+      // "how bad is any of this" before a single title is read. The word still
+      // renders beside the clock — a color on its own is not a label, and the
+      // spine is redundancy for the eye, not the only carrier of the fact.
+      if (sev) {
+        card.addClass('pm-kanban-card--sev')
+        card.style.setProperty('--pm-sev', sev.color)
+      }
+      renderSeverityBadge(chips, sev, 'text')
       // SLA chip stays incident-only (slaState also gates on issueType, so this
       // is belt and braces).
       if (task.issueType === 'incident') {
@@ -177,9 +183,9 @@ export class KanbanCard {
     }
     if (task.tags.length) {
       for (const tag of task.tags.slice(0, 3)) {
-        // sm, so the tag sits at the same height as the severity and SLA chips
-        // it shares the row with rather than a size of its own.
-        renderTagChip(chips, tag, props.showTagColors, 'sm')
+        // A dot and a muted word: on a card the tag is context, not a claim,
+        // and a bordered pill each was three more boxes on the busiest row.
+        renderTagChip(chips, tag, props.showTagColors, { size: 'sm', plain: true })
       }
     }
     if (task.flagged) {
@@ -193,8 +199,11 @@ export class KanbanCard {
       setTooltip(recurEl, recurrenceLabel(task.recurrence))
     }
     // Whose it is, and when it is due, ride the end of the chip row rather than
-    // sitting beside the title: the title gets the full card width back, and
-    // the avatar lands bottom-right without costing the card a row of its own.
+    // sitting beside the title. Measured both ways on a 290px column: in the
+    // head the owner costs the title its width, and "SOC138 - Detected
+    // Suspicious Xls File" then wraps to two lines and the card grows 14px.
+    // Here it wraps only on the cards carrying the most, and the severity and
+    // tags losing their boxes bought back most of the room that used to cost.
     const owner = chips.createDiv('pm-kanban-card-owner')
     new AvatarStack(owner).setNames(task.assignees).setMax(3).setSize('sm')
     if (task.due) {

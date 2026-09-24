@@ -182,6 +182,25 @@
 /* Two rows: head, chips. Small, not cramped — the first pass at this cut the
    card to 74px and it read as squeezed. The extra bottom padding is the
    progress hairline's lane; it is pinned to the card edge, not a row. */
+/* Severity spine. The card already had a severity chip; what it did not have
+   was an answer to "how bad is anything in this column" that survives not
+   reading. Three pixels down the left edge, clipped to the card's radius by
+   the overflow the card already sets. Redundant with the word beside the
+   clock on purpose: color alone is never the label. */
+.pm-kanban-card--sev::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--pm-sev);
+  pointer-events: none;
+}
+/* Two pixels back, so the text keeps its optical distance from the edge
+   rather than sitting closer to the spine than to the card's own border. */
+.pm-kanban-card--sev > .pm-kanban-card-body {
+  padding-left: 14px;
+}
+
 .pm-kanban-card-body {
   flex: 1;
   /* The extra room went into vertical padding. The sides stay at 12px because
@@ -251,6 +270,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+/* A tag with no border does not need the pill's side padding — that space only
+   existed to hold the box off the word. Dropping it buys back most of a chip
+   per tag on the row that wraps first. */
+.pm-chip--plain.pm-chip--tag {
+  padding-inline: 0;
 }
 
 .pm-kanban-card-parent {

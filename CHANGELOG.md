@@ -61,6 +61,13 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Only the countdown is filled, and only while it wants something: a healthy
   clock is quiet grey, at-risk is amber, breached is red. An overdue due date
   is red text rather than a second red block competing with it.
+- Severity rides the card's left edge as a three-pixel spine, so a column
+  answers "how bad is any of this" before a single title is read. The word
+  still renders beside the clock: a colour on its own is not a label.
+- With the spine carrying it, the severity badge on a card is a coloured word
+  rather than a filled box, and a card's tags are a dot and a muted word
+  rather than a bordered pill each. One filled thing per card, and it is the
+  countdown.
 - Card tags are drawn at the size of the chips they share the row with.
 
 ## [2.38.0] - 2026-09-22

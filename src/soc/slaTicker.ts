@@ -124,12 +124,24 @@ export function tickAllSlaChips(): void {
 }
 
 /**
- * Severity badge (config label, config color on a soft tint). No-op without
- * a config. Shared by the kanban card and the table row.
+ * Severity badge (config label in the config color). No-op without a config.
+ * Shared by the kanban card and the table row.
+ *
+ * 'text' drops the tint and keeps the colored word. The board card uses it
+ * because the card already carries its severity as a spine down its left
+ * edge: the same fact twice, and the louder of the two was a filled box
+ * sitting beside the filled countdown, which is the one thing on a card that
+ * should be able to shout. The word stays because a color alone is not a
+ * label.
  */
-export function renderSeverityBadge(el: HTMLElement, cfg: SeverityConfig | undefined): void {
+export function renderSeverityBadge(
+  el: HTMLElement,
+  cfg: SeverityConfig | undefined,
+  variant: 'solid' | 'text' = 'solid'
+): void {
   if (!cfg) return
   // One label primitive for severity everywhere (VD-03): the table cell
   // already used Chip; cards/modal/panel had a parallel hand-rolled span.
-  new Chip(el).setLabel(cfg.label).setColor(cfg.color).setVariant('solid').setSize('sm')
+  const chip = new Chip(el).setLabel(cfg.label).setColor(cfg.color).setSize('sm')
+  if (variant === 'solid') chip.setVariant('solid')
 }
