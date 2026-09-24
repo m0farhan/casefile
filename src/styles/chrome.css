@@ -293,6 +293,17 @@
   font-size: 12px;
   color: var(--text-muted);
 }
+/* Where this board lives. Quieter than the count and allowed to truncate: a
+   deep path is worth knowing about without letting it set the card's width. */
+.pm-project-card-path {
+  font-size: 11px;
+  color: var(--gs-ink-subtle);
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ─ Casefile backlog view ─ */
 .pm-backlog {

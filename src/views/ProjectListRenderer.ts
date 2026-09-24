@@ -2,7 +2,8 @@ import { TFile, Menu, ButtonComponent } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task, StatusConfig } from '../types'
 import { safeAsync, isTerminalStatus } from '../utils'
-import { confirmDialog, openProjectModal } from '../ui/ModalFactory'
+import { confirmDialog, openProjectModal, promptText } from '../ui/ModalFactory'
+import { parentFolderOf } from '../store/layout'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { EmptyState } from '../ui/primitives/EmptyState'
 import { ProjectCard } from '../ui/composites/ProjectCard'
@@ -52,6 +53,8 @@ export async function renderProjectListContent(ctx: ProjectListContext): Promise
       color: project.color,
       tasksDone: done,
       tasksTotal: total,
+      location: parentFolderOf(project.filePath),
+      path: project.filePath,
       onClick: safeAsync(async () => {
         const file = ctx.plugin.app.vault.getAbstractFileByPath(project.filePath)
         if (file instanceof TFile) await ctx.openProjectFile(file)
@@ -72,6 +75,29 @@ function openCreateProjectModal(ctx: ProjectListContext): void {
 
 function openProjectContextMenu(ctx: ProjectListContext, project: Project, e: MouseEvent): void {
   const menu = new Menu()
+  menu.addItem((item) =>
+    item
+      .setTitle('Move to folder…')
+      .setIcon('folder-input')
+      .onClick(
+        safeAsync(async () => {
+          const current = parentFolderOf(project.filePath)
+          const next = await promptText(
+            ctx.plugin.app,
+            `Folder for "${project.title}". Empty means the vault root; the board keeps its own folder inside it, cases and all.`,
+            'Vault root',
+            { value: current, allowEmpty: true }
+          )
+          if (next === null) return
+          const base = next.trim().replace(/^\/+|\/+$/g, '')
+          if (base === current) return
+          if (await ctx.plugin.moveProjectToFolder(project, base)) {
+            await renderProjectListContent(ctx)
+          }
+        })
+      )
+  )
+
   menu.addItem((item) =>
     item
       .setTitle('Edit board')

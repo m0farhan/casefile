@@ -35,11 +35,20 @@ export function confirmDuplicateSubtasks(app: App, taskTitle: string): Promise<'
 
 /**
  * Opens an Obsidian-native text input prompt.
- * Returns the trimmed string, or null if cancelled/empty.
+ * Returns the trimmed string, or null if cancelled.
+ *
+ * `value` prefills the box for an edit rather than an entry. `allowEmpty`
+ * makes the empty string a real answer instead of a cancel — a folder prompt
+ * needs that, because empty IS the vault root.
  */
-export function promptText(app: App, label: string, placeholder = ''): Promise<string | null> {
+export function promptText(
+  app: App,
+  label: string,
+  placeholder = '',
+  opts: { value?: string; allowEmpty?: boolean } = {}
+): Promise<string | null> {
   return new Promise((resolve) => {
-    const modal = new TextPromptModal(app, label, placeholder, resolve)
+    const modal = new TextPromptModal(app, label, placeholder, resolve, opts)
     modal.open()
   })
 }
@@ -51,7 +60,8 @@ class TextPromptModal extends Modal {
     app: App,
     private label: string,
     private placeholder: string,
-    private resolve: (value: string | null) => void
+    private resolve: (value: string | null) => void,
+    private opts: { value?: string; allowEmpty?: boolean } = {}
   ) {
     super(app)
   }
@@ -76,6 +86,7 @@ class TextPromptModal extends Modal {
       placeholder: this.placeholder,
       cls: 'pm-prompt-input'
     })
+    if (this.opts.value) input.value = this.opts.value
 
     const btnRow = contentEl.createDiv('pm-modal-btn-row')
 
@@ -86,7 +97,7 @@ class TextPromptModal extends Modal {
 
     const submit = () => {
       const val = input.value.trim()
-      this.finish(val || null)
+      this.finish(this.opts.allowEmpty ? val : val || null)
       this.close()
     }
 

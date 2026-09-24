@@ -421,6 +421,8 @@ export class StyleguideView extends ItemView {
       color: '#8b72be',
       tasksDone: 4,
       tasksTotal: 10,
+      location: 'Incident Response',
+      path: 'Incident Response/Website relaunch/Website relaunch.md',
       onClick: noop,
       onContextMenu: noop
     })

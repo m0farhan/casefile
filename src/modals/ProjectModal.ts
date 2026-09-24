@@ -7,7 +7,7 @@ import { renderAddButton } from '../ui/composites/addButton'
 import { Avatar } from '../ui/primitives/Avatar'
 import { IconButton } from '../ui/primitives/IconButton'
 import { renderStatusListEditor } from '../ui/PaletteListEditor'
-import { caseFilePath, projectFileName, projectFolderForProjectPath } from '../store/layout'
+import { caseFilePath, parentFolderOf, projectFileName } from '../store/layout'
 
 const PROJECT_COLORS = [
   '#8b72be',
@@ -32,16 +32,6 @@ const PROJECT_ICONS = ['📋', '🚀', '💡', '🎯', '🔬', '🏗', '📊', '
  * Remaining inline styles are only for dynamic runtime values (computed colors,
  * avatar hashes, display toggles) that cannot be expressed in static CSS.
  */
-/**
- * The folder a board sits IN — the parent of its own `<Name>/` folder under
- * v3, or the folder holding the note in the older flat layouts. '' is the
- * vault root.
- */
-function parentFolderOf(filePath: string): string {
-  const own = projectFolderForProjectPath(filePath) ?? filePath.slice(0, filePath.lastIndexOf('/'))
-  return own.includes('/') ? own.slice(0, own.lastIndexOf('/')) : ''
-}
-
 export class ProjectModal extends Modal {
   private project: Project
   private isNew: boolean

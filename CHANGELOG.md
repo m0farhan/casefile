@@ -56,6 +56,9 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   `pm-project` frontmatter rather than by its depth. Nothing about the file
   format changed: move a board's folder in the file explorer and it keeps
   working, cases and all.
+- The boards list shows where each board lives, and a right-click offers
+  "Move to folder…" — so a board's path is visible and changeable from the
+  screen that lists them, not only from inside the board.
 - Every board has a Folder field in its own settings (the gear on the board
   toolbar, or Edit board in the boards list). On a new board it is where the
   board is created; on an existing one, changing it MOVES the board there —

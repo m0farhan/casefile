@@ -6,6 +6,10 @@ export interface ProjectCardProps {
   color: string
   tasksDone: number
   tasksTotal: number
+  /** Folder the board lives in; '' is the vault root. */
+  location: string
+  /** Full path of the board note, for the tooltip. */
+  path: string
   onClick: () => void
   onContextMenu: (e: MouseEvent) => void
 }
@@ -29,6 +33,13 @@ export class ProjectCard {
       text: `${props.tasksDone}/${props.tasksTotal} tasks`,
       cls: 'pm-project-card-tasks'
     })
+    // Every board carries its own path, so the list says where each one is
+    // rather than leaving the analyst to guess that they all share a root.
+    const where = meta.createSpan({
+      text: props.location || 'Vault root',
+      cls: 'pm-project-card-path'
+    })
+    where.setAttr('title', props.path)
 
     const percent = props.tasksTotal ? (props.tasksDone / props.tasksTotal) * 100 : 0
     new ProgressBar(body).setSize('sm').setValue(percent).setColor(props.color)

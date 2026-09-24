@@ -3,6 +3,7 @@ import {
   caseFilePath,
   isCasesLayout,
   isProjectFolderLayout,
+  parentFolderOf,
   projectFolderForProjectPath,
   taskFolderForProjectPath
 } from './layout'
@@ -52,5 +53,18 @@ describe('older recognized layouts', () => {
 
   it('nested roots and names with dots survive (v2)', () => {
     expect(taskFolderForProjectPath('Work/PM/Cases/v2.0 plan.md')).toBe('Work/PM/Tasks/v2.0 plan')
+  })
+})
+
+describe('parentFolderOf', () => {
+  it('answers the folder a board lives in, across every layout', () => {
+    // v3 at the vault root: the board's own folder has no parent.
+    expect(parentFolderOf('Goals/Goals.md')).toBe('')
+    // v3 filed inside another folder — the case this exists for.
+    expect(parentFolderOf('Incident Response/Goals/Goals.md')).toBe('Incident Response')
+    expect(parentFolderOf('Work/2026/Q3/Phishing/Phishing.md')).toBe('Work/2026/Q3')
+    // v2 and legacy still answer where the note sits.
+    expect(parentFolderOf('SOC/Cases/Mid.md')).toBe('SOC')
+    expect(parentFolderOf('Flat.md')).toBe('')
   })
 })

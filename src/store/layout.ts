@@ -54,3 +54,14 @@ export function caseFilePath(projectsFolder: string, title: string): string {
   const safeName = projectFileName(title)
   return normalizePath(`${projectsFolder}/${safeName}/${safeName}.md`)
 }
+
+/**
+ * The folder a board sits IN — the parent of its own `<Name>/` folder under
+ * v3, or the folder holding the note in the older flat layouts. '' is the
+ * vault root. This is the board's location as the analyst sets it: the rest of
+ * the path (`<Name>/<Name>.md`, `<Name>/Tasks/…`) is derived from it.
+ */
+export function parentFolderOf(projectPath: string): string {
+  const own = projectFolderForProjectPath(projectPath) ?? projectPath.slice(0, projectPath.lastIndexOf('/'))
+  return own.includes('/') ? own.slice(0, own.lastIndexOf('/')) : ''
+}
