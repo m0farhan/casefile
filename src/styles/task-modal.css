@@ -612,13 +612,27 @@ button.pm-verdict-cancel:hover {
    uppercase, muted. They were bright indigo with a rule under each, which made
    five of them shout over the content they were supposed to be organising. A
    heading's job is to be found when looked for, not to be read first. */
+/* Section heading in the analyser. It used to carry the same colour as the
+   field labels under it (--gs-ink-subtle), so IDENTITIES and "Subject" were the
+   same shade and the whole report read as one long list.
+   It is a banded header now: its own surface, an accent edge and white text, so
+   the report reads as blocks you can jump between. The accent carries no
+   meaning here on purpose — in this panel amber means a fact that differs, and
+   green and red are the words an auth header actually stated, so furniture
+   stays out of those three. */
 .pm-headers-h {
-  color: var(--gs-ink-subtle);
-  font-size: 12px;
-  font-weight: 500;
+  display: flex;
+  align-items: center;
+  margin: 18px 0 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--gs-accent);
+  border-radius: 0 4px 4px 0;
+  background: color-mix(in srgb, var(--gs-accent) 16%, var(--gs-surface-1));
+  color: var(--gs-ink);
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: 18px 0 7px;
+  letter-spacing: 0.08em;
 }
 .pm-headers-panel > .pm-headers-h:first-child {
   margin-top: 6px;

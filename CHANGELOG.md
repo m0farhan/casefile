@@ -45,6 +45,19 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## Unreleased
+
+### Changed
+
+- The phishing analyser's section headings are banded. IDENTITIES,
+  AUTHENTICATION, PATH, OBSERVATIONS and SENDER DOMAIN were drawn in the same
+  colour as the field labels beneath them, so a section title and "Subject"
+  were the same shade and the whole report read as one long list. Each heading
+  now sits on its own surface with an accent edge and white text, so the report
+  reads as blocks you can jump between. The accent carries no meaning: in this
+  panel amber marks a fact that differs, and green and red are the words an
+  authentication header actually stated, so furniture stays out of those three.
+
 ## [2.39.0] - 2026-09-24
 
 ### Fixed — a board can live anywhere in the vault
