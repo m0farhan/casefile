@@ -23,5 +23,15 @@ export default defineConfig([
     rules: {
       'obsidianmd/ui/sentence-case': ['error', { ignoreWords: ['TaskNotes'] }]
     }
+  },
+  {
+    // Tests never run inside Obsidian. The popout-window rule exists so the
+    // plugin reaches the right window at runtime; a node test has no window,
+    // and a test of the "this device has no DecompressionStream" path has to
+    // reach for the global to take it away.
+    files: ['src/**/*.test.ts'],
+    rules: {
+      'obsidianmd/no-global-this': 'off'
+    }
   }
 ])
