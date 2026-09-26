@@ -249,7 +249,12 @@ export function readPdf(bytes: Uint8Array): PdfFacts | null {
  */
 function latin1(bytes: Uint8Array): string {
   let out = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    // apply rather than a spread: a spread walks the typed array through its
+    // iterator, and on a 9.8MB file that was about seven times slower, on the
+    // renderer thread, on every re-analysis.
+    out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[])
+  }
   return out
 }
 

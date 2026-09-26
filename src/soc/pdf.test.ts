@@ -781,11 +781,15 @@ describe('files built to make the scan run away', () => {
     // The absolute number belongs to the machine; the ratio belongs to the
     // code. A hostile 16MB file may cost more than a blank one — it must not
     // cost a different SHAPE, which is what 766 seconds against 0.3 was.
+    // The benign baseline is now the scan alone: the bytes-to-text conversion
+    // both files paid used to be most of it, and once that got about seven
+    // times cheaper the hostile file's real per-marker cost showed through at
+    // roughly 4x. Ten still catches a change of shape by orders of magnitude.
     const benign = timed(pdf('%PDF-1.4\n', 'x'.repeat(16 * MB), '\nendobj\n%%EOF'))
     const hostile = timed(pdf(`%PDF-1.4\n/URI (${REAL_LINK})\n`, '/URI<'.repeat(3_300_000), '\nendobj\n%%EOF'))
     expect(hostile.facts?.uris).toEqual([REAL_LINK])
     expect(hostile.ms).toBeLessThan(2000)
-    expect(hostile.ms).toBeLessThan(benign.ms * 4)
+    expect(hostile.ms).toBeLessThan(benign.ms * 10)
   })
 
   it('says the strings it never got to went unread, not that they were never closed', () => {
