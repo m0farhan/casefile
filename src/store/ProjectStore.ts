@@ -1099,7 +1099,7 @@ export class ProjectStore implements TaskSource {
    * behind that failed every later save of the board.
    */
   private assertTitleSavable(project: Project, task: Task, parentId?: string | null): void {
-    if (/\/\.md$/.test(taskFilePath(task.title, ''))) {
+    if (taskFilePath(task.title, '').endsWith('/.md')) {
       throw new Error('A case title needs at least one character that can go in a file name.')
     }
     const conflict = this.findTaskFileConflict(project, task, parentId)
@@ -1589,7 +1589,7 @@ export class ProjectStore implements TaskSource {
     for (const field of [...ProjectStore.ACTIVITY_FIELDS, 'completed', 'iocs'] as const) {
       if (JSON.stringify(prev[field]) !== JSON.stringify(next[field])) patch[field] = next[field]
     }
-    return Object.keys(patch).length ? (patch as Partial<Task>) : null
+    return Object.keys(patch).length ? patch : null
   }
 
   /**

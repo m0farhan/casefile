@@ -30,6 +30,20 @@ const STATUSES: StatusConfig[] = [
 
 const SETTINGS: PMSettings = { ...DEFAULT_SETTINGS, statuses: STATUSES }
 
+/** The note at `path`, narrowed by instanceof; a missing one fails the test here. */
+function fileAt(vault: FakeVault, path: string | undefined): TFile {
+  const f = vault.getAbstractFileByPath(expectDefined(path))
+  if (!(f instanceof TFile)) throw new Error(`no note at ${path}`)
+  return f
+}
+
+/** The folder at `path`, narrowed by instanceof. */
+function folderAt(vault: FakeVault, path: string): TFolder {
+  const f = vault.getAbstractFileByPath(path)
+  if (!(f instanceof TFolder)) throw new Error(`no folder at ${path}`)
+  return f
+}
+
 function newStore(): { store: ProjectStore; vault: FakeVault; app: App } {
   const { app, vault } = makeFakeApp()
   const store = new ProjectStore(app as unknown as App, () => SETTINGS)
@@ -277,7 +291,7 @@ describe('ProjectStore legacy migration with repeated titles', () => {
     }
     fm.push('---', '')
     await vault.create('Projects/Legacy.md', fm.join('\n'))
-    const file = vault.getAbstractFileByPath('Projects/Legacy.md') as TFile
+    const file = fileAt(vault, 'Projects/Legacy.md')
     const project = expectDefined(await store.loadProject(file))
 
     await store.saveProject(project)
@@ -1047,7 +1061,7 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(await store.importNoteAsTask(project, note, { status: 'todo', priority: 'medium', handling: 'move' })).toBe(
       'imported'
     )
-    const moved = vault.getAbstractFileByPath('Projects/Props/Tasks/Alert.md') as TFile
+    const moved = fileAt(vault, 'Projects/Props/Tasks/Alert.md')
     const { frontmatter, body } = parseFrontmatter(await vault.read(moved))
     expect(frontmatter).toMatchObject({
       'pm-task': true,
@@ -1065,7 +1079,7 @@ describe('ProjectStore.importNoteAsTask', () => {
     const project = await store.createProject('Rule', 'Projects')
     const note = await vault.create('Notes/Ruled.md', '---\nFirst paragraph\n---\nrest')
     await store.importNoteAsTask(project, note, { status: 'todo', priority: 'medium', handling: 'move' })
-    const moved = vault.getAbstractFileByPath('Projects/Rule/Tasks/Ruled.md') as TFile
+    const moved = fileAt(vault, 'Projects/Rule/Tasks/Ruled.md')
     expect(await vault.read(moved)).toContain('First paragraph')
   })
 
@@ -1123,9 +1137,7 @@ describe('ProjectStore.importTaskForest', () => {
     )
     const task = makeTask({ title: 'Call' })
     await store.importTaskForest(project, [task], new Map([[task.id, src]]), 'move')
-    const { frontmatter } = parseFrontmatter(
-      await vault.read(vault.getAbstractFileByPath(expectDefined(task.filePath)) as TFile)
-    )
+    const { frontmatter } = parseFrontmatter(await vault.read(fileAt(vault, task.filePath)))
     expect(frontmatter).toMatchObject({ contexts: ['@soc'], source: 'ticket' })
     expect(frontmatter).not.toHaveProperty('scheduled')
     expect(frontmatter).not.toHaveProperty('dateCreated')
@@ -1391,7 +1403,7 @@ describe('issue keys', () => {
     project.keyPrefix = 'SOC'
     await addNamed(store, project, 'First')
     await addNamed(store, project, 'Second')
-    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    const pf = fileAt(vault, project.filePath)
     await vault.modify(pf, (await vault.cachedRead(pf)).replace('nextKeySeq: 3', 'nextKeySeq: 1'))
 
     const reloaded = await reloadProject(app, vault, project.filePath)
@@ -2266,9 +2278,7 @@ describe('ProjectStore notes with CRLF line endings', () => {
     expect(live.description).toBe('real desc\nline two')
 
     await store2.updateTask(reloaded, task.id, { title: 'Case B' })
-    const after = await vault.cachedRead(
-      expectDefined(vault.getAbstractFileByPath(expectDefined(live.filePath))) as TFile
-    )
+    const after = await vault.cachedRead(fileAt(vault, live.filePath))
     const { frontmatter, body } = parseFrontmatter(after)
     expect(frontmatter?.title).toBe('Case B')
     expect(body).not.toContain('pm-task')
@@ -2287,7 +2297,7 @@ describe('ProjectStore board description', () => {
     const project = await store.createProject('Phishing', 'Projects')
     project.description = 'Phishing'
     await store.saveProject(project)
-    const file = vault.getAbstractFileByPath(project.filePath) as TFile
+    const file = fileAt(vault, project.filePath)
     for (let i = 0; i < 10; i++) await store.saveProject(project)
     expect(countLines(await vault.cachedRead(file), 'Phishing')).toBe(1)
   })
@@ -2297,7 +2307,7 @@ describe('ProjectStore board description', () => {
     const project = await store.createProject('Queue', 'Projects')
     project.description = 'Board for phishing cases.\n'
     await store.saveProject(project)
-    const file = vault.getAbstractFileByPath(project.filePath) as TFile
+    const file = fileAt(vault, project.filePath)
     for (let i = 0; i < 3; i++) await store.saveProject(project)
     expect(countLines(await vault.cachedRead(file), 'Board for phishing cases.')).toBe(1)
   })
@@ -2307,7 +2317,7 @@ describe('ProjectStore board note frontmatter the analyst added', () => {
   it('keeps tags, aliases and cssclasses through insertTask and updateTask', async () => {
     const { store, vault, app } = newStore()
     const project = await store.createProject('Tagged', 'Projects')
-    const file = vault.getAbstractFileByPath(project.filePath) as TFile
+    const file = fileAt(vault, project.filePath)
     const mine = { tags: ['soc', 'q3'], aliases: ['SOC board'], cssclasses: ['wide'] }
     await vault.modify(
       file,
@@ -2337,9 +2347,7 @@ describe('ProjectStore board note frontmatter the analyst added', () => {
     project.keyPrefix = ''
     delete project.reportsSince
     await store.saveProject(project)
-    const fm = expectDefined(
-      parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(project.filePath) as TFile)).frontmatter
-    )
+    const fm = expectDefined(parseFrontmatter(await vault.cachedRead(fileAt(vault, project.filePath))).frontmatter)
     expect(fm).not.toHaveProperty('keyPrefix')
     expect(fm).not.toHaveProperty('nextKeySeq')
     expect(fm).not.toHaveProperty('reportsSince')
@@ -2354,10 +2362,11 @@ describe('ProjectStore hand-edited frontmatter types', () => {
     const { store, vault, app } = newStore()
     const project = await store.createProject('Hand', 'Projects')
     const folder = project.filePath.replace(/[^/]+\.md$/, 'Tasks')
-    for (const [name, fm] of Object.entries(notes))
+    for (const [name, fm] of Object.entries(notes)) {
       await vault.create(`${folder}/${name}.md`, `---\npm-task: true\n${fm}\n---\n`)
+    }
     const store2 = new ProjectStore(app, () => SETTINGS)
-    const loaded = expectDefined(await store2.loadProject(vault.getAbstractFileByPath(project.filePath) as TFile))
+    const loaded = expectDefined(await store2.loadProject(fileAt(vault, project.filePath)))
     return { store: store2, vault, project: loaded }
   }
 
@@ -2381,7 +2390,7 @@ describe('ProjectStore hand-edited frontmatter types', () => {
     const t = expectDefined(findTask(project.tasks, 't1'))
     expect(t.tags).toEqual(['phishing', 'malware'])
     await store.updateTask(project, 't1', { description: 'x' })
-    const fm = parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(expectDefined(t.filePath)) as TFile))
+    const fm = parseFrontmatter(await vault.cachedRead(fileAt(vault, t.filePath)))
     expect(fm.frontmatter?.tags).toEqual(['phishing', 'malware'])
   })
 
@@ -2403,7 +2412,7 @@ describe('ProjectStore hand-edited frontmatter types', () => {
   it('a board whose title is a number does not take every board off the list', async () => {
     const { store, vault, app } = newStore()
     for (const t of ['Alpha', 'Zeta', 'Numeric']) await store.createProject(t, 'Projects')
-    const f = vault.getAbstractFileByPath('Projects/Numeric/Numeric.md') as TFile
+    const f = fileAt(vault, 'Projects/Numeric/Numeric.md')
     await vault.modify(f, (await vault.cachedRead(f)).replace('title: "Numeric"', 'title: 2026'))
     const store2 = new ProjectStore(app, () => SETTINGS)
     expect((await store2.loadAllProjects('Projects')).map((p) => p.title)).toEqual(['2026', 'Alpha', 'Zeta'])
@@ -2437,7 +2446,7 @@ describe('ProjectStore task titles that name a shared folder', () => {
       'Projects/Arch/Tasks/Archive.md',
       '---\npm-task: true\nid: "old-archive"\ntitle: "Archive"\n---\n'
     )
-    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    const pf = fileAt(vault, project.filePath)
     const store2 = new ProjectStore(app, () => SETTINGS)
     const reloaded = expectDefined(await store2.loadProject(pf))
     await store2.updateTask(reloaded, 'old-archive', { title: 'Renamed' })
@@ -2460,7 +2469,7 @@ describe('ProjectStore task titles that name a shared folder', () => {
       `---\npm-task: true\nid: "att"\ntitle: "attachments"\nparentId: "${parent.id}"\n---\n`
     )
     const store2 = new ProjectStore(app, () => SETTINGS)
-    const reloaded = expectDefined(await store2.loadProject(vault.getAbstractFileByPath(project.filePath) as TFile))
+    const reloaded = expectDefined(await store2.loadProject(fileAt(vault, project.filePath)))
     expect(findTask(reloaded.tasks, 'att')).not.toBeNull()
     await store2.deleteTask(reloaded, 'att')
     expect(vault.getAbstractFileByPath(pic)).toBeInstanceOf(TFile)
@@ -2476,17 +2485,15 @@ describe('ProjectStore loader repairs', () => {
       const b = await addNamed(store, project, 'Case B')
       const original = expectDefined(a.filePath)
       const copyPath = `Projects/Dup/Tasks/${copyName}.md`
-      await vault.create(copyPath, await vault.cachedRead(vault.getAbstractFileByPath(original) as TFile))
+      await vault.create(copyPath, await vault.cachedRead(fileAt(vault, original)))
       vault.resetCounts()
 
       const store2 = new ProjectStore(app, () => SETTINGS)
-      const reloaded = expectDefined(await store2.loadProject(vault.getAbstractFileByPath(project.filePath) as TFile))
+      const reloaded = expectDefined(await store2.loadProject(fileAt(vault, project.filePath)))
       expect(findTask(reloaded.tasks, a.id)?.filePath).toBe(original)
       await store2.updateTask(reloaded, a.id, { status: 'done' })
       await store2.updateTask(reloaded, b.id, { status: 'done' })
-      expect(
-        parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(original) as TFile)).frontmatter?.status
-      ).toBe('done')
+      expect(parseFrontmatter(await vault.cachedRead(fileAt(vault, original))).frontmatter?.status).toBe('done')
       expect(vault.modifyCount.get(copyPath) ?? 0).toBe(0)
     })
   }
@@ -2495,7 +2502,7 @@ describe('ProjectStore loader repairs', () => {
   async function load(notes: Record<string, string>, taskIds: string[]): Promise<Project | null> {
     const { store, vault, app } = newStore()
     const project = await store.createProject('Loop', 'Projects')
-    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    const pf = fileAt(vault, project.filePath)
     await vault.modify(pf, (await vault.cachedRead(pf)).replace('taskIds: []', `taskIds: ${JSON.stringify(taskIds)}`))
     for (const [id, fm] of Object.entries(notes)) {
       await vault.create(
@@ -2535,7 +2542,7 @@ describe('ProjectStore refuses a title before changing anything', () => {
     const other = await addNamed(store, project, 'Unrelated')
     expect(other.key).toBe('SOC-2')
     await store.updateTask(project, first.id, { status: 'done' })
-    const fm = parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(project.filePath) as TFile))
+    const fm = parseFrontmatter(await vault.cachedRead(fileAt(vault, project.filePath)))
     expect(fm.frontmatter?.taskIds).toEqual([first.id, other.id])
   })
 
@@ -2568,10 +2575,8 @@ describe('ProjectStore refuses a title before changing anything', () => {
     retry.title = 'Kid 2'
     await store.insertTask(project, retry, parent.id)
     await store.insertTask(project, retry, parent.id)
-    const fm = parseFrontmatter(
-      await vault.cachedRead(vault.getAbstractFileByPath(expectDefined(parent.filePath)) as TFile)
-    )
-    expect((fm.frontmatter?.subtaskIds as string[]).filter((id) => id === retry.id)).toHaveLength(1)
+    const fm = parseFrontmatter(await vault.cachedRead(fileAt(vault, parent.filePath)))
+    expect((expectDefined(fm.frontmatter).subtaskIds as string[]).filter((id) => id === retry.id)).toHaveLength(1)
     expect(parent.subtasks.map((s) => s.title)).toEqual(['Kid', 'Top', 'Kid 2'])
     expect(kid.filePath).toBe('Projects/Retry/Tasks/Parent/Kid.md')
   })
@@ -2606,7 +2611,7 @@ describe('ProjectStore relocating a case note', () => {
     const project = await store.createProject('Links', 'Projects')
     const task = await addNamed(store, project, 'Phish from CEO')
     await store.updateTask(project, task.id, { description: 'The body.' })
-    const before = vault.getAbstractFileByPath(expectDefined(task.filePath))
+    const before = fileAt(vault, task.filePath)
     const renames: string[] = []
     const rename = app.fileManager.renameFile.bind(app.fileManager)
     app.fileManager.renameFile = async (file, to) => {
@@ -2619,7 +2624,7 @@ describe('ProjectStore relocating a case note', () => {
     expect(renames).toEqual(['Projects/Links/Tasks/Phish from CEO.md -> Projects/Links/Tasks/BEC wire fraud.md'])
     expect(vault.getAbstractFileByPath('Projects/Links/Tasks/BEC wire fraud.md')).toBe(before)
     expect(vault.trashCount.size).toBe(0)
-    const { body } = parseFrontmatter(await vault.cachedRead(before as TFile))
+    const { body } = parseFrontmatter(await vault.cachedRead(before))
     expect(body.startsWith('The body.')).toBe(true)
   })
 
@@ -2641,7 +2646,7 @@ describe('ProjectStore archived parents and their subtasks', () => {
     await store.archiveTask(project, parent.id)
     expect(child.filePath).toBe('Projects/Fam/Tasks/Archive/Parent/Child.md')
     expect(child.archived).toBe(true)
-    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    const pf = fileAt(vault, project.filePath)
     const restart = async () => {
       const s = new ProjectStore(app, () => SETTINGS)
       return { s, p: expectDefined(await s.loadProject(pf)) }
@@ -2695,7 +2700,7 @@ describe('ProjectStore boards moved, renamed or deleted under an open object', (
     const { store, vault } = newStore()
     const project = await store.createProject('Goals', 'Projects')
     const task = await addNamed(store, project, 'Case 1')
-    await vault.rename(vault.getAbstractFileByPath('Projects/Goals') as TFolder, 'IR/Goals')
+    await vault.rename(folderAt(vault, 'Projects/Goals'), 'IR/Goals')
     await store.updateTask(project, task.id, { status: 'done' })
     expect(vault.getAbstractFileByPath('Projects/Goals/Goals.md')).toBeNull()
     expect(vault.getAbstractFileByPath('Projects/Goals/Tasks/Case 1.md')).toBeNull()
@@ -2711,7 +2716,7 @@ describe('ProjectStore boards moved, renamed or deleted under an open object', (
     const { store, vault } = newStore()
     const project = await store.createProject('Moved', 'Projects')
     const task = await addNamed(store, project, 'Case')
-    await vault.rename(vault.getAbstractFileByPath(expectDefined(task.filePath)) as TFile, 'Elsewhere/Case.md')
+    await vault.rename(fileAt(vault, task.filePath), 'Elsewhere/Case.md')
     await expect(store.updateTask(project, task.id, { status: 'done' })).rejects.toThrow('no longer at')
     expect(vault.getAbstractFileByPath('Projects/Moved/Tasks/Case.md')).toBeNull()
   })
@@ -2721,8 +2726,8 @@ describe('ProjectStore boards moved, renamed or deleted under an open object', (
     const project = await store.createProject('Cases', 'IR')
     await addNamed(store, project, 'Phish A')
     await addNamed(store, project, 'Phish B')
-    await vault.rename(vault.getAbstractFileByPath('IR/Cases') as TFolder, 'IR/Incidents')
-    const note = vault.getAbstractFileByPath('IR/Incidents/Cases.md') as TFile
+    await vault.rename(folderAt(vault, 'IR/Cases'), 'IR/Incidents')
+    const note = fileAt(vault, 'IR/Incidents/Cases.md')
     const store2 = new ProjectStore(app, () => SETTINGS)
     const loaded = expectDefined(await store2.loadProject(note))
     expect(loaded.detached).toEqual({ recorded: 2, folder: 'IR/Incidents/Cases_tasks' })
