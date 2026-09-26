@@ -63,7 +63,7 @@ vi.mock('./TableRenderer', () => ({
   getVisibleTaskIds: (state: TableState) => state.visibleRows.map((f) => f.task.id)
 }))
 
-function row(task: Task, visible: Task[], conflict: TaskFileNameConflictError | null = null) {
+function row(task: Task, visible: Task[], conflict: TaskFileNameConflictError | null = null, boardType = 'case') {
   const store = {
     findTaskFileConflict: vi.fn<() => TaskFileNameConflictError | null>(() => conflict),
     updateTask: vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve())
@@ -80,7 +80,7 @@ function row(task: Task, visible: Task[], conflict: TaskFileNameConflictError | 
       settings: { showTagColors: false, slaPolicies: {}, alertCategories: DEFAULT_ALERT_CATEGORIES }
     } as unknown as PMPlugin,
     statuses: [],
-    boardType: 'case',
+    boardType,
     state,
     onRefresh: vi.fn<() => Promise<void>>(() => Promise.resolve()),
     onSelectionChange: vi.fn<() => void>()
@@ -156,5 +156,16 @@ describe('issue-type glyph', () => {
     row(t, [t])
     const props = vi.mocked(TitleCell).mock.lastCall?.[1] as TitleCellProps
     expect(props.alert).toEqual({ tags: [], title: t.title, categories: DEFAULT_ALERT_CATEGORIES })
+  })
+
+  it('on a plain board hands no title, so no kind is derived where no Alert kind control exists', () => {
+    const t = makeTask({
+      title: '77 - SOC138 - Detected Suspicious Xls File',
+      issueType: 'incident',
+      tags: ['phishing']
+    })
+    row(t, [t], null, 'plain')
+    const props = vi.mocked(TitleCell).mock.lastCall?.[1] as TitleCellProps
+    expect(props.alert).toEqual({ tags: ['phishing'], title: '', categories: DEFAULT_ALERT_CATEGORIES })
   })
 })

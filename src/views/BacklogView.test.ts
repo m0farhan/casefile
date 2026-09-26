@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type PMPlugin from '../main'
-import { DEFAULT_STATUSES, makeDefaultFilter, makeTask, type Project } from '../types'
+import { DEFAULT_STATUSES, makeDefaultFilter, makeTask, type BoardType, type Project } from '../types'
 import { openTaskModal } from '../ui/ModalFactory'
+import { renderIssueTypeIcon } from '../ui/composites/issueMeta'
 import { BacklogView } from './BacklogView'
 
 // The stub carries no view or modal classes; the import chain only needs them to exist.
@@ -49,11 +50,13 @@ function fakeEl(cls = ''): HTMLElement {
   return node.el
 }
 
-function renderRow(): Node {
-  const project = { tasks: [makeTask({ title: 'Triage', bucket: 'this-week' })] } as unknown as Project
+function renderRow(boardType: BoardType = 'case', title = 'Triage'): Node {
+  const project = { tasks: [makeTask({ title, bucket: 'this-week' })] } as unknown as Project
   const plugin = {
-    store: { configFor: () => ({ statuses: DEFAULT_STATUSES, priorities: [], severities: [], issueTypes: [] }) },
-    settings: { currentUser: '' }
+    store: {
+      configFor: () => ({ statuses: DEFAULT_STATUSES, priorities: [], severities: [], issueTypes: [], boardType })
+    },
+    settings: { currentUser: '', alertCategories: [] }
   } as unknown as PMPlugin
   new BacklogView(fakeEl(), project, plugin, () => Promise.resolve(), makeDefaultFilter()).render()
   const row = nodes.find((n) => n.cls === 'pm-backlog-row')
@@ -76,6 +79,14 @@ describe('BacklogView row', () => {
       expect(preventDefault).toHaveBeenCalledOnce()
     }
     expect(openTaskModal).toHaveBeenCalledTimes(2)
+  })
+
+  it('derives a kind from the title on a case board only', () => {
+    const title = 'Detected Suspicious Xls File'
+    renderRow('case', title)
+    expect(vi.mocked(renderIssueTypeIcon).mock.lastCall?.[2]?.alert?.title).toBe(title)
+    renderRow('plain', title)
+    expect(vi.mocked(renderIssueTypeIcon).mock.lastCall?.[2]?.alert?.title).toBe('')
   })
 
   it('leaves keys aimed at the status badge inside it alone', () => {

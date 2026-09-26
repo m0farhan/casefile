@@ -45,8 +45,9 @@ export function renderIssueTypeIcon(
   }
 ): HTMLElement | undefined {
   if (!cfg) return undefined
-  // Incident-only, the same gate the SLA chip uses: a story tagged `macro`
-  // must not turn into a file-warning glyph.
+  // Incident-only: a story tagged `macro` must not turn into a file-warning
+  // glyph. Title derivation is case-board-only too: callers on a plain board
+  // pass an empty title, which derives nothing.
   const kind = cfg.id === 'incident' && opts?.alert ? shownAlertKind(opts.alert) : undefined
   const shown = kind?.category ?? cfg
   const icon = el.createSpan({ cls: 'pm-issuetype-icon' })

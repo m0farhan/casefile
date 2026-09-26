@@ -344,16 +344,19 @@ export class TaskDetailView extends ItemView {
 
     // ── Header: type icon · key · open-as-note ──────────────────────────────
     const header = contentEl.createDiv('pm-td-header')
+    const socBoard = config.boardType !== 'plain'
+    // Derived from the title on a case board only, as on the board card.
     renderIssueTypeIcon(
       header,
       config.issueTypes.find((t) => t.id === task.issueType),
-      { alert: { tags: task.tags, title: task.title, categories: this.plugin.settings.alertCategories } }
+      {
+        alert: { tags: task.tags, title: socBoard ? task.title : '', categories: this.plugin.settings.alertCategories }
+      }
     )
     if (task.key) renderKeyChip(header, task.key, { copy: true })
     // Severity shows on any task type of any board; the SLA chip stays
     // incident-only on a case board (slaState also gates on issueType, so that
     // is belt and braces).
-    const socBoard = config.boardType !== 'plain'
     renderSeverityBadge(
       header,
       config.severities.find((s) => s.id === task.severity),

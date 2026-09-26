@@ -119,13 +119,17 @@ export class KanbanCard {
 
     // ── Row 2: every mark the card carries, one wrapping row ─────────────────
     const chips = body.createDiv('pm-kanban-card-chips')
+    const socBoard = props.boardType !== 'plain'
+    // A kind is derived from the title on a case board only: a plain board has
+    // no Alert kind control, so the derived glyph's "set the alert kind" would
+    // point at nothing. An empty title derives nothing; a recorded kind still draws.
     renderIssueTypeIcon(
       chips,
       (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType),
       {
         alert: {
           tags: task.tags,
-          title: task.title,
+          title: socBoard ? task.title : '',
           categories: socConfig?.alertCategories ?? DEFAULT_ALERT_CATEGORIES
         }
       }
@@ -134,7 +138,6 @@ export class KanbanCard {
     // Severity shows on every board — it is the one urgency dial, and a plain
     // board needs it as much as a case queue. A plain board runs no clocks and
     // keeps no indicators; those values stay on the note and only the chips go.
-    const socBoard = props.boardType !== 'plain'
     const sev = (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
     // Severity rides the card's left edge as a spine, so a column answers
     // "how bad is any of this" before a single title is read. The word still

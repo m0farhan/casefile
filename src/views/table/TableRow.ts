@@ -88,7 +88,12 @@ export function renderTaskRow(
     depth,
     showTagColors: ctx.plugin.settings.showTagColors,
     issueTypes: cfg?.issueTypes,
-    alert: { tags: task.tags, title: task.title, categories: ctx.plugin.settings.alertCategories },
+    // Derived from the title on a case board only, as on the board card.
+    alert: {
+      tags: task.tags,
+      title: ctx.boardType !== 'plain' ? task.title : '',
+      categories: ctx.plugin.settings.alertCategories
+    },
     onTitleClick: () => {
       openTaskModal(ctx.plugin, ctx.project, {
         task,

@@ -91,17 +91,23 @@ vi.mock('obsidian', async (importOriginal) => {
   }
   return { ...real, Setting, PluginSettingTab, Notice, AbstractInputSuggest, FuzzySuggestModal, getIconIds: () => [] }
 })
+// The real probe needs Obsidian's global createSpan; a Lucide id is lowercase words.
+vi.mock('./utils', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isIconName: (icon: string) => /^[a-z0-9-]+$/.test(icon)
+}))
 vi.mock('./ui/ModalFactory', () => ({ confirmDialog: vi.fn<() => Promise<boolean>>() }))
 
 interface FakeButton {
   tip: string
+  text: string
   click: () => unknown
 }
 const buttons: FakeButton[] = []
 vi.mock('./ui/primitives/IconButton', () => ({
   IconButton: class {
-    b: FakeButton = { tip: '', click: () => undefined }
-    el = { setCssStyles: () => {} }
+    b: FakeButton = { tip: '', text: '', click: () => undefined }
+    el = { setCssStyles: () => {}, setText: (t: string) => (this.b.text = t) }
     constructor() {
       buttons.push(this.b)
     }
@@ -359,6 +365,59 @@ describe('alert kinds', () => {
     idInput.value = '#malicious-code'
     idInput.on.change()
     expect(settings.alertCategories[1].id).toBe('malicious-code')
+  })
+
+  it('refuses a label another kind answers to, and keeps the old one', () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: kinds() }
+    const { tab } = makeTab(settings)
+    const list = fakeEl()
+    ;(tab as unknown as Private).renderAlertKindList(list)
+    const label = list.kids[0].kids[0].kids.filter((k) => k.className === 'pm-settings-status-label')[0]
+    label.value = 'Malware'
+    label.on.change()
+    expect(settings.alertCategories[0].label).toBe('Phishing')
+    expect(label.value).toBe('Phishing')
+    expect(notices).toEqual(['Not saved: the kind "Malware" already answers to "Malware".'])
+    label.value = 'Phish'
+    label.on.change()
+    expect(settings.alertCategories[0].label).toBe('Phish')
+  })
+
+  it('leaves out a match word another kind answers to, and saves the rest', () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: kinds() }
+    const { tab } = makeTab(settings)
+    const list = fakeEl()
+    ;(tab as unknown as Private).renderAlertKindList(list)
+    const match = list.kids[0].kids[1].kids[1]
+    match.value = 'lure, malware, macro'
+    match.on.change()
+    expect(settings.alertCategories[0].match).toEqual(['lure'])
+    expect(match.value).toBe('lure')
+    expect(notices).toEqual([
+      'Not saved: the kind "Malware" already answers to "malware"; ' +
+        'the kind "Suspicious file" already answers to "macro".'
+    ])
+  })
+
+  it('does not add back a built-in a renamed kind still answers to', () => {
+    const own = kinds()
+    own[0].id = 'phish'
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: own }
+    const { tab } = makeTab(settings)
+    tab.display()
+    ;(setting('Add missing built-in kinds').clicked as () => void)()
+    expect(settings.alertCategories.map((c) => c.id)).toEqual(own.map((c) => c.id))
+    expect(notices).toEqual(['Nothing added. Skipped Phishing: the kind "Phishing" already answers to "phishing".'])
+  })
+
+  it('an emoji icon shows as text on its own settings card, as it does on the board', () => {
+    const own = kinds()
+    own[0].icon = '🎣'
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: own }
+    const { tab } = makeTab(settings)
+    ;(tab as unknown as Private).renderAlertKindList(fakeEl())
+    expect(buttons[0].text).toBe('🎣')
+    expect(buttons[4].text).toBe('')
   })
 
   it('reads match words as a comma-separated list', () => {

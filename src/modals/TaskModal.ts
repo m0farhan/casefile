@@ -383,7 +383,14 @@ export class TaskModal extends Modal {
     renderIssueTypeIcon(
       crumb,
       config.issueTypes.find((t) => t.id === this.task.issueType),
-      { alert: { tags: this.task.tags, title: this.task.title, categories: this.plugin.settings.alertCategories } }
+      {
+        alert: {
+          tags: this.task.tags,
+          // Derived from the title on a case board only, as on the board card.
+          title: config.boardType !== 'plain' ? this.task.title : '',
+          categories: this.plugin.settings.alertCategories
+        }
+      }
     )
     if (this.task.key) {
       renderKeyChip(crumb, this.task.key, { copy: true })

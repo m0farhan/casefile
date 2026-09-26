@@ -68,7 +68,12 @@ export class BacklogView implements SubView {
           row,
           cfg.issueTypes.find((t) => t.id === task.issueType),
           {
-            alert: { tags: task.tags, title: task.title, categories: this.plugin.settings.alertCategories }
+            // Derived from the title on a case board only, as on the board card.
+            alert: {
+              tags: task.tags,
+              title: cfg.boardType !== 'plain' ? task.title : '',
+              categories: this.plugin.settings.alertCategories
+            }
           }
         )
         if (task.key) renderKeyChip(row, task.key)
