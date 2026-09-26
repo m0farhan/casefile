@@ -250,6 +250,17 @@ describe('parser evasions that used to hide content from the analyst', () => {
     expect(eml.notes.join(' ')).toContain('could not be decoded')
   })
 
+  it('says when a declared charset cannot be decoded, and only then', () => {
+    const part = (charset: string): string =>
+      `Content-Type: text/html; charset=${charset}\nContent-Transfer-Encoding: base64\n\n` +
+      b64of('+ADw-a href+AD0AIg-https://evil+AC4-test/x+ACI-+AD4-Your invoice+ADw-/a+AD4-')
+    expect(parseEml(part('utf-7')).notes).toEqual([
+      'A text/html part declared charset utf-7, which this reader cannot decode; it is shown as UTF-8, ' +
+        'so its text, links and indicators may be wrong or missing.'
+    ])
+    expect(parseEml(part('cp1252')).notes).toEqual([])
+  })
+
   it('does not run two text parts together into a token that is in neither', () => {
     const mail =
       'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhttp://a.test' +

@@ -166,7 +166,7 @@ function extendedParam(all: Param[], key: string): string {
   let out = ''
   let run: number[] = []
   const flush = (): void => {
-    if (run.length) out += decodeText(Uint8Array.from(run), charset, true, '')
+    if (run.length) out += (decoderFor(charset) ?? new TextDecoder('utf-8')).decode(Uint8Array.from(run))
     run = []
   }
   for (const piece of pieces) {
@@ -296,13 +296,28 @@ function decodeBody(body: string, encoding: string): Decoded {
   return { bytes: new TextEncoder().encode(body), exact: false, failed: false }
 }
 
-function decodeText(bytes: Uint8Array, charset: string, exact: boolean, raw: string): string {
-  if (!exact) return raw // already decoded by the file read; re-decoding would mangle it
+/** A decoder for the declared charset, or null when this reader has none for that label. */
+function decoderFor(charset: string): TextDecoder | null {
   try {
-    return new TextDecoder(charset || 'utf-8').decode(bytes)
+    return new TextDecoder(charset || 'utf-8')
   } catch {
-    return new TextDecoder('utf-8').decode(bytes)
+    return null
   }
+}
+
+function decodeText(bytes: Uint8Array, charset: string, exact: boolean, raw: string, out: Eml, mime: string): string {
+  if (!exact) return raw // already decoded by the file read; re-decoding would mangle it
+  const decoder = decoderFor(charset)
+  // Said, not swallowed: UTF-7 is a filter-evasion charset this reader cannot
+  // decode, and read as UTF-8 its `+ADw-a href+AD0-` hides the real link while
+  // a URL-shaped fragment of it lands in Indicators.
+  if (!decoder) {
+    out.notes.push(
+      `A ${mime} part declared charset ${charset}, which this reader cannot decode; it is shown as UTF-8, ` +
+        'so its text, links and indicators may be wrong or missing.'
+    )
+  }
+  return (decoder ?? new TextDecoder('utf-8')).decode(bytes)
 }
 
 /**
@@ -399,7 +414,11 @@ function walk(part: RawPart, out: Eml, depth: number): void {
     if (filename || /^attachment/i.test(disposition)) {
       pushAttachment(out, filename, mime, bytes, inline, failed, exact)
     }
-    walk(splitHeadersAndBody(decodeText(bytes, param(contentType, 'charset'), exact, part.body)), out, depth + 1)
+    walk(
+      splitHeadersAndBody(decodeText(bytes, param(contentType, 'charset'), exact, part.body, out, mime)),
+      out,
+      depth + 1
+    )
     return
   }
 
@@ -409,7 +428,7 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   }
 
   const charset = param(contentType, 'charset')
-  const text = decodeText(bytes, charset, exact, part.body)
+  const text = decodeText(bytes, charset, exact, part.body, out, mime)
   if (!exact && charset && charset.toLowerCase() !== 'utf-8') {
     out.notes.push(`A ${mime} part declared charset ${charset} but was not transfer-encoded, so it may be mangled.`)
   }
