@@ -6,7 +6,8 @@ import {
   formatDelay,
   formatHeaderReport,
   parseHeaderBlock,
-  quotedPrintableBytes
+  quotedPrintableBytes,
+  quoteUntrusted
 } from './emailHeaders'
 import { analysePhishing } from './phish'
 
@@ -574,5 +575,26 @@ describe('a Return-Path that names no address', () => {
     expect(analyseHeaders('Return-Path: (none given)\nFrom: a@b.test').notes).toContain(
       'Return-Path names no address, so there is no envelope domain to compare with From.'
     )
+  })
+})
+
+describe('format characters in the report', () => {
+  it('show as code points inside the quoting, with line breaks still flattened to spaces', () => {
+    expect(quoteUntrusted('scan\u202Efdp.exe')).toBe('`scan<U+202E>fdp.exe`')
+    expect(quoteUntrusted('micro\u00ADsoft.test')).toBe('`micro<U+00AD>soft.test`')
+    expect(quoteUntrusted('a\r\nb')).toBe('`a b`')
+    // Already escaped is left alone, so no value is escaped twice.
+    expect(quoteUntrusted('<U+202E>')).toBe('`<U+202E>`')
+  })
+
+  it('cannot let a direction override in the From domain reverse the report’s own sentences', () => {
+    const md = formatHeaderReport(
+      analyseHeaders(
+        'From: PayPal <x@\u202Emoc.lapyap>\nReturn-Path: <bounce@evil.test>\n' +
+          'Received: from a.test by b\u202Eevil.test; Mon, 1 Jan 2024 00:00:00 +0000'
+      )
+    )
+    expect(md.split('\n').filter((line) => /\p{Cf}/u.test(line))).toEqual([])
+    expect(md).toContain('From is at <U+202E>moc.lapyap; Return-Path is at evil.test. They differ.')
   })
 })

@@ -11,6 +11,8 @@
  * up, and the text is treated as hostile throughout: it arrived in an email.
  */
 
+import { visibleName } from './ioc'
+
 export interface HeaderField {
   name: string
   value: string
@@ -622,9 +624,15 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
  * Inline code renders none of those. The fence is a backtick run one longer
  * than the longest inside the value, so the value cannot close its own
  * quoting, and newlines are flattened because inline code cannot span lines.
+ *
+ * Inline code does not isolate direction, though, so after the flatten every
+ * control and format character shows as `<U+XXXX>`, the rule names follow. A
+ * right-to-left override in a From domain otherwise ran on past the fence and
+ * reversed the report's own sentence, and a soft hyphen in a host vanished
+ * from the copy an analyst pastes into a block list.
  */
 export function quoteUntrusted(value: string): string {
-  const flat = value.replace(/[\r\n\u2028\u2029]+/g, ' ')
+  const flat = visibleName(value.replace(/[\r\n\u2028\u2029]+/g, ' '))
   if (!flat) return '(empty)'
   let longest = 0
   for (const run of flat.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
