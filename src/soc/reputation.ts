@@ -234,7 +234,12 @@ function parseAbuseCh(provider: RepProvider, body: Record<string, unknown>): Rep
   if (ABUSECH_NOT_LISTED.has(qs)) {
     return { verdict: 'unknown', summary: `not listed in ${PROVIDER_LABELS[provider]}` }
   }
-  if (qs !== 'ok') return { verdict: 'unknown', summary: 'unreadable response' }
+  // Any other status is still an answer: invalid_host for a dotless name,
+  // illegal_hash for a value that is not one. Named as the provider gave it
+  // (the chip already names the provider), when it is a plain status token.
+  if (qs !== 'ok') {
+    return { verdict: 'unknown', summary: /^\w{1,40}$/.test(qs) ? `answered "${qs}"` : 'unreadable response' }
+  }
 
   if (provider === 'urlhaus') {
     // Two response shapes: /v1/url/ carries url_status/threat/id at top level;
@@ -308,6 +313,10 @@ export function parseReputation(provider: RepProvider, status: number, bodyText:
   const detail = `${score}% confidence · ${reports} report${reports === 1 ? '' : 's'}`
   if (score >= 75) return { verdict: 'malicious', summary: detail }
   if (score >= 25) return { verdict: 'suspicious', summary: detail }
+  // A whitelist entry is AbuseIPDB's one positive clearance. A low score is
+  // weak evidence of abuse, not a statement that the address is clean, and an
+  // address with reports is never painted clean for scoring low (SD-01).
+  if (data.isWhitelisted === true) return { verdict: 'clean', summary: `whitelisted · ${detail}` }
   if (reports === 0) return { verdict: 'unknown', summary: 'no reports' } // nobody looked ≠ clean (SD-01)
-  return { verdict: 'clean', summary: detail }
+  return { verdict: 'unknown', summary: `${detail} · below suspicion threshold` }
 }

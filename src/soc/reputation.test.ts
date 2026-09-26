@@ -164,10 +164,23 @@ describe('parseReputation - AbuseIPDB', () => {
     })
     expect(parseReputation('abuseipdb', 200, abBody(40, 2)).verdict).toBe('suspicious')
     expect(parseReputation('abuseipdb', 200, abBody(0, 0))).toEqual({ verdict: 'unknown', summary: 'no reports' })
+    // Reported, scoring low: that is not a clearance.
     expect(parseReputation('abuseipdb', 200, abBody(10, 1))).toEqual({
-      verdict: 'clean',
-      summary: '10% confidence · 1 report'
+      verdict: 'unknown',
+      summary: '10% confidence · 1 report · below suspicion threshold'
     })
+    expect(parseReputation('abuseipdb', 200, abBody(24, 20)).verdict).toBe('unknown')
+  })
+
+  it('reads clean only when AbuseIPDB whitelists the address', () => {
+    const body = (score: number) =>
+      JSON.stringify({ data: { abuseConfidenceScore: score, totalReports: 3, isWhitelisted: true } })
+    expect(parseReputation('abuseipdb', 200, body(0))).toEqual({
+      verdict: 'clean',
+      summary: 'whitelisted · 0% confidence · 3 reports'
+    })
+    // A high score never turns green, whitelisted or not.
+    expect(parseReputation('abuseipdb', 200, body(80)).verdict).toBe('malicious')
   })
 
   it('degrades honestly on errors', () => {
@@ -228,7 +241,16 @@ describe('parseReputation - abuse.ch', () => {
     expect(parseReputation('threatfox', 429, '').summary).toContain('rate limited')
     expect(parseReputation('urlhaus', 200, 'not json').verdict).toBe('unknown')
     expect(parseReputation('threatfox', 200, '{"query_status":"ok","data":"error"}').verdict).toBe('unknown')
-    expect(parseReputation('malwarebazaar', 200, '{"query_status":"illegal_hash"}').verdict).toBe('unknown')
+    expect(parseReputation('malwarebazaar', 200, '{"query_status":"illegal_hash"}')).toEqual({
+      verdict: 'unknown',
+      summary: 'answered "illegal_hash"'
+    })
+  })
+
+  it('names a status it read, and calls only a real non-answer unreadable', () => {
+    expect(parseReputation('urlhaus', 200, '{"query_status":"invalid_host"}').summary).toBe('answered "invalid_host"')
+    expect(parseReputation('urlhaus', 200, '{}').summary).toBe('unreadable response')
+    expect(parseReputation('threatfox', 200, '{"query_status":"<b>\\u202e x"}').summary).toBe('unreadable response')
   })
 })
 
