@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, makeProject, makeTask, type SlaPolicy } from '../../types'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_SETTINGS, DEFAULT_STATUSES, makeProject, makeTask, type SlaPolicy } from '../../types'
 import { buildHandover } from '../../soc/handover'
 import {
+  clockAnchors,
   lifecycleDurations,
   openBySeverity,
   openedClosedPerWeek,
@@ -27,6 +28,40 @@ describe('openedClosedPerWeek', () => {
     expect(buckets[0]).toMatchObject({ opened: 1, closed: 0 })
     expect(buckets[1]).toMatchObject({ opened: 1, closed: 1 })
   })
+
+  it('leaves out the weeks that end before a reset, instead of drawing them as quiet', () => {
+    const buckets = openedClosedPerWeek([], 12, NOW, '2026-07-21T09:00:00.000Z') // a Tuesday in W30
+    expect(buckets.map((b) => b.label)).toEqual(['2026-W30', '2026-W31'])
+    expect(openedClosedPerWeek([], 12, NOW, 'not a date')).toHaveLength(12)
+  })
+})
+
+describe('openedClosedPerWeek on the local calendar', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('puts a Sunday-evening case in New York in one week, and counts it closed this week', () => {
+    vi.stubEnv('TZ', 'America/New_York')
+    const now = Date.parse('2026-08-10T01:00:00.000Z') // Sun 9 Aug, 21:00 local
+    const task = makeTask({ createdAt: new Date(now).toISOString(), completed: '2026-08-09' })
+    const buckets = openedClosedPerWeek([task], 3, now)
+    expect(buckets[2]).toMatchObject({ label: '2026-W32', opened: 1, closed: 1 })
+    expect(reportSummary([task], [], () => true, {}, now).closedThisWeek).toBe(1)
+  })
+
+  it('counts a closure just after local midnight in Dublin in the new week', () => {
+    vi.stubEnv('TZ', 'Europe/Dublin')
+    const now = Date.parse('2026-08-09T23:30:00.000Z') // Mon 10 Aug, 00:30 local
+    const task = makeTask({ createdAt: new Date(now).toISOString(), completed: '2026-08-10' })
+    expect(openedClosedPerWeek([task], 1, now)[0]).toMatchObject({ label: '2026-W33', opened: 1, closed: 1 })
+  })
+
+  it('steps whole calendar weeks across a DST change', () => {
+    vi.stubEnv('TZ', 'America/New_York')
+    const now = new Date(2026, 2, 9, 0, 30).getTime() // Mon 9 Mar, the day after clocks went forward
+    expect(openedClosedPerWeek([], 3, now).map((b) => b.label)).toEqual(['2026-W09', '2026-W10', '2026-W11'])
+  })
 })
 
 describe('timeInStatus', () => {
@@ -36,7 +71,7 @@ describe('timeInStatus', () => {
       status: 'in-progress',
       activity: [{ at: new Date(NOW - 1 * DAY).toISOString(), field: 'status', from: 'todo', to: 'in-progress' }]
     })
-    const result = timeInStatus([t], NOW)
+    const result = timeInStatus([t], DEFAULT_STATUSES, NOW)
     const byId = new Map(result.map((r) => [r.statusId, r.totalMs]))
     expect(byId.get('todo')).toBe(2 * DAY)
     expect(byId.get('in-progress')).toBe(1 * DAY)
@@ -44,16 +79,54 @@ describe('timeInStatus', () => {
 
   it('a task with no transitions contributes its lifetime to its current status', () => {
     const t = makeTask({ createdAt: new Date(NOW - 5 * DAY).toISOString(), status: 'todo' })
-    expect(timeInStatus([t], NOW)).toEqual([{ statusId: 'todo', totalMs: 5 * DAY }])
+    expect(timeInStatus([t], DEFAULT_STATUSES, NOW)).toEqual([{ statusId: 'todo', totalMs: 5 * DAY }])
   })
 
-  it('stops the clock at resolvedAt', () => {
-    const t = makeTask({
-      createdAt: new Date(NOW - 4 * DAY).toISOString(),
-      resolvedAt: new Date(NOW - 2 * DAY).toISOString(),
-      status: 'done'
+  const at = (daysAgo: number) => new Date(NOW - daysAgo * DAY).toISOString()
+  const closedAYearAgo = (over: Parameters<typeof makeTask>[0]) =>
+    makeTask({
+      createdAt: at(368),
+      status: 'done',
+      activity: [
+        { at: at(366), field: 'status', from: 'todo', to: 'in-progress' },
+        { at: at(365), field: 'status', from: 'in-progress', to: 'done' }
+      ],
+      ...over
     })
-    expect(timeInStatus([t], NOW)[0].totalMs).toBe(2 * DAY)
+
+  it('counts open statuses only, the same for a plain task and an incident', () => {
+    const plain = closedAYearAgo({})
+    const incident = closedAYearAgo({ issueType: 'incident', resolvedAt: at(365) })
+    const expected = [
+      { statusId: 'todo', totalMs: 2 * DAY },
+      { statusId: 'in-progress', totalMs: DAY }
+    ]
+    expect(timeInStatus([plain], DEFAULT_STATUSES, NOW)).toEqual(expected)
+    expect(timeInStatus([incident], DEFAULT_STATUSES, NOW)).toEqual(expected)
+  })
+
+  it('counts the time a reopened incident spends open after the reopen', () => {
+    const t = makeTask({
+      issueType: 'incident',
+      createdAt: at(9),
+      resolvedAt: at(8), // first close; the stamp outlives the reopen
+      status: 'in-progress',
+      activity: [
+        { at: at(8), field: 'status', from: 'todo', to: 'done' },
+        { at: at(7), field: 'status', from: 'done', to: 'in-progress' }
+      ]
+    })
+    expect(timeInStatus([t], DEFAULT_STATUSES, NOW)).toEqual([
+      { statusId: 'in-progress', totalMs: 7 * DAY },
+      { statusId: 'todo', totalMs: DAY }
+    ])
+  })
+
+  it('stays finite beside an unreadable resolvedAt', () => {
+    const bad = makeTask({ createdAt: at(3), status: 'todo', resolvedAt: 'yesterday' })
+    const good = makeTask({ createdAt: at(1), status: 'in-progress' })
+    const rows = timeInStatus([bad, good], DEFAULT_STATUSES, NOW)
+    expect(rows.every((r) => Number.isFinite(r.totalMs))).toBe(true)
   })
 })
 
@@ -96,6 +169,34 @@ describe('verdictBreakdown + slaCompliance', () => {
     const done = (statusId: string) => statusId === 'done'
     expect(reportSummary([overdue], [overdue], done, POLICIES, NOW).slaMetPct).toBe(0)
   })
+
+  it('counts a late response as breached, even when the case then resolved in time', () => {
+    // Response due 01:00, answered 03:00; resolved 03:30 inside the 04:00 target.
+    const late = incident({ respondedAt: '2026-07-30T03:00:00.000Z', resolvedAt: '2026-07-30T03:30:00.000Z' })
+    expect(slaCompliance([late], POLICIES, NOW)).toEqual([
+      { severityId: 'sev1', met: 0, breached: 1, noData: 0, open: 0 }
+    ])
+    expect(reportSummary([late], [late], () => true, POLICIES, NOW).slaMetPct).toBe(0)
+    // Still inside the resolution window: the missed response is already a fact, not open.
+    const running = incident({ respondedAt: '2026-07-30T03:00:00.000Z' })
+    const at0310 = Date.parse('2026-07-30T03:10:00.000Z')
+    expect(slaCompliance([running], POLICIES, at0310)).toEqual([
+      { severityId: 'sev1', met: 0, breached: 1, noData: 0, open: 0 }
+    ])
+  })
+
+  it('counts an unreadable resolvedAt as no data, never met', () => {
+    const t = incident({ resolvedAt: 'unknown' })
+    expect(slaCompliance([t], POLICIES, NOW)).toEqual([{ severityId: 'sev1', met: 0, breached: 0, noData: 1, open: 0 }])
+  })
+
+  it('discloses creation-anchored clocks over the incidents that have a clock', () => {
+    const detected = incident({})
+    const fromCreated = makeTask({ issueType: 'incident', severity: 'sev1', createdAt: '2026-07-30T11:00:00.000Z' })
+    const noSeverity = makeTask({ issueType: 'incident', createdAt: '2026-07-30T11:00:00.000Z' })
+    expect(clockAnchors([detected, fromCreated, noSeverity], POLICIES, NOW)).toEqual({ clocked: 2, fromCreated: 1 })
+    expect(clockAnchors([noSeverity], POLICIES, NOW)).toEqual({ clocked: 0, fromCreated: 0 })
+  })
 })
 
 describe('lifecycleDurations', () => {
@@ -134,6 +235,17 @@ describe('lifecycleDurations', () => {
     expect(overall.contain).toMatchObject({ n: 2, meanMs: 4 * HOUR })
   })
 
+  it('counts the measured incidents, and which of them ran from case creation', () => {
+    const { overall, measured, measuredFromCreated } = lifecycleDurations([
+      inc({ respondedAt: '2026-07-30T01:00:00.000Z' }), // detection-anchored, measured
+      makeTask({ issueType: 'incident', severity: 'sev1' }), // creation-anchored, nothing stamped
+      makeTask({ issueType: 'incident' }) // creation-anchored, no severity, nothing stamped
+    ])
+    expect(overall.respond?.n).toBe(1)
+    expect(measured).toBe(1)
+    expect(measuredFromCreated).toBe(0)
+  })
+
   it('ignores endpoints before detectedAt and incidents without detectedAt', () => {
     const { overall, bySeverity } = lifecycleDurations([
       inc({ respondedAt: '2026-07-29T23:00:00.000Z' }), // before detection
@@ -168,9 +280,9 @@ describe('buildHandover', () => {
     expect(md).toContain('## Open incidents')
     expect(md).toContain('### Critical') // sev1's label since severity became the urgency dial
     // sev1 policy: response 60m from 11:30 -> 30m left at 12:00
-    expect(md).toContain('SOC-1 Beacon triage — in-progress · response target in 30m')
-    expect(md).toContain('last: status → in-progress at 2026-07-30T11:40:00.000Z')
-    expect(md).toContain('status: todo → in-progress (2026-07-30T11:40:00.000Z)')
+    expect(md).toContain('SOC-1 Beacon triage — In Progress · response target in 30m')
+    expect(md).toContain('last: status → In Progress at 2026-07-30T11:40:00.000Z')
+    expect(md).toContain('status: To Do → In Progress (2026-07-30T11:40:00.000Z)')
     expect(md).not.toContain('priority: low') // outside the 12h window
     // 30m left of a 60m response target = under 25%? No — 50%, so not at risk.
     expect(md).toContain('## Response/resolution targets at risk\n\nNone.')
@@ -178,6 +290,65 @@ describe('buildHandover', () => {
 
     // Deterministic: identical output on a second run.
     expect(buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')).toBe(md)
+  })
+
+  it('prints status, severity and verdict labels from the board the case is on', () => {
+    const project = makeProject('SOC', 'Projects/SOC.md')
+    project.config = {
+      statuses: [
+        { id: 'todo', label: 'Queued', color: '#888', icon: '', complete: false },
+        { id: 'status-k3j9x2', label: 'Containment', color: '#888', icon: '', complete: false }
+      ]
+    }
+    const inc = makeTask({
+      key: 'SOC-1',
+      title: 'Beacon',
+      issueType: 'incident',
+      severity: 'sev1',
+      status: 'status-k3j9x2',
+      detectedAt: '2026-07-30T11:30:00.000Z',
+      activity: [
+        { at: '2026-07-30T11:40:00.000Z', field: 'status', from: 'todo', to: 'status-k3j9x2' },
+        { at: '2026-07-30T11:41:00.000Z', field: 'severity', from: 'sev3', to: 'sev1' },
+        { at: '2026-07-30T11:42:00.000Z', field: 'verdict', from: '', to: 'true-positive' },
+        { at: '2026-07-30T11:43:00.000Z', field: 'severity', from: 'sev1', to: 'sev0' }
+      ]
+    })
+    project.tasks.push(inc)
+    const md = buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')
+    expect(md).toContain('SOC-1 Beacon — Containment ·')
+    expect(md).toContain('status: Queued → Containment')
+    expect(md).toContain('severity: Medium → Critical')
+    expect(md).toContain('verdict: (unset) → True Positive')
+    // An id nothing defines prints as itself, never as a guessed label.
+    expect(md).toContain('last: severity → sev0 at')
+    expect(md).not.toContain('status-k3j9x2')
+  })
+
+  it('defangs indicator values in activity rows, as it does in the indicator lines', () => {
+    const project = makeProject('SOC', 'Projects/SOC.md')
+    project.tasks.push(
+      makeTask({
+        key: 'SOC-1',
+        title: 'Phish',
+        issueType: 'incident',
+        severity: 'sev1',
+        detectedAt: '2026-07-30T11:30:00.000Z',
+        iocs: [{ type: 'url', value: '\\\\fileserver\\share' }],
+        activity: [
+          { at: '2026-07-30T11:40:00.000Z', field: 'iocs', from: '', to: 'http://evil.example/login' },
+          { at: '2026-07-30T11:45:00.000Z', field: 'iocs', from: 'http://evil.example/old', to: '' }
+        ]
+      })
+    )
+    const md = buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')
+    expect(md).toContain('hxxp://evil[.]example/login')
+    expect(md).not.toContain('http://evil.example/login')
+    expect(md).not.toContain('http://evil.example/old')
+    expect(md).toContain('iocs: (unset) → `hxxp://evil[.]example/login`')
+    expect(md).toContain('last: iocs → (unset) at')
+    // The indicator line keeps the UNC value exact inside a code span.
+    expect(md).toContain('  - url: `[\\\\]fileserver\\share`')
   })
 })
 
@@ -252,7 +423,7 @@ describe('sinceBaseline', () => {
 
   it('counts everything when the board was never reset', () => {
     const tasks = [at('2026-01-01T00:00:00Z'), at('not a date')]
-    expect(sinceBaseline(tasks, undefined)).toEqual({ counted: tasks, before: 0, undated: 0 })
+    expect(sinceBaseline(tasks, undefined)).toEqual({ counted: tasks, before: 0, undated: 0, leftOut: [] })
   })
 
   it('counts cases created at or after the reset, and says what it left out', () => {
@@ -264,5 +435,14 @@ describe('sinceBaseline', () => {
     expect(out.counted).toEqual([exact, later])
     expect(out.before).toBe(1)
     expect(out.undated).toBe(1)
+  })
+
+  it('hands back the left-out cases, so open work among them can be named', () => {
+    const openCritical = makeTask({ createdAt: '2026-08-10T00:00:00Z', status: 'in-progress', severity: 'sev1' })
+    const closed = makeTask({ createdAt: '2026-08-01T00:00:00Z', status: 'done' })
+    const undated = makeTask({ createdAt: '', status: 'todo' })
+    const later = makeTask({ createdAt: '2026-09-27T00:00:00Z' })
+    const out = sinceBaseline([openCritical, closed, undated, later], '2026-09-26T13:00:00.000Z')
+    expect(out.leftOut).toEqual([openCritical, closed, undated])
   })
 })

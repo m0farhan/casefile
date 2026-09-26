@@ -43,9 +43,8 @@ export class Notifier {
 
   /**
    * One pass of everything on the clock. The archive sweep is deliberately NOT
-   * inside check(): check() returns early when notifications are off, and
-   * whether an analyst wants toast messages has nothing to do with whether
-   * they asked for closed cases to file themselves away.
+   * inside check(): whether an analyst wants toast messages has nothing to do
+   * with whether they asked for closed cases to file themselves away.
    */
   private async tick(): Promise<void> {
     // Independent passes: whether the analyst gets toast messages has nothing
@@ -89,7 +88,9 @@ export class Notifier {
       for (const project of projects) {
         const statuses = this.plugin.store.configFor(project).statuses
         // Top-level only, and a parent waits while any descendant is still open.
-        for (const task of [...project.tasks]) {
+        // A snapshot: a delete on the board splices this array in place while
+        // the pass awaits a move, and a live walk would then skip a case.
+        for (const task of project.tasks.slice()) {
           if (!dueForAutoArchive(task, statuses, days, now)) continue
           const subtreeOpen = flattenTasks([task]).some(
             (f) => f.task.id !== task.id && !isTerminalStatus(f.task.status, statuses)
@@ -130,8 +131,10 @@ export class Notifier {
   }
 
   async check(): Promise<void> {
-    if (!this.plugin.settings.notificationsEnabled) return
-
+    // The setting is for banners only. Breaches are logged with it off: a
+    // case's history must not depend on whether anyone wanted a toast, and a
+    // case closed while it was off never got its breach entry at all.
+    const notify = this.plugin.settings.notificationsEnabled
     const leadDays = this.plugin.settings.notificationLeadDays
     const now = today()
     const threshold = now.add({ days: leadDays })
@@ -145,60 +148,77 @@ export class Notifier {
 
     const overdueMsgs: string[] = []
     const soonMsgs: string[] = []
-    for (const project of projects) {
-      const statuses = this.plugin.store.configFor(project).statuses
-      const flat = flattenTasks(project.tasks)
-      for (const { task } of flat) {
-        const due = parsePlainDate(task.due)
-        if (!due) continue
-        if (isTerminalStatus(task.status, statuses)) continue
+    const breachMsgs: string[] = []
+    try {
+      for (const project of projects) {
+        const statuses = this.plugin.store.configFor(project).statuses
+        const flat = flattenTasks(project.tasks)
+        for (const { task } of notify ? flat : []) {
+          const due = parsePlainDate(task.due)
+          if (!due) continue
+          // Archived is closed for work whatever its status, as in the breach
+          // walk below and the reports.
+          if (task.archived || isTerminalStatus(task.status, statuses)) continue
 
-        const cmpToToday = Temporal.PlainDate.compare(due, now)
-        const isOverdue = cmpToToday < 0
-        const isDueSoon = cmpToToday >= 0 && Temporal.PlainDate.compare(due, threshold) <= 0
+          const cmpToToday = Temporal.PlainDate.compare(due, now)
+          const isOverdue = cmpToToday < 0
+          const isDueSoon = cmpToToday >= 0 && Temporal.PlainDate.compare(due, threshold) <= 0
 
-        const notifKey = `${task.id}-${task.due}`
+          const notifKey = `${task.id}-${task.due}`
 
-        if (isOverdue && !this.notifiedIds.has(notifKey + '-overdue')) {
-          this.notifiedIds.add(notifKey + '-overdue')
-          const daysAgo = now.since(due, { largestUnit: 'days' }).days
-          overdueMsgs.push(`⚠️ Overdue: "${task.title}" in ${project.title} was due ${daysAgo}d ago`)
-        } else if (isDueSoon && !this.notifiedIds.has(notifKey + '-soon')) {
-          this.notifiedIds.add(notifKey + '-soon')
-          const daysLeft = due.since(now, { largestUnit: 'days' }).days
-          const msg =
-            daysLeft === 0
-              ? `📅 Due today: "${task.title}" in ${project.title}`
-              : `📅 Due in ${daysLeft}d: "${task.title}" in ${project.title}`
-          soonMsgs.push(msg)
+          if (isOverdue && !this.notifiedIds.has(notifKey + '-overdue')) {
+            this.notifiedIds.add(notifKey + '-overdue')
+            const daysAgo = now.since(due, { largestUnit: 'days' }).days
+            overdueMsgs.push(`⚠️ Overdue: "${task.title}" in ${project.title} was due ${daysAgo}d ago`)
+          } else if (isDueSoon && !this.notifiedIds.has(notifKey + '-soon')) {
+            this.notifiedIds.add(notifKey + '-soon')
+            const daysLeft = due.since(now, { largestUnit: 'days' }).days
+            const msg =
+              daysLeft === 0
+                ? `📅 Due today: "${task.title}" in ${project.title}`
+                : `📅 Due in ${daysLeft}d: "${task.title}" in ${project.title}`
+            soonMsgs.push(msg)
+          }
+        }
+
+        // Breach pass: due-date notices are date-keyed and skip undated tasks, so
+        // SLA breaches (time-keyed, incidents only) get their own walk.
+        for (const { task } of flat) {
+          await this.checkSlaBreach(project, task, statuses, breachMsgs)
         }
       }
-
-      // Breach pass: due-date notices are date-keyed and skip undated tasks, so
-      // SLA breaches (time-keyed, incidents only) get their own walk.
-      for (const { task } of flat) {
-        await this.checkSlaBreach(project, task, statuses)
-      }
-    }
-
-    // One summary instead of a toast storm (OB-4): installing into a vault
-    // with many overdue tasks used to stack N eight-second notices per launch.
-    if (overdueMsgs.length + soonMsgs.length > 3) {
-      new Notice(`${overdueMsgs.length} overdue, ${soonMsgs.length} due soon — open the board`, 8000)
-    } else {
-      for (const m of overdueMsgs) new Notice(m, 8000)
-      for (const m of soonMsgs) new Notice(m, 6000)
+    } finally {
+      // In a finally: a breach is marked notified before its activity save,
+      // so a save that throws must not also swallow its notice.
+      if (notify) this.show(breachMsgs, overdueMsgs, soonMsgs)
     }
   }
 
   /**
-   * Notify + audit-log a new SLA breach on an open incident. A resolution
-   * breach applies while unresolved; a response breach while unresponded —
-   * slaState's phase/done fields already encode both. Dedupe: session Set
-   * first (added BEFORE the await so a slow save can't double-fire), then the
-   * task's own activity log for cross-session silence.
+   * One summary instead of a toast storm (OB-4): installing into a vault with
+   * many overdue tasks used to stack N eight-second notices per launch, and an
+   * alert storm opens many incidents at once that then breach together.
+   * Breaches have their own count: a missed target is not a due date.
    */
-  private async checkSlaBreach(project: Project, task: Task, statuses: StatusConfig[]): Promise<void> {
+  private show(breachMsgs: string[], overdueMsgs: string[], soonMsgs: string[]): void {
+    if (breachMsgs.length + overdueMsgs.length + soonMsgs.length > 3) {
+      const breached = `${breachMsgs.length} target${breachMsgs.length === 1 ? '' : 's'} breached`
+      new Notice(`${breached}, ${overdueMsgs.length} overdue, ${soonMsgs.length} due soon — open the board`, 8000)
+      return
+    }
+    for (const m of breachMsgs) new Notice(m, 8000)
+    for (const m of overdueMsgs) new Notice(m, 8000)
+    for (const m of soonMsgs) new Notice(m, 6000)
+  }
+
+  /**
+   * Audit-log a new SLA breach on an open incident and queue its notice in
+   * `out`. A resolution breach applies while unresolved; a response breach
+   * while unresponded — slaState's phase/done fields already encode both.
+   * Dedupe: session Set first (added BEFORE the await so a slow save can't
+   * double-fire), then the task's own activity log for cross-session silence.
+   */
+  private async checkSlaBreach(project: Project, task: Task, statuses: StatusConfig[], out: string[]): Promise<void> {
     if (task.issueType !== 'incident' || task.archived) return
     if (isTerminalStatus(task.status, statuses)) return
     const state = slaState(task, this.plugin.settings.slaPolicies, Date.now())
@@ -213,7 +233,7 @@ export class Notifier {
 
     const phaseLabel = state.phase === 'response' ? 'Response' : 'Resolution'
     const ref = task.key ? `${task.key} ${task.title}` : task.title
-    new Notice(`${phaseLabel} target breached: ${ref}`, 8000)
+    out.push(`${phaseLabel} target breached: ${ref}`)
     // Logged at the deadline itself, not at the moment Obsidian noticed —
     // the walk runs every 5 minutes and only while the vault is open (SD-07).
     await this.plugin.store.appendActivity(project, task.id, {

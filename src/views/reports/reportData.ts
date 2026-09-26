@@ -1,5 +1,6 @@
-import type { SlaPolicy, Task } from '../../types'
-import { slaAnchor, slaState } from '../../soc/sla'
+import type { SlaPolicy, StatusConfig, Task } from '../../types'
+import { slaAnchor, slaPolicy, slaState } from '../../soc/sla'
+import { isTerminalStatus } from '../../utils'
 
 /**
  * Pure data reducers for the Reports view. Every function takes an explicit
@@ -28,6 +29,12 @@ export interface ReportBaseline {
   before: number
   /** Creation time missing or unreadable, so it cannot be placed either side of the reset. */
   undated: number
+  /**
+   * The left-out cases themselves (either reason). The counts cannot show the
+   * open work among them, so the banner and the empty texts must: an open
+   * Critical from before the reset would otherwise read as no work.
+   */
+  leftOut: Task[]
 }
 
 /**
@@ -38,17 +45,22 @@ export interface ReportBaseline {
  */
 export function sinceBaseline(tasks: Task[], since: string | undefined): ReportBaseline {
   const from = since ? Date.parse(since) : Number.NaN
-  if (Number.isNaN(from)) return { counted: tasks, before: 0, undated: 0 }
+  if (Number.isNaN(from)) return { counted: tasks, before: 0, undated: 0, leftOut: [] }
   const counted: Task[] = []
+  const leftOut: Task[] = []
   let before = 0
   let undated = 0
   for (const task of tasks) {
     const at = Date.parse(task.createdAt)
+    if (!Number.isNaN(at) && at >= from) {
+      counted.push(task)
+      continue
+    }
     if (Number.isNaN(at)) undated++
-    else if (at < from) before++
-    else counted.push(task)
+    else before++
+    leftOut.push(task)
   }
-  return { counted, before, undated }
+  return { counted, before, undated, leftOut }
 }
 
 export interface WeekBucket {
@@ -58,27 +70,45 @@ export interface WeekBucket {
   closed: number
 }
 
-/** ISO-8601 week (year, number) for a date. */
-function isoWeek(d: Date): { year: number; week: number } {
-  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+/**
+ * ISO-8601 week label of a calendar day (month 0-based; an out-of-range day
+ * rolls over, as Date.UTC does). The arithmetic runs in UTC only so that it
+ * has no zone of its own: the caller decides which day it means.
+ */
+function isoWeekLabel(y: number, m0: number, d: number): string {
+  const date = new Date(Date.UTC(y, m0, d))
   const day = date.getUTCDay() || 7
   date.setUTCDate(date.getUTCDate() + 4 - day)
-  const yearStart = Date.UTC(date.getUTCFullYear(), 0, 1)
-  const week = Math.ceil(((date.getTime() - yearStart) / 86_400_000 + 1) / 7)
-  return { year: date.getUTCFullYear(), week }
-}
-
-function isoWeekLabel(d: Date): string {
-  const { year, week } = isoWeek(d)
+  const year = date.getUTCFullYear()
+  const week = Math.ceil(((date.getTime() - Date.UTC(year, 0, 1)) / 86_400_000 + 1) / 7)
   return `${year}-W${String(week).padStart(2, '0')}`
 }
 
-/** Opened (createdAt) vs closed (completed date) counts per ISO week, oldest first. */
-export function openedClosedPerWeek(tasks: Task[], weeks: number, now: number): WeekBucket[] {
+/** The week of the analyst's local calendar day at this instant. */
+const localWeekLabel = (d: Date): string => isoWeekLabel(d.getFullYear(), d.getMonth(), d.getDate())
+
+/**
+ * Opened (createdAt) vs closed (completed date) counts per ISO week of the
+ * analyst's local calendar, oldest first. createdAt is an instant, read on
+ * the local calendar; completed is already a local date and is taken as
+ * written. Mixing the two on one clock put a case's close a week before its
+ * open, and missed today's closures for hours around midnight.
+ *
+ * With `since` (a reset), weeks that end before the reset are not returned:
+ * the reset leaves out every case created before it, so those weeks would
+ * draw as quiet weeks when they were never counted.
+ */
+export function openedClosedPerWeek(tasks: Task[], weeks: number, now: number, since?: string): WeekBucket[] {
   const buckets: WeekBucket[] = []
   const index = new Map<string, WeekBucket>()
+  const today = new Date(now)
+  const reset = since ? new Date(since) : null
+  // 'YYYY-Www' labels sort as strings; '' keeps every week.
+  const first = reset && !Number.isNaN(reset.getTime()) ? localWeekLabel(reset) : ''
   for (let i = weeks - 1; i >= 0; i--) {
-    const label = isoWeekLabel(new Date(now - i * 7 * 86_400_000))
+    // Calendar steps, not 7 × 24h: a fixed step skips a week across a DST change.
+    const label = isoWeekLabel(today.getFullYear(), today.getMonth(), today.getDate() - 7 * i)
+    if (label < first) continue
     const bucket = { label, opened: 0, closed: 0 }
     buckets.push(bucket)
     index.set(label, bucket)
@@ -86,13 +116,15 @@ export function openedClosedPerWeek(tasks: Task[], weeks: number, now: number): 
   for (const t of tasks) {
     const created = new Date(t.createdAt)
     if (!Number.isNaN(created.getTime())) {
-      const bucket = index.get(isoWeekLabel(created))
+      const bucket = index.get(localWeekLabel(created))
       if (bucket) bucket.opened++
     }
     if (t.completed) {
+      // 'YYYY-MM-DD' parses as UTC midnight, so the UTC getters read back the
+      // date as written. Never re-zone it: west of UTC that is the day before.
       const closed = new Date(t.completed)
       if (!Number.isNaN(closed.getTime())) {
-        const bucket = index.get(isoWeekLabel(closed))
+        const bucket = index.get(isoWeekLabel(closed.getUTCFullYear(), closed.getUTCMonth(), closed.getUTCDate()))
         if (bucket) bucket.closed++
       }
     }
@@ -106,17 +138,23 @@ export interface StatusTime {
 }
 
 /**
- * Total time spent in each status across the given tasks, reconstructed from
- * the activity log: createdAt → first status entry → … → resolvedAt/now.
- * Tasks with no status entries contribute their whole lifetime to their
- * current status (honest: that IS where they've been).
+ * Total time spent in each open status across the given tasks, reconstructed
+ * from the activity log: createdAt → first status entry → … → now. Tasks with
+ * no status entries contribute their whole lifetime to their current status
+ * (honest: that IS where they've been).
+ *
+ * Terminal statuses are left out. Only incidents carry a resolvedAt, so a
+ * Done bar that stopped there read about zero for incidents and grew every
+ * day for every other task, flattening the working statuses beside it. The
+ * clock runs to now for every task, so a reopened case counts its time after
+ * the reopen, and an unreadable resolvedAt can no longer turn it into NaN.
  */
-export function timeInStatus(tasks: Task[], now: number): StatusTime[] {
+export function timeInStatus(tasks: Task[], statuses: StatusConfig[], now: number): StatusTime[] {
   const totals = new Map<string, number>()
   for (const t of tasks) {
     const start = Date.parse(t.createdAt)
     if (Number.isNaN(start)) continue
-    const end = t.resolvedAt ? Date.parse(t.resolvedAt) : now
+    const end = now
     const transitions = t.activity
       .filter((a) => a.field === 'status')
       .map((a) => ({ at: Date.parse(a.at), from: a.from, to: a.to }))
@@ -134,6 +172,7 @@ export function timeInStatus(tasks: Task[], now: number): StatusTime[] {
     totals.set(current, (totals.get(current) ?? 0) + Math.max(0, end - cursor))
   }
   return [...totals.entries()]
+    .filter(([statusId]) => !isTerminalStatus(statusId, statuses))
     .map(([statusId, totalMs]) => ({ statusId, totalMs }))
     .sort((a, b) => b.totalMs - a.totalMs)
 }
@@ -151,8 +190,9 @@ export function verdictBreakdown(incidents: Task[]): VerdictCount[] {
 
 export interface SlaComplianceRow {
   severityId: string
-  /** Resolved incidents that met / breached the resolution target. */
+  /** Resolved within the resolution target, with no late response. */
   met: number
+  /** Any target already missed: a late response, a late resolution, or a live clock past its deadline. */
   breached: number
   /** Incidents with no usable clock (no policy/timestamps) — reported, never guessed. */
   noData: number
@@ -204,21 +244,34 @@ function durationStat(samples: number[]): DurationStat | null {
 }
 
 /**
- * Mean/median time-to-respond/contain/resolve measured from detectedAt,
- * overall and per severity. Only incidents with both endpoints stamped
- * contribute; an endpoint before detectedAt is ignored (same guard as the
- * lifecycle panel's summary). No stamps → null, never a made-up number.
+ * Mean/median time-to-respond/contain/resolve measured from the SLA anchor
+ * (detection, else case creation), overall and per severity. Only incidents
+ * with both endpoints stamped contribute; an endpoint before the anchor is
+ * ignored (same guard as the lifecycle panel's summary). No stamps → null,
+ * never a made-up number. `measured` counts the incidents that gave at least
+ * one sample and `measuredFromCreated` those among them anchored at creation,
+ * so the disclosure describes the numbers shown and not the whole filter.
  */
-export function lifecycleDurations(incidents: Task[]): { overall: LifecyclePhases; bySeverity: LifecycleRow[] } {
+export function lifecycleDurations(incidents: Task[]): {
+  overall: LifecyclePhases
+  bySeverity: LifecycleRow[]
+  measured: number
+  measuredFromCreated: number
+} {
   const emptySamples = (): PhaseSamples => ({ respond: [], contain: [], resolve: [] })
   const overall = emptySamples()
   const bySev = new Map<string, PhaseSamples>()
+  let measured = 0
+  let measuredFromCreated = 0
   for (const t of incidents) {
-    const start = Date.parse(slaAnchor(t).iso)
+    const anchor = slaAnchor(t)
+    const start = Date.parse(anchor.iso)
     if (Number.isNaN(start)) continue
+    let contributed = false
     for (const [phase, key] of LIFECYCLE_PHASES) {
       const end = Date.parse(t[key])
       if (Number.isNaN(end) || end < start) continue
+      contributed = true
       const sevId = t.severity || 'none'
       let sev = bySev.get(sevId)
       if (!sev) {
@@ -227,6 +280,10 @@ export function lifecycleDurations(incidents: Task[]): { overall: LifecyclePhase
       }
       overall[phase].push(end - start)
       sev[phase].push(end - start)
+    }
+    if (contributed) {
+      measured++
+      if (anchor.from === 'created') measuredFromCreated++
     }
   }
   const toPhases = (s: PhaseSamples): LifecyclePhases => ({
@@ -238,17 +295,32 @@ export function lifecycleDurations(incidents: Task[]): { overall: LifecyclePhase
     overall: toPhases(overall),
     bySeverity: [...bySev.entries()]
       .map(([severityId, s]) => ({ severityId, ...toPhases(s) }))
-      .sort((a, b) => a.severityId.localeCompare(b.severityId))
+      .sort((a, b) => a.severityId.localeCompare(b.severityId)),
+    measured,
+    measuredFromCreated
   }
 }
 
 /**
- * Incidents whose clock runs from case creation because no detection time was
- * recorded. Both report sections print this rather than mixing anchors in one
- * number silently (SD-03).
+ * Of the incidents with a clock (the met, breached and open ones in
+ * slaCompliance), how many run it from case creation because no detection
+ * time was recorded. The compliance tile prints this rather than mixing
+ * anchors in one number silently (SD-03), counted over the incidents its
+ * numbers describe: a no-data incident has no clock to run from anywhere.
  */
-export function createdAnchoredCount(incidents: Task[]): number {
-  return incidents.filter((t) => slaAnchor(t).from === 'created').length
+export function clockAnchors(
+  incidents: Task[],
+  policies: Record<string, SlaPolicy>,
+  now: number
+): { clocked: number; fromCreated: number } {
+  let clocked = 0
+  let fromCreated = 0
+  for (const t of incidents) {
+    if (!slaState(t, policies, now)) continue
+    clocked++
+    if (slaAnchor(t).from === 'created') fromCreated++
+  }
+  return { clocked, fromCreated }
 }
 
 export function slaCompliance(incidents: Task[], policies: Record<string, SlaPolicy>, now: number): SlaComplianceRow[] {
@@ -261,9 +333,15 @@ export function slaCompliance(incidents: Task[], policies: Record<string, SlaPol
       rows.set(sev, row)
     }
     const state = slaState(t, policies, now)
-    if (!state) {
+    const policy = slaPolicy(t, policies)
+    if (!state || !policy) {
       row.noData++
-    } else if (state.breached) {
+      continue
+    }
+    // slaState describes the clock running now, so once respondedAt is
+    // stamped a late response is gone from it. Same margin as the case report.
+    const lateResponse = Date.parse(t.respondedAt) > Date.parse(slaAnchor(t).iso) + policy.responseMins * 60_000
+    if (state.breached || lateResponse) {
       // Breached beats open: a deadline that has already passed is a fact, not
       // a pending outcome. Counting an overdue live case as merely "running"
       // kept it out of the denominator, so the board could read 100% targets

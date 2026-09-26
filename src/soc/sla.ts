@@ -30,19 +30,31 @@ export function slaAnchor(task: Task): { iso: string; from: 'detected' | 'create
 }
 
 /**
+ * The policy that runs a clock for this task, or null: an incident, with a
+ * severity, whose policy sets BOTH targets to a positive number of minutes.
+ * A blank settings field used to save as 0, and a 0-minute target breached
+ * every incident the second it was created, then wrote that breach into the
+ * append-only log. A target of nothing is no target, not an instant one.
+ */
+export function slaPolicy(task: Task, policies: Record<string, SlaPolicy>): SlaPolicy | null {
+  if (task.issueType !== 'incident' || !task.severity) return null
+  const policy = policies[task.severity]
+  return policy && policy.responseMins > 0 && policy.resolutionMins > 0 ? policy : null
+}
+
+/**
  * Pure SLA clock. Anchor = slaAnchor(task): the detection stamp, else case
  * creation. task.occurredAt is deliberately absent from this function — see
  * slaAnchor. The response phase ends at respondedAt, the resolution phase at
- * resolvedAt. Returns null when no clock
- * applies (not an incident, no severity, or no policy for the severity).
+ * resolvedAt. Returns null when no clock applies (no policy, per slaPolicy)
+ * or when a stamp the clock depends on is not a readable date.
  *
  * ponytail: always-running clock — no pause tracking. Every status transition
  * is in the activity log, so paused time is derivable retroactively; add a
  * pause-aware variant over `activity` if blocked-time ever needs excluding.
  */
 export function slaState(task: Task, policies: Record<string, SlaPolicy>, now: number): SlaState | null {
-  if (task.issueType !== 'incident' || !task.severity) return null
-  const policy = policies[task.severity]
+  const policy = slaPolicy(task, policies)
   if (!policy) return null
   const anchorIso = slaAnchor(task).iso
   const anchor = Date.parse(anchorIso)
@@ -50,6 +62,9 @@ export function slaState(task: Task, policies: Record<string, SlaPolicy>, now: n
 
   if (task.resolvedAt) {
     const resolved = Date.parse(task.resolvedAt)
+    // A hand-edited stamp such as 'unknown' ends the clock at no known time.
+    // Compared as NaN it read as met, and the report printed "NaNm".
+    if (Number.isNaN(resolved)) return null
     const deadline = anchor + policy.resolutionMins * 60_000
     return {
       phase: 'resolution',

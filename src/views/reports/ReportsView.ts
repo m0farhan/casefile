@@ -7,8 +7,8 @@ import { isTerminalStatus, svgEl } from '../../utils'
 import { formatSlaRemaining } from '../../soc/sla'
 import type { SubView } from '../SubView'
 import {
+  clockAnchors,
   lifecycleDurations,
-  createdAnchoredCount,
   openBySeverity,
   openedClosedPerWeek,
   reportSummary,
@@ -17,7 +17,8 @@ import {
   timeInStatus,
   verdictBreakdown,
   type DurationStat,
-  type LifecyclePhases
+  type LifecyclePhases,
+  type ReportBaseline
 } from './reportData'
 
 const WEEKS = 12
@@ -57,8 +58,10 @@ export class ReportsView implements SubView {
     const tasks = baseline.counted
     const incidents = tasks.filter((t) => t.issueType === 'incident')
     const now = Date.now()
+    // Open means what it means in reportSummary: not archived, not terminal.
+    const leftOutOpen = baseline.leftOut.filter((t) => !t.archived && !isTerminalStatus(t.status, cfg.statuses))
 
-    this.renderBaseline(root, baseline.before, baseline.undated)
+    this.renderBaseline(root, baseline, leftOutOpen.length)
     this.renderSummary(root, tasks, incidents, now)
     // Sections lay out as dashboard cards in a fluid grid, Jira-gadget style.
     const grid = root.createDiv('pm-report-grid')
@@ -68,7 +71,7 @@ export class ReportsView implements SubView {
     // Rendering them would print empty charts, and an empty compliance tile
     // reads as "nothing is breaching" when the truth is "nothing is measured".
     if (this.plugin.store.configFor(this.project).boardType !== 'plain') {
-      this.renderOpenSeverity(grid, incidents)
+      this.renderOpenSeverity(grid, incidents, leftOutOpen.filter((t) => t.issueType === 'incident').length)
       this.renderVerdicts(grid, incidents)
       this.renderSlaCompliance(grid, incidents, now)
       this.renderLifecycleDurations(grid, incidents)
@@ -82,7 +85,7 @@ export class ReportsView implements SubView {
    * above the numbers, because a zero after a reset reads exactly like a quiet
    * board otherwise.
    */
-  private renderBaseline(root: HTMLElement, before: number, undated: number): void {
+  private renderBaseline(root: HTMLElement, { before, undated }: ReportBaseline, stillOpen: number): void {
     const since = this.project.reportsSince
     const row = root.createDiv('pm-report-baseline')
     const text = row.createDiv('pm-report-baseline-text')
@@ -92,7 +95,9 @@ export class ReportsView implements SubView {
       const left: string[] = []
       if (before) left.push(`${before} created earlier`)
       if (undated) left.push(`${undated} with no readable creation time`)
-      if (left.length) text.createSpan({ text: ` Not counted: ${left.join(', ')}.` })
+      // Open work among them is said here: no count below can show it.
+      const open = stillOpen ? ` — ${stillOpen} of them still open` : ''
+      if (left.length) text.createSpan({ text: ` Not counted: ${left.join(', ')}${open}.` })
       new ButtonComponent(row).setButtonText('Show all time').onClick(() => void this.setSince(undefined))
     }
     const reset = new ButtonComponent(row)
@@ -156,7 +161,7 @@ export class ReportsView implements SubView {
     stat(sum.slaMetPct === null ? '—' : `${sum.slaMetPct}%`, 'Targets met')
   }
 
-  private renderOpenSeverity(root: HTMLElement, incidents: Task[]): void {
+  private renderOpenSeverity(root: HTMLElement, incidents: Task[], leftOutOpen: number): void {
     const s = this.section(root, 'Open incidents by severity')
     const cfg = this.plugin.store.configFor(this.project)
     const rows = openBySeverity(
@@ -165,14 +170,19 @@ export class ReportsView implements SubView {
       cfg.severities.map((x) => x.id)
     )
     if (!rows.length) {
-      s.createDiv({ cls: 'pm-report-empty', text: 'No open incidents.' })
+      // After a reset "No open incidents." would be false while an earlier one is still open.
+      const text = leftOutOpen
+        ? `No open incidents among the counted cases — ${leftOutOpen} open incident${leftOutOpen === 1 ? ' is' : 's are'} left out by the reset.`
+        : 'No open incidents.'
+      s.createDiv({ cls: 'pm-report-empty', text })
       return
     }
     const max = Math.max(...rows.map((r) => r.count))
     for (const row of rows) {
       const sev = cfg.severities.find((x) => x.id === row.severityId)
       const line = s.createDiv('pm-report-hrow')
-      line.createSpan({ cls: 'pm-report-hlabel', text: sev?.label ?? 'No severity' })
+      // A severity id the catalog lacks is still recorded: show it, not "No severity".
+      line.createSpan({ cls: 'pm-report-hlabel', text: sev?.label ?? (row.severityId || 'No severity') })
       const track = line.createDiv('pm-report-htrack')
       const fill = track.createDiv('pm-report-hfill')
       fill.setCssProps({
@@ -190,8 +200,13 @@ export class ReportsView implements SubView {
   }
 
   private renderOpenedClosed(root: HTMLElement, tasks: Task[], now: number): void {
-    const s = this.section(root, `Opened vs closed per week (last ${WEEKS})`)
-    const buckets = openedClosedPerWeek(tasks, WEEKS, now)
+    const since = this.project.reportsSince
+    const buckets = openedClosedPerWeek(tasks, WEEKS, now, since)
+    // The count names the weeks drawn: after a reset, only those since it.
+    const s = this.section(
+      root,
+      `Opened vs closed per week (last ${buckets.length}${since && buckets.length < WEEKS ? ', since the reset' : ''})`
+    )
     const max = Math.max(1, ...buckets.map((b) => Math.max(b.opened, b.closed)))
     const barW = 12
     const groupW = barW * 2 + 14
@@ -256,13 +271,13 @@ export class ReportsView implements SubView {
   }
 
   private renderTimeInStatus(root: HTMLElement, tasks: Task[], now: number): void {
-    const s = this.section(root, 'Time in status')
-    const rows = timeInStatus(tasks, now)
+    const s = this.section(root, 'Time in open statuses')
+    const cfg = this.plugin.store.configFor(this.project)
+    const rows = timeInStatus(tasks, cfg.statuses, now)
     if (!rows.length) {
       s.createDiv({ cls: 'pm-report-empty', text: 'No data.' })
       return
     }
-    const cfg = this.plugin.store.configFor(this.project)
     const max = Math.max(...rows.map((r) => r.totalMs))
     for (const row of rows) {
       const status = cfg.statuses.find((st) => st.id === row.statusId)
@@ -328,19 +343,20 @@ export class ReportsView implements SubView {
         text: `${row.met} met · ${row.breached} breached · ${row.open} open · ${row.noData} no data`
       })
     }
-    // SD-03: the tile mixes two anchors, so it says how many rows are which.
-    const fromCreated = createdAnchoredCount(incidents)
+    // SD-03: the tile mixes two anchors, so it says how many rows are which,
+    // counted over the incidents that have a clock at all.
+    const { clocked, fromCreated } = clockAnchors(incidents, this.plugin.settings.slaPolicies, now)
     if (fromCreated) {
       s.createDiv({
         cls: 'pm-report-empty',
-        text: `${fromCreated} of ${incidents.length} incidents have no detection time — their clock runs from case creation.`
+        text: `${fromCreated} of ${clocked} incidents with a clock have no detection time — their clock runs from case creation.`
       })
     }
   }
 
   private renderLifecycleDurations(root: HTMLElement, incidents: Task[]): void {
     const s = this.section(root, 'Time to respond / contain / resolve')
-    const { overall, bySeverity } = lifecycleDurations(incidents)
+    const { overall, bySeverity, measured, measuredFromCreated } = lifecycleDurations(incidents)
     if (!overall.respond && !overall.contain && !overall.resolve) {
       // Named the wrong cause once the anchor falls back to creation: an
       // intake case has no detection stamp by design, so telling the analyst
@@ -374,12 +390,12 @@ export class ReportsView implements SubView {
       tile(sev?.label ?? (row.severityId === 'none' ? 'No severity' : row.severityId), row)
     }
     // SD-03: same disclosure as the compliance tile — these durations are
-    // measured from the same anchor the SLA judges, which is not always detection.
-    const fromCreated = createdAnchoredCount(incidents)
-    if (fromCreated) {
+    // measured from the same anchor the SLA judges, which is not always
+    // detection. Counted over the incidents the numbers above came from.
+    if (measuredFromCreated) {
       s.createDiv({
         cls: 'pm-report-empty',
-        text: `${fromCreated} of ${incidents.length} incidents have no detection time — measured from case creation.`
+        text: `${measuredFromCreated} of ${measured} measured incidents have no detection time — measured from case creation.`
       })
     }
   }

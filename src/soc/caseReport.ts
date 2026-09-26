@@ -3,8 +3,9 @@ import type PMPlugin from '../main'
 import type { Project, SeverityConfig, SlaPolicy, StatusConfig, Task, VerdictConfig } from '../types'
 import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
+import { quoteUntrusted } from './emailHeaders'
 import { OWN_ASSET_SUFFIX, assetRule, defangIoc } from './ioc'
-import { formatSlaRemaining, slaAnchor, slaState } from './sla'
+import { formatSlaRemaining, slaAnchor, slaPolicy, slaState } from './sla'
 
 export interface CaseReportContext {
   project: Project
@@ -41,6 +42,40 @@ function cell(s: string): string {
 }
 
 /**
+ * One line of sender text made inert for a note that opens itself. A case
+ * title is often a phishing subject or an alert's rule line, verbatim, and
+ * written raw an `<img src=…>` fetches, `![…](…)` and `![[…]]` embed, and a
+ * code span can run a Dataview inline query. Escaped, each shows as the
+ * characters it is and loads nothing. Single brackets are left alone:
+ * `[EXTERNAL] Invoice` is a common subject, and escaping it would put
+ * backslashes into every pasted handover. A backslash the text already puts
+ * before punctuation is doubled first, so it cannot cancel the escape placed
+ * in front of its own `<`.
+ */
+export function inertLine(s: string): string {
+  return s
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\\(?=[!-/:-@[-`{-~])/g, '\\\\')
+    .replace(/\[\[/g, '\\[\\[')
+    .replace(/!\[/g, '!\\[')
+    .replace(/[<`]/g, '\\$&')
+}
+
+/**
+ * Why an incident whose severity has a target shows no clock. "No target
+ * set." would be false here: the target exists, a stamp the clock needs does
+ * not, or cannot be read.
+ */
+function noClockLine(task: Task): string {
+  const { iso, from } = slaAnchor(task)
+  if (!iso) return 'Target set — no clock: neither detection nor creation time is recorded.'
+  if (Number.isNaN(Date.parse(iso))) {
+    return `Target set — no clock: the ${from === 'detected' ? 'detection' : 'creation'} time is not a readable date.`
+  }
+  return 'Target set — not computable: the resolved time is not a readable date.'
+}
+
+/**
  * Deterministic case-writeup markdown composed ONLY from the case's recorded
  * fields (built for LetsDefend-style exercise writeups). Every section is
  * honest: empty fields say "not recorded"/"none recorded", indicators render
@@ -62,7 +97,7 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
   }
   if (task.flagged) summary += ' · flagged'
 
-  const lines: string[] = [`# ${task.key ? `${task.key} ${task.title}` : task.title}`, '', summary, '']
+  const lines: string[] = [`# ${inertLine(task.key ? `${task.key} ${task.title}` : task.title)}`, '', summary, '']
 
   // ── Incident timeline ──────────────────────────────────────────────────────
   lines.push('## Incident timeline', '')
@@ -80,10 +115,12 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
 
   // ── Response targets ───────────────────────────────────────────────────────
   lines.push('## Response targets', '')
-  const policy = ctx.slaPolicies[task.severity]
+  const policy = slaPolicy(task, ctx.slaPolicies)
   const state = slaState(task, ctx.slaPolicies, ctx.now)
-  if (!state || !policy) {
+  if (!policy) {
     lines.push('No target set.')
+  } else if (!state) {
+    lines.push(noClockLine(task))
   } else {
     const { iso: anchorIso, from } = slaAnchor(task)
     const anchor = Date.parse(anchorIso)
@@ -95,7 +132,9 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
         : '- Clock anchored at: case created — detection time not recorded'
     )
     const responded = task.respondedAt ? Date.parse(task.respondedAt) : NaN
-    if (!Number.isNaN(responded)) {
+    if (task.respondedAt && Number.isNaN(responded)) {
+      lines.push('- Response: not computable — the responded time is not a readable date')
+    } else if (!Number.isNaN(responded)) {
       const margin = anchor + policy.responseMins * 60_000 - responded
       lines.push(
         `- Response: ${
@@ -145,7 +184,10 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
     lines.push('| Type | Value | Note |', '| --- | --- | --- |')
     for (const ioc of task.iocs) {
       const asset = assetRule(ioc.value, ctx.ownedAssets) ? OWN_ASSET_SUFFIX : ''
-      lines.push(`| ${ioc.type} | ${cell(defangIoc(ioc.value, ioc.type)) + asset} | ${cell(ioc.note ?? '')} |`)
+      // In a code span, or a defanged UNC path loses a backslash and `__x__`
+      // turns bold: the reader would see an indicator that is not the recorded one.
+      const value = cell(quoteUntrusted(defangIoc(ioc.value, ioc.type))) + asset
+      lines.push(`| ${ioc.type} | ${value} | ${cell(inertLine(ioc.note ?? ''))} |`)
     }
   }
   lines.push('')
@@ -158,7 +200,7 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
     for (const link of links) {
       const target = byId.get(link.taskId)
       const label = target ? (target.key ? `${target.key} ${target.title}` : target.title) : 'missing case'
-      lines.push(`- ${LINK_TYPE_LABELS[link.type] ?? link.type}: ${label}`)
+      lines.push(`- ${LINK_TYPE_LABELS[link.type] ?? link.type}: ${inertLine(label)}`)
     }
     lines.push('')
   }
@@ -169,6 +211,14 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
   if (!comments.length) {
     lines.push('No journal entries.')
   } else {
+    // Journal stamps are wall-clock time with no zone, while the timeline
+    // above is UTC. Converting them would guess a zone nobody recorded.
+    if (comments.some((c) => c.at)) {
+      lines.push(
+        'Entry times are the local clock of the device each entry was written on; the time zone was not recorded.',
+        ''
+      )
+    }
     for (const c of comments) {
       lines.push(c.at ? `- ${c.at} — ${c.text}` : `- ${c.text}`)
     }
@@ -178,7 +228,7 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
   // ── Description (the analyst's own text, verbatim) ─────────────────────────
   lines.push('## Description', '', task.description.trim() || 'None recorded.', '')
 
-  lines.push('---', '', `Generated from case data on ${new Date(ctx.now).toISOString().slice(0, 10)}.`)
+  lines.push('---', '', `Generated from case data on ${new Date(ctx.now).toISOString().slice(0, 10)} (UTC).`)
   return lines.join('\n')
 }
 
@@ -202,6 +252,22 @@ export async function writeCaseReportNote(app: App, task: Task, md: string): Pro
   return null
 }
 
+const PLAIN_BOARD = (project: Project) => `${project.title} is a plain board — case reports are for case boards.`
+
+/**
+ * A case report is a SOC artifact: incident timeline, response targets,
+ * indicators, verdict. On a plain board every one of those sections would
+ * print "not recorded", which reads as a case with nothing found rather than
+ * a board that never recorded any of it. Said before the body is read or the
+ * file is checked, so the analyst gets this reason and not "Save the case
+ * first" or a generic error.
+ */
+function refusesPlainBoard(plugin: PMPlugin, project: Project): boolean {
+  if (plugin.store.configFor(project).boardType !== 'plain') return false
+  plugin.showNotice(PLAIN_BOARD(project))
+  return true
+}
+
 /**
  * Shared load-then-compose step: description and journal live in the note
  * body, so hydrate it first, then compose from the project's live config.
@@ -211,13 +277,8 @@ export async function writeCaseReportNote(app: App, task: Task, md: string): Pro
 export async function loadAndComposeCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<string> {
   await plugin.store.loadTaskBody(task)
   const cfg = plugin.store.configFor(project)
-  // A case report is a SOC artifact: incident timeline, response targets,
-  // indicators, verdict. On a plain board every one of those sections would
-  // print "not recorded", which reads as a case with nothing found rather than
-  // a board that never recorded any of it.
-  if (cfg.boardType === 'plain') {
-    throw new Error(`${project.title} is a plain board — case reports are for case boards.`)
-  }
+  // Backstop for a caller that skips refusesPlainBoard.
+  if (cfg.boardType === 'plain') throw new Error(PLAIN_BOARD(project))
   return composeCaseReport(task, {
     project,
     statuses: cfg.statuses,
@@ -231,12 +292,14 @@ export async function loadAndComposeCaseReport(plugin: PMPlugin, project: Projec
 
 /** Same report, straight to the clipboard — for pasting into an answer box. */
 export async function copyCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<void> {
+  if (refusesPlainBoard(plugin, project)) return
   await navigator.clipboard.writeText(await loadAndComposeCaseReport(plugin, project, task))
   plugin.showNotice('Case report copied')
 }
 
 /** Menu/command entry point: hydrate the body, compose, write, open, notify. */
 export async function generateCaseReport(plugin: PMPlugin, project: Project, task: Task): Promise<void> {
+  if (refusesPlainBoard(plugin, project)) return
   if (!task.filePath) {
     plugin.showNotice('Save the case first — it has no file yet.')
     return

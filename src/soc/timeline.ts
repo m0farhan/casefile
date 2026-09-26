@@ -1,4 +1,5 @@
 import type { Task } from '../types'
+import { activityValue } from './ioc'
 import { isoToLocalInput } from './LifecyclePanel'
 
 /** One row of the case-timeline view. `at` is the stored stamp, verbatim. */
@@ -55,17 +56,33 @@ export function caseTimelineEvents(task: Task): TimelineEvent[] {
   for (const f of LIFECYCLE) {
     if (task[f.key]) events.push({ at: task[f.key], kind: f.kind, label: f.label })
   }
-  if (task.completed) events.push({ at: task.completed, kind: 'completed', label: 'Completed' })
+  // `completed` is a local date with no time, written in the same save as the
+  // status change that closed the case. Parsed as a date it is UTC midnight,
+  // which sorted the close before the events that led to it, usually before
+  // Created. It sorts at that status entry instead; a date set by hand or by
+  // import has no entry, so it sorts at the end of that local day.
+  let closeKey = Number.NaN
+  if (task.completed) {
+    events.push({ at: task.completed, kind: 'completed', label: 'Completed' })
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(task.completed)
+    const close = dateOnly
+      ? task.activity.filter((e) => e.field === 'status' && isoToLocalInput(e.at).startsWith(task.completed)).pop()
+      : undefined
+    closeKey = eventTime(close?.at ?? (dateOnly ? `${task.completed}T23:59:59.999` : task.completed))
+  }
   for (const e of task.activity) {
     // Same wording as renderActivitySection: '—' stands in for an empty side.
-    events.push({ at: e.at, kind: 'activity', label: e.field, detail: `${e.from || '—'} → ${e.to || '—'}` })
+    // Indicator values are stored raw and shown defanged, like everywhere else.
+    const detail = `${activityValue(e.field, e.from) || '—'} → ${activityValue(e.field, e.to) || '—'}`
+    events.push({ at: e.at, kind: 'activity', label: e.field, detail })
   }
   for (const c of task.comments ?? []) {
     events.push({ at: c.at, kind: 'comment', label: 'Comment', detail: c.text })
   }
+  const key = (e: TimelineEvent) => (e.kind === 'completed' ? closeKey : eventTime(e.at))
   return events.sort((a, b) => {
-    const ta = eventTime(a.at)
-    const tb = eventTime(b.at)
+    const ta = key(a)
+    const tb = key(b)
     if (Number.isNaN(ta)) return Number.isNaN(tb) ? 0 : 1
     if (Number.isNaN(tb)) return -1
     return ta - tb
