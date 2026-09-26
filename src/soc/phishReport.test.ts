@@ -249,3 +249,41 @@ describe('the extracted text travels with the analysis', () => {
     expect(formatPhishReport(report)).not.toContain('Text extracted from the HTML')
   })
 })
+
+describe('a PDF attachment is read for its structure', () => {
+  const JPEG = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff, 0xd9]
+  const head = '%PDF-1.7\n1 0 obj\n<< /Type /XObject /Subtype /Image /Filter /DCTDecode /Length 13 >>\nstream\n'
+  const tail =
+    '\nendstream\nendobj\n2 0 obj\n<< /A << /S /URI /URI (https://qr-lure.test/login) >> >>\nendobj\n' +
+    'trailer\n<< /Root 1 0 R >>\n%%EOF\n'
+  const bytes = [...head]
+    .map((c) => c.charCodeAt(0))
+    .concat(
+      JPEG,
+      [...tail].map((c) => c.charCodeAt(0))
+    )
+  const b64 = btoa(String.fromCharCode(...bytes))
+  const mail =
+    'From: a@sender.test\nTo: b@corp.test\nSubject: scan\nMIME-Version: 1.0\n' +
+    'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nsee attached\n' +
+    '--B\nContent-Type: application/pdf\nContent-Disposition: attachment; filename="scan.pdf"\n' +
+    `Content-Transfer-Encoding: base64\n\n${b64}\n--B--\n`
+
+  it('carries the picture, the link and its indicator into the report', async () => {
+    const report = await analysePhishing(mail, [], [])
+    const [pdf] = report.attachments
+    expect(pdf.pdf?.images.map((i) => i.sniffed)).toEqual(['JPEG image'])
+    expect(pdf.pdf?.uris).toEqual(['https://qr-lure.test/login'])
+    // Found by the reader, not by a text scan: the plain-bytes pass sees the
+    // same URL here, and the line must not be listed twice.
+    expect(pdf.inside.filter((l) => l.includes('qr-lure')).length).toBe(1)
+    // The lure is the indicator the analyst will block, so it reaches the
+    // copied list and the case — not only the attachment's card.
+    expect(report.indicators).toContain('url: hxxps://qr-lure[.]test/login')
+    const text = formatPhishReport(report)
+    expect(text).toContain('PDF link (/URI): `hxxps://qr-lure[.]test/login`')
+    expect(text).toMatch(
+      /embedded picture `byte \d+ \(\/DCTDecode\)`: JPEG image, 13 bytes, SHA-256 [0-9a-f]{64} \(computed here\)/
+    )
+  })
+})

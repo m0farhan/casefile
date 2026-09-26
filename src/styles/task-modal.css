@@ -915,6 +915,23 @@ button.pm-verdict-cancel:hover {
     8px -8px,
     -8px 0;
 }
+/* The reader's findings sit under a hairline so they read as one block. */
+.pm-att-structure {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--gs-hairline);
+}
+.pm-att-entries {
+  margin-top: 8px;
+}
+.pm-att-entries > summary {
+  cursor: pointer;
+  color: var(--gs-ink-muted);
+  font-size: var(--font-ui-smaller);
+}
+.pm-att-open {
+  margin-top: 8px;
+}
 .pm-att-hex {
   font-size: 11px;
   line-height: 1.45;

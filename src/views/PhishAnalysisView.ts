@@ -2,8 +2,15 @@ import { ButtonComponent, ItemView, Notice, SuggestModal, type TFile, type Works
 import type PMPlugin from '../main'
 import { formatDelay } from '../soc/emailHeaders'
 import { IMAGE_CAP, hexDump, imageDataUrl, previewKind, previewText } from '../soc/preview'
-import { type PhishReport, analysePhishing, formatPhishReport } from '../soc/phish'
-import { extractIocsFromText } from '../soc/ioc'
+import {
+  type EmbeddedImage,
+  type PhishReport,
+  analysePhishing,
+  formatPhishReport,
+  relationshipType
+} from '../soc/phish'
+import { defangIoc, extractIocsFromText } from '../soc/ioc'
+import { entryNote } from '../soc/ooxml'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
 import { type Ioc, makeTask } from '../types'
 import { TaskFileNameConflictError } from '../store/ProjectStore'
@@ -47,6 +54,8 @@ export class PhishAnalysisView extends ItemView {
   private debounce: number | null = null
   private tab: TabId = 'message'
   private tabStrip: HTMLElement | null = null
+  private input: HTMLTextAreaElement | null = null
+  private refresh: (() => void) | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -113,6 +122,8 @@ export class PhishAnalysisView extends ItemView {
       iocBtn.setDisabled(!report?.indicators.length)
       this.render(out)
     })
+    this.input = input
+    this.refresh = refresh
 
     // Debounced: the full parse hashes every attachment, and running it on
     // each keystroke of a pasted 4MB message locks the UI thread.
@@ -152,6 +163,13 @@ export class PhishAnalysisView extends ItemView {
     )
     caseBtn.onClick(safeAsync(async () => this.createCase()))
     input.focus()
+  }
+
+  /** Analyse this message text, as if it had been pasted. */
+  analyse(text: string): void {
+    if (!this.input || !this.refresh) return
+    this.input.value = text
+    this.refresh()
   }
 
   /**
@@ -433,8 +451,96 @@ export class PhishAnalysisView extends ItemView {
       for (const found of attachment.inside) {
         card.createDiv({ cls: 'pm-headers-flag', text: `found inside the file: ${found}` })
       }
-      this.renderPreview(card, attachment)
+      if (isMessage(attachment)) {
+        // The forwarded message's own headers — its Received chain, its
+        // authentication results — are only analysed as headers in a tab of
+        // their own. Nothing is fetched: the bytes are already in memory.
+        new ButtonComponent(card)
+          .setButtonText('Analyse this message in a new tab')
+          .setClass('pm-att-open')
+          .onClick(() => openPhishAnalysis(this.plugin, new TextDecoder().decode(attachment.bytes)))
+      }
+      if (!this.renderStructure(card, attachment)) this.renderPreview(card, attachment)
     }
+  }
+
+  /**
+   * What the PDF or Office reader found, in the order an analyst needs it: the
+   * pictures the document shows the victim, then where it links, then what it
+   * holds. False when neither reader ran, so the caller falls back to the plain
+   * preview.
+   */
+  private renderStructure(card: HTMLElement, attachment: PhishReport['attachments'][number]): boolean {
+    const { pdf, office } = attachment
+    if (!pdf && !office) return false
+    const box = card.createDiv('pm-att-structure')
+    const images = pdf?.images ?? office?.images ?? []
+    for (const image of images) this.renderEmbedded(box, image)
+    if (!images.length) {
+      box.createDiv({ cls: 'pm-headers-note', text: 'No whole picture was found in this file to draw.' })
+    }
+    if (pdf) {
+      box.createDiv({
+        cls: 'pm-headers-note',
+        text: `PDF ${pdf.version || 'version not recorded'}${pdf.encrypted ? ' · /Encrypt present, so the scan below sees only what is outside the encryption' : ''}`
+      })
+      if (pdf.markers.length) {
+        box.createDiv({
+          cls: 'pm-headers-flag',
+          text: `Names found: ${pdf.markers.map((m) => `${m.name} ×${m.count}`).join(', ')}`
+        })
+      }
+      for (const uri of pdf.uris) box.createDiv({ cls: 'pm-headers-ioc', text: `link (/URI) ${defangIoc(uri, 'url')}` })
+    }
+    if (office) {
+      for (const target of office.externalTargets) {
+        box.createDiv({
+          cls: 'pm-headers-flag',
+          text: `External target ${defangIoc(target.target, 'url')} — ${relationshipType(target.type)}, declared in ${target.from}`
+        })
+      }
+      for (const entry of office.entries) {
+        const note = entryNote(entry.name)
+        if (note) box.createDiv({ cls: 'pm-headers-flag', text: `${entry.name} — ${note}` })
+        if (entry.encrypted) {
+          box.createDiv({ cls: 'pm-headers-flag', text: `${entry.name} — encrypted, not readable here` })
+        }
+      }
+      // Native disclosure: the full list is there to check, but a .docx holds
+      // twenty ordinary parts and they should not push the findings off screen.
+      const all = box.createEl('details', { cls: 'pm-att-entries' })
+      all.createEl('summary', { text: `All ${office.entries.length} entries in the ZIP directory` })
+      all.createEl('pre', {
+        cls: 'pm-headers-pre',
+        text: office.entries
+          .map(
+            (e) =>
+              `${e.size === null ? 'size not recorded' : `${e.size.toLocaleString()} bytes`}\t${e.method}\t${e.name}`
+          )
+          .join('\n')
+      })
+    }
+    for (const note of (pdf ?? office)?.notes ?? []) box.createDiv({ cls: 'pm-headers-note', text: note })
+    return true
+  }
+
+  /** One picture from inside a document — drawn only when its own bytes say it is a raster image. */
+  private renderEmbedded(host: HTMLElement, image: EmbeddedImage): void {
+    host.createDiv({
+      cls: 'pm-headers-note',
+      text: `Picture at ${image.where} · ${image.bytes.length.toLocaleString()} bytes`
+    })
+    host.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${image.sha256}` })
+    const url =
+      previewKind('', '', image.sniffed, image.bytes) === 'image' ? imageDataUrl(image.bytes, image.sniffed) : null
+    if (url) {
+      host.createEl('img', { cls: 'pm-att-image', attr: { src: url, alt: `Picture at ${image.where}` } })
+      return
+    }
+    host.createDiv({
+      cls: 'pm-headers-note',
+      text: `Not drawn: its bytes begin as ${image.sniffed || 'nothing this recognises'}${image.bytes.length > IMAGE_CAP ? ', and it is over the size limit' : ''}.`
+    })
   }
 
   private renderPreview(card: HTMLElement, attachment: PhishReport['attachments'][number]): void {
@@ -535,7 +641,15 @@ function resultClass(result: string): string {
  * the message already in it, and comparing a reported mail with the one that
  * arrived an hour earlier is ordinary work, not an edge case.
  */
-export function openPhishAnalysis(plugin: PMPlugin): void {
+export function openPhishAnalysis(plugin: PMPlugin, text?: string): void {
   const leaf = plugin.app.workspace.getLeaf('tab')
-  void leaf.setViewState({ type: PHISH_VIEW_TYPE, active: true })
+  void (async () => {
+    await leaf.setViewState({ type: PHISH_VIEW_TYPE, active: true })
+    if (text !== undefined && leaf.view instanceof PhishAnalysisView) leaf.view.analyse(text)
+  })()
+}
+
+/** A forwarded message, by its declared type or its name — the button only re-analyses bytes already here. */
+function isMessage(a: PhishReport['attachments'][number]): boolean {
+  return a.bytes.length > 0 && (/^message\/rfc822$/i.test(a.contentType) || /\.eml$/i.test(a.filename))
 }

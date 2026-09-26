@@ -610,6 +610,7 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
   let missed = 0
   let empty = 0
   let unverified = 0
+  let bySearch = 0
   for (let m = re.exec(text); m; m = re.exec(text)) {
     // Before streamDataStart, not after: three of the `continue`s below reach
     // the next iteration without growing `out`, so the cap on out.length never
@@ -632,21 +633,6 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
     // /DCTDecode]` reaches this loop from its own entry — one stream, one image.
     if (seen.has(start)) continue
     seen.add(start)
-    // The declared length DECIDES the stream now; `endstream` only confirms it.
-    //
-    // Two fabrication paths lived in searching for `endstream` instead:
-    // `stream` matched as a bare substring in the lookahead window, so a
-    // document declaring no image stream at all could yield an image; and the
-    // forward search for `endstream` is unbounded, so a stream missing its own
-    // closed at the NEXT object's and handed back bytes belonging to other
-    // objects. Both produced a file that is not in the document, carrying a
-    // hash that is not of anything — the worst output this module can make.
-    //
-    // So: a direct `/Length N` must be there, `endstream` must sit exactly
-    // where it says (allowing the EOL that may follow the data), and only then
-    // are the bytes taken. A stream whose length is an indirect reference is
-    // NOT extracted — counted and disclosed instead, because a fact withheld
-    // is recoverable and a fabricated file is not.
     // Where the stream ends is decided by the declared length when there is
     // one, and only CONFIRMED by `endstream`. Where the length is an indirect
     // reference — common in real files, so refusing those would lose most real
@@ -700,6 +686,7 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
       continue
     }
     total += end - start
+    if (unconfirmed) bySearch++
     out.push({ offset: start, bytes: scan.subarray(start, end), filter: `/${m[1]}` })
   }
   if (overrun) {
@@ -747,11 +734,13 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
         `'endstream', so there was no image in them to extract.`
     )
   }
-  if (out.length) {
+  // Only the images whose end was SEARCHED for. One cut at its declared
+  // /Length is exact, and saying otherwise about it is a wrong fact.
+  if (bySearch) {
     notes.push(
-      "Where an image stream ends is found by searching for the 'endstream' keyword, not by reading /Length, which " +
-        'this scan does not resolve. A stream whose data happens to contain those nine bytes is cut there, so an ' +
-        'extracted image — and any hash taken of it — can be a prefix of the one in the document.'
+      `${bySearch} extracted image(s) declared no direct /Length, so each was cut at the next 'endstream' keyword ` +
+        'and kept only because it begins and ends as a complete image. One whose data held those nine bytes would ' +
+        'still be cut there, so its hash could be of a prefix of the image in the document.'
     )
   }
   return out

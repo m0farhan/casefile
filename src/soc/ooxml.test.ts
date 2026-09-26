@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readZipDocument } from './ooxml'
+import { entryNote, readZipDocument } from './ooxml'
 
 const enc = new TextEncoder()
 
@@ -29,6 +29,8 @@ interface Part {
   flags?: number
   /** Declared uncompressed size, when it should differ from the payload length. */
   size?: number
+  /** Declared compressed size in the central directory, when it should differ from the payload length. */
+  compressed?: number
 }
 
 /** A real ZIP, assembled byte by byte: local headers, payloads, central directory, EOCD. */
@@ -55,7 +57,7 @@ function zip(parts: Part[], comment = ''): Uint8Array {
       v.setUint16(6, 20, true)
       v.setUint16(8, flags, true)
       v.setUint16(10, method, true)
-      v.setUint32(20, part.data.length, true)
+      v.setUint32(20, part.compressed ?? part.data.length, true)
       v.setUint32(24, size, true)
       v.setUint16(28, name.length, true)
       v.setUint32(42, offset, true)
@@ -1051,5 +1053,64 @@ describe('sizes the directory cannot state', () => {
     const entry = facts?.entries.find((e) => e.name === 'word/vbaProject.bin')
     expect(entry?.size).toBeNull()
     expect(facts?.notes.join(' ')).toContain('carries the ZIP64 size marker but no ZIP64 field')
+  })
+})
+
+describe('entryNote', () => {
+  it('says what a name is named as, and passes ordinary parts by', () => {
+    expect(entryNote('word/vbaProject.bin')).toBe('named as a VBA macro project')
+    expect(entryNote('xl/embeddings/oleObject1.bin')).toBe('named as an embedded OLE object')
+    expect(entryNote('xl/externalLinks/externalLink1.xml')).toBe('named as a link to an external workbook')
+    expect(entryNote('word/activeX/activeX1.xml')).toBe('named as an ActiveX control')
+    expect(entryNote('word/embeddings/Microsoft_Excel_Worksheet.xlsx')).toBe('stored in the embedded-files folder')
+    expect(entryNote('payload/Invoice.pdf.exe')).toBe('named like an executable or script')
+    expect(entryNote('word/document.xml')).toBeNull()
+    expect(entryNote('word/_rels/document.xml.rels')).toBeNull()
+    expect(entryNote('docProps/app.xml')).toBeNull()
+  })
+})
+
+describe('pictures under media/', () => {
+  const PNG = Uint8Array.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82
+  ])
+
+  it('hands back stored and deflated pictures as bytes, and nothing else', async () => {
+    const facts = await readZipDocument(
+      zip([
+        { name: 'word/document.xml', data: enc.encode('<w:document/>') },
+        { name: 'word/media/image1.png', data: PNG },
+        { name: 'word/media/image2.png', data: await deflateRaw(PNG), method: 8, size: PNG.length }
+      ])
+    )
+    expect(facts?.images.map((i) => i.name)).toEqual(['word/media/image1.png', 'word/media/image2.png'])
+    expect(facts?.images[1].bytes).toEqual(PNG)
+    expect(facts?.notes).toEqual([])
+  })
+
+  it('keeps a streamed picture whose deflate stream is followed by the rest of the file', async () => {
+    const facts = await readZipDocument(
+      zip([
+        {
+          name: 'word/media/image1.png',
+          data: await deflateRaw(PNG),
+          method: 8,
+          flags: 8,
+          size: PNG.length,
+          compressed: 0
+        },
+        { name: 'word/document.xml', data: enc.encode('<w:document/>') }
+      ])
+    )
+    expect(facts?.images.length).toBe(1)
+  })
+
+  it('counts a picture it cannot read whole instead of drawing half of it', async () => {
+    const broken = (await deflateRaw(PNG)).subarray(0, 6)
+    const facts = await readZipDocument(
+      zip([{ name: 'xl/media/image1.png', data: broken, method: 8, size: PNG.length }])
+    )
+    expect(facts?.images).toEqual([])
+    expect(facts?.notes.join(' ')).toMatch(/1 picture listed under media\/ could not be read whole/)
   })
 })

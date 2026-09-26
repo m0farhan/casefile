@@ -7,11 +7,15 @@
  * `.exe` sitting inside a .docx are all visible for the cost of a pointer
  * walk, with nothing attacker-controlled fed to a decompressor.
  *
- * The one exception is `.rels`. A phishing document's lure does not live in
- * the text — it lives in a relationship with TargetMode="External", and so
+ * Two exceptions. `.rels`, because a phishing document's lure does not live
+ * in the text — it lives in a relationship with TargetMode="External", and so
  * does a remote-template injection and a linked OLE object. Those parts are a
- * few hundred bytes each, so they are inflated under a hard output cap and
- * nothing else is.
+ * few hundred bytes each, so they are inflated under a hard output cap. And
+ * the raster pictures under `media/`, because the "Enable content to view this
+ * document" banner IS a picture, and the analyst needs to see it without
+ * opening Word. Those are inflated under their own caps and handed back as
+ * bytes for the caller's magic-byte gate; nothing here decides they are safe
+ * to draw. Nothing else is inflated.
  *
  * Same standing rule as the rest of the SOC modules: this states what the
  * bytes say and stops. No score, no rating, no "suspicious". An entry list
@@ -61,9 +65,17 @@ export interface ExternalTarget {
   id: string
 }
 
+/** A picture from the container's `media/` folder, inflated but not yet trusted: the caller sniffs it. */
+export interface OfficeImage {
+  /** The entry name it came from. */
+  name: string
+  bytes: Uint8Array
+}
+
 export interface OfficeFacts {
   entries: ZipEntry[]
   externalTargets: ExternalTarget[]
+  images: OfficeImage[]
   /** Everything that could not be read, said out loud rather than left to look like absence. */
   notes: string[]
 }
@@ -101,6 +113,14 @@ const MAX_RELS_INPUT = 1_048_576
 const MAX_RELS_TOTAL = 4_194_304
 /** A document with more than this many external targets is telling us something the list itself no longer adds to. */
 const MAX_TARGETS = 512
+/** Raster names only; the bytes still go through the caller's magic-byte gate, so a lie here draws nothing. */
+const MEDIA = /(^|\/)media\/[^/]+\.(png|jpe?g|gif)$/i
+/** A lure is one or two pictures. Past this many, the rest are counted rather than inflated. */
+const MAX_MEDIA = 24
+/** Per-picture cap, in and out — the same ceiling the preview draws under. */
+const MAX_MEDIA_BYTES = 8_000_000
+/** Total across every picture: the bomb that arrives as twenty-four pictures rather than one. */
+const MAX_MEDIA_TOTAL = 32_000_000
 
 /**
  * ponytail: the methods that turn up, not the full APPNOTE table. Anything
@@ -997,7 +1017,7 @@ export async function readZipDocument(bytes: Uint8Array): Promise<OfficeFacts | 
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const hasPkMagic = bytes[0] === 0x50 && bytes[1] === 0x4b
-  const facts: OfficeFacts = { entries: [], externalTargets: [], notes: [] }
+  const facts: OfficeFacts = { entries: [], externalTargets: [], images: [], notes: [] }
 
   const end = findEocd(bytes, view)
   if (!end) {
@@ -1064,6 +1084,7 @@ export async function readZipDocument(bytes: Uint8Array): Promise<OfficeFacts | 
       return facts
     }
     await readRelationships(bytes, view, records, facts)
+    await readMedia(bytes, view, records, facts)
   } catch (error) {
     // Nothing in here reaches the caller as a throw. An analyst who opened a
     // hostile attachment still gets the rows that were read before the byte
@@ -1073,4 +1094,98 @@ export async function readZipDocument(bytes: Uint8Array): Promise<OfficeFacts | 
     )
   }
   return facts
+}
+
+/**
+ * The document's raster pictures, for the caller to sniff and draw.
+ *
+ * A picture that cannot be read whole is NOT handed back: half a JPEG draws as
+ * half a picture, and the half that is missing may be the half that mattered.
+ * Every one skipped is counted in a note instead, so "no pictures drawn" never
+ * reads as "no pictures".
+ */
+async function readMedia(
+  bytes: Uint8Array,
+  view: DataView,
+  records: CentralRecord[],
+  facts: OfficeFacts
+): Promise<void> {
+  const media = records.filter((r) => MEDIA.test(r.name))
+  // eslint-disable-next-line obsidianmd/no-global-this -- feature detection, not a window lookup (see readRelationships)
+  const canInflate = typeof globalThis.DecompressionStream === 'function'
+  let budget = MAX_MEDIA_TOTAL
+  let skipped = 0
+  for (const entry of media) {
+    if (facts.images.length >= MAX_MEDIA) {
+      facts.notes.push(`Only the first ${MAX_MEDIA} of the ${media.length} pictures listed were read for drawing.`)
+      break
+    }
+    const located = entry.encrypted ? null : locateData(bytes, view, entry)
+    if (!located || located.length === 0) {
+      skipped++
+      continue
+    }
+    const cap = Math.min(MAX_MEDIA_BYTES, budget)
+    if (entry.methodCode === 0 && located.length <= cap) {
+      facts.images.push({ name: entry.name, bytes: bytes.subarray(located.start, located.start + located.length) })
+      budget -= located.length
+    } else if (entry.methodCode === 8 && canInflate) {
+      // A streamed entry's length is "the rest of the file"; the deflate
+      // stream carries its own end. Incompressible data costs deflate five
+      // bytes per 64 KB, so the input cap is the output cap plus that slack.
+      const input = Math.min(located.length, MAX_MEDIA_BYTES + 65_536)
+      const out = await inflate(bytes.subarray(located.start, located.start + input), cap)
+      // A decompressor also errors on bytes AFTER a complete stream, which is
+      // every streamed entry read to the end of the file. The picture is whole
+      // when it ends the way its format ends, and only then is it kept.
+      if (out.truncated || !out.bytes.length || (out.failed && !endsWhole(out.bytes))) {
+        skipped++
+        continue
+      }
+      facts.images.push({ name: entry.name, bytes: out.bytes })
+      budget -= out.bytes.length
+    } else {
+      skipped++
+    }
+  }
+  if (skipped) {
+    facts.notes.push(
+      `${skipped} picture${skipped === 1 ? '' : 's'} listed under media/ could not be read whole here — encrypted, damaged, over ${MAX_MEDIA_BYTES / 1_000_000} MB, or compressed in a way this device cannot inflate — so ${skipped === 1 ? 'it is' : 'they are'} not drawn. Not drawn is not absent.`
+    )
+  }
+}
+
+/** JPEG ends FF D9, PNG with its IEND chunk and CRC, GIF with the 0x3B trailer. */
+function endsWhole(b: Uint8Array): boolean {
+  const n = b.length
+  if (n >= 2 && b[n - 2] === 0xff && b[n - 1] === 0xd9) return true
+  if (n >= 12 && b[n - 8] === 0x49 && b[n - 7] === 0x45 && b[n - 6] === 0x4e && b[n - 5] === 0x44) return true
+  return n >= 1 && b[0] === 0x47 && b[n - 1] === 0x3b
+}
+
+/** Names a document runtime treats as code or as a door to another file. Checked on the entry name only. */
+const NOTABLE_ENTRIES: [RegExp, string][] = [
+  [/(^|\/)vbaProject\.bin$/i, 'named as a VBA macro project'],
+  [/(^|\/)vbaProjectSignature\.bin$/i, 'named as a VBA macro project signature'],
+  [/(^|\/)(oleObject\d*\.bin|[^/]*\.ole)$/i, 'named as an embedded OLE object'],
+  [/(^|\/)externalLinks?\/[^/]+\.xml$/i, 'named as a link to an external workbook'],
+  [/(^|\/)activeX\//i, 'named as an ActiveX control'],
+  [/(^|\/)embeddings\//i, 'stored in the embedded-files folder'],
+  [
+    /\.(exe|dll|scr|com|cpl|msi|lnk|hta|js|jse|vbs|vbe|wsf|wsh|ps1|bat|cmd|jar|iso|img|vhdx?)$/i,
+    'named like an executable or script'
+  ]
+]
+
+/**
+ * Why one entry name deserves the analyst's eye, or null.
+ *
+ * A statement about the NAME and nothing more: a `vbaProject.bin` could hold
+ * no macro, and a macro could hide under an innocent name, so the wording says
+ * "named as" and never "contains". The ones that matter are the ones a clean
+ * invoice template has no reason to carry.
+ */
+export function entryNote(name: string): string | null {
+  for (const [pattern, note] of NOTABLE_ENTRIES) if (pattern.test(name)) return note
+  return null
 }

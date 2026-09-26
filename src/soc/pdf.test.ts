@@ -422,7 +422,13 @@ describe('notes that would otherwise be wrong', () => {
   it('carries the endstream ceiling in the result, not only in the source', () => {
     const facts = readPdf(pdf('%PDF-1.5\n<< /Filter /DCTDecode >>\nstream\n', JPEG, '\nendstream', TRAILER))
     expect(facts?.images).toHaveLength(1)
-    expect(facts?.notes.join(' ')).toContain("searching for the 'endstream' keyword")
+    expect(facts?.notes.join(' ')).toContain("cut at the next 'endstream' keyword")
+  })
+
+  it('does not say an image cut at its declared /Length could be a prefix', () => {
+    const facts = readPdf(pdf('%PDF-1.5\n<< /Filter /DCTDecode /Length 15 >>\nstream\n', JPEG, '\nendstream', TRAILER))
+    expect(facts?.images).toHaveLength(1)
+    expect(facts?.notes.join(' ')).not.toMatch(/endstream|prefix/)
   })
 })
 

@@ -3,6 +3,8 @@ import { md5 } from './md5'
 import { type HeaderAnalysis, addressOf, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
 import { defangIoc, extractIocsFromText, formatIocLine } from './ioc'
 import { decodePercentEscapes } from './toolbox'
+import { type PdfFacts, readPdf } from './pdf'
+import { type OfficeFacts, entryNote, readZipDocument } from './ooxml'
 
 /**
  * The phishing-specific reading of a mail, on top of the MIME parse.
@@ -698,7 +700,24 @@ export interface AttachmentReport {
    * path writes them to disk, and formatPhishReport never emits them.
    */
   bytes: Uint8Array
+  /** What a PDF's own bytes say it does and carries — present only when the bytes ARE a PDF. */
+  pdf?: PdfStructure
+  /** What a ZIP container lists and links to — present only when the bytes ARE a ZIP. */
+  office?: OfficeStructure
 }
+
+/** One picture lifted out of a document, with what its own bytes say it is and a hash of them. */
+export interface EmbeddedImage {
+  /** Where in the file it came from — a PDF byte offset, or a ZIP entry name. */
+  where: string
+  bytes: Uint8Array
+  /** From the picture's magic bytes, never from the PDF filter name or the entry's extension. */
+  sniffed: string
+  sha256: string
+}
+
+export type PdfStructure = Omit<PdfFacts, 'images'> & { images: EmbeddedImage[] }
+export type OfficeStructure = Omit<OfficeFacts, 'images'> & { images: EmbeddedImage[] }
 
 /** Everything the analyser knows about one message. */
 export interface PhishReport {
@@ -850,6 +869,7 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   }
   for (const attachment of attachments) {
     if (attachment.sha256) push(formatIocLine({ type: 'hash', value: attachment.sha256 }, owned))
+    for (const line of structureIocs(attachment.pdf, attachment.office, owned)) push(line)
   }
 
   return {
@@ -922,6 +942,8 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
   // these do not, and a hash that will not match the sender's copy has to say
   // so rather than be quoted at a sandbox as if it would.
   const wireExact = a.exact
+  const { pdf, office, failed } = await readStructure(a.bytes, sniffed)
+  if (failed) facts.push(failed)
   return {
     filename: a.filename,
     contentType: a.contentType,
@@ -937,9 +959,121 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
         ? []
         : ['this part carried no transfer encoding, so the hashes are of the decoded text, not of the bytes as sent'])
     ],
-    inside: stringsInside(a.bytes, owned),
-    bytes: a.bytes
+    inside: insideWithStructure(stringsInside(a.bytes, owned), structureIocs(pdf, office, owned)),
+    bytes: a.bytes,
+    ...(pdf ? { pdf } : {}),
+    ...(office ? { office } : {})
   }
+}
+
+/**
+ * The structure readers, chosen by what the bytes are — never by the filename
+ * or the declared type, which the sender writes.
+ *
+ * Both readers are built not to throw, but one that did would take the whole
+ * analysis with it, so a failure here becomes a stated fact about this file
+ * rather than a report that never arrives.
+ */
+/** Past this many, a list says how many more there are instead of printing them. */
+const STRUCTURE_LIST_CAP = 50
+
+/**
+ * The structure readers' findings as report lines. Every value written by the
+ * sender — a URI, an entry name, a relationship target or type — is quoted as
+ * untrusted, and the ones that can be followed are defanged first.
+ */
+export function structureLines(a: AttachmentReport): string[] {
+  const lines: string[] = []
+  const capped = <T>(list: T[], each: (item: T) => string, noun: string): void => {
+    for (const item of list.slice(0, STRUCTURE_LIST_CAP)) lines.push(each(item))
+    if (list.length > STRUCTURE_LIST_CAP) {
+      lines.push(`  - ${list.length - STRUCTURE_LIST_CAP} further ${noun} are not listed`)
+    }
+  }
+  if (a.pdf) {
+    const { pdf } = a
+    lines.push(`  - PDF ${pdf.version || 'version not recorded'}${pdf.encrypted ? ', /Encrypt present' : ''}`)
+    if (pdf.markers.length) {
+      lines.push(`  - PDF names found: ${pdf.markers.map((m) => `${m.name} ×${m.count}`).join(', ')}`)
+    }
+    capped(pdf.uris, (uri) => `  - PDF link (/URI): ${quoteUntrusted(defangIoc(uri, 'url'))}`, 'PDF links')
+    capped(pdf.images, imageLine, 'PDF images')
+    for (const note of pdf.notes) lines.push(`  - PDF reader: ${quoteUntrusted(note)}`)
+  }
+  if (a.office) {
+    const { office } = a
+    lines.push(`  - the ZIP directory lists ${office.entries.length} entr${office.entries.length === 1 ? 'y' : 'ies'}`)
+    for (const entry of office.entries) {
+      const note = entryNote(entry.name)
+      if (note) lines.push(`  - entry ${quoteUntrusted(entry.name)}: ${note}`)
+      if (entry.encrypted) {
+        lines.push(`  - entry ${quoteUntrusted(entry.name)} is encrypted, so its contents cannot be read here`)
+      }
+    }
+    capped(
+      office.externalTargets,
+      (t) =>
+        `  - external target: ${quoteUntrusted(defangIoc(t.target, 'url'))} — relationship type ${quoteUntrusted(relationshipType(t.type))}, declared in ${quoteUntrusted(t.from)}`,
+      'external targets'
+    )
+    capped(office.images, imageLine, 'pictures')
+    for (const note of office.notes) lines.push(`  - ZIP reader: ${quoteUntrusted(note)}`)
+  }
+  return lines
+}
+
+function imageLine(image: EmbeddedImage): string {
+  return `  - embedded picture ${quoteUntrusted(image.where)}: ${image.sniffed || 'type not recognised'}, ${image.bytes.length} bytes, SHA-256 ${image.sha256} (computed here)`
+}
+
+/** The last segment of a relationship Type URI — `attachedTemplate`, `oleObject`, `hyperlink` — which is the part that says what it is for. */
+export function relationshipType(type: string): string {
+  return type.split('/').filter(Boolean).pop() || 'not recorded'
+}
+
+async function readStructure(
+  bytes: Uint8Array,
+  sniffed: string
+): Promise<{ pdf?: PdfStructure; office?: OfficeStructure; failed?: string }> {
+  const identify = (list: { where: string; bytes: Uint8Array }[]): Promise<EmbeddedImage[]> =>
+    Promise.all(list.map(async (i) => ({ ...i, sniffed: sniffType(i.bytes), sha256: await hashBytes(i.bytes) })))
+  try {
+    if (sniffed === 'PDF') {
+      const facts = readPdf(bytes)
+      if (!facts) return {}
+      const images = await identify(
+        facts.images.map((i) => ({ where: `byte ${i.offset} (${i.filter})`, bytes: i.bytes }))
+      )
+      return { pdf: { ...facts, images } }
+    }
+    if (/ZIP/.test(sniffed)) {
+      const facts = await readZipDocument(bytes)
+      if (!facts) return {}
+      const images = await identify(facts.images.map((i) => ({ where: i.name, bytes: i.bytes })))
+      return { office: { ...facts, images } }
+    }
+    return {}
+  } catch {
+    return { failed: `the ${sniffed} structure reader stopped on this file, so its contents are not listed` }
+  }
+}
+
+/**
+ * Indicators the structure readers found. They matter most where the plain
+ * text scan is blind: a relationship target in an Office file lives in a
+ * COMPRESSED part, and a PDF link written in escapes or hex cannot be found by
+ * searching the bytes as text. They are also the lure itself, so they join the
+ * message's indicator list and not only the attachment's card.
+ */
+function structureIocs(pdf: PdfStructure | undefined, office: OfficeStructure | undefined, owned: string[]): string[] {
+  const extra = [...(pdf?.uris ?? []), ...(office?.externalTargets.map((t) => t.target) ?? [])]
+  if (!extra.length) return []
+  return extractIocsFromText(extra.join('\n'), []).map((ioc) => formatIocLine(ioc, owned))
+}
+
+/** The plain-text scan's findings, then the readers' — each line once. */
+function insideWithStructure(found: string[], structural: string[]): string[] {
+  return [...new Set([...found, ...structural])]
 }
 
 /**
@@ -1004,6 +1138,7 @@ export function formatPhishReport(report: PhishReport): string {
       if (a.sniffed) lines.push(`  - bytes begin as ${a.sniffed}`)
       for (const fact of a.facts) lines.push(`  - ${quoteUntrusted(fact)}`)
       for (const found of a.inside) lines.push(`  - found inside the file: ${quoteUntrusted(found)}`)
+      lines.push(...structureLines(a))
     }
   } else {
     lines.push('None.')
