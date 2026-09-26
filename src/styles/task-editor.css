@@ -514,6 +514,9 @@ input.pm-pop-field:focus {
 }
 .pm-te-props {
   margin-bottom: 14px;
+  /* The property grid's single-column switch reads this box, not the window
+     (see the @container rule below). */
+  container-type: inline-size;
 }
 .pm-te-divider {
   height: 1px;
@@ -615,6 +618,15 @@ input.pm-pop-field:focus {
   padding-top: 4px;
 }
 
+/* One column once two halves cannot hold a label, its gap and a readable
+   value: 2 x (100 + 14 + about 90) + 24 is about 430px. The container query
+   covers the detail panel, which sits in a narrow sidebar of a wide window;
+   the media query stays for hosts without container queries. */
+@container (max-width: 460px) {
+  .pm-prop-grid {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 520px) {
   .pm-prop-grid {
     grid-template-columns: 1fr;
@@ -661,6 +673,7 @@ input.pm-pop-field:focus {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  container-type: inline-size;
 }
 
 /* ─ Casefile incident editor ─ */
@@ -671,6 +684,7 @@ input.pm-pop-field:focus {
 }
 .pm-lc-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -730,6 +744,7 @@ input.pm-pop-field:focus {
 }
 .pm-ioc-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -796,7 +811,10 @@ a.pm-ioc-rep--unknown {
   font-size: 12px;
 }
 .pm-ioc-value {
-  flex: 1;
+  /* A real basis, not flex: 1 (basis 0): in a narrow panel the row wraps and
+     the value keeps about ten characters, instead of shrinking to one
+     character per line beside the fixed-width controls. */
+  flex: 1 1 10em;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -814,11 +832,12 @@ a.pm-ioc-rep--unknown {
   background: var(--pm-ioc-color, var(--gs-ink-subtle));
 }
 .pm-ioc-note {
-  flex: 0 1 160px;
+  flex: 1 1 5em;
+  min-width: 0;
   font-size: 12px;
 }
 .pm-ioc-value-input {
-  flex: 1;
+  flex: 1 1 10em;
   font-family: var(--gs-font-mono);
   font-size: 12px;
 }

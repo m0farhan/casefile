@@ -39,6 +39,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Eleven nowrap buttons: wrapping keeps Delete and the clear-selection X on
+     screen in a normal-width pane instead of scrolling the table sideways. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .pm-bulk-bar-right {
   display: flex;
