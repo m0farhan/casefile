@@ -155,10 +155,13 @@ export function renderTable(ctx: TableContext): void {
       // The severity cell also carries the SLA countdown chip, so this header
       // hosts two sort targets: severity rank and SLA time-to-breach.
       // "Breach", not "SLA": UI literals are sentence case (lint) and the
-      // settings screen already avoids the acronym.
+      // settings screen already avoids the acronym. A plain board runs no
+      // clocks, so it gets the severity half only.
       wireSortControl(th.createSpan({ text: col.label }), th, col.key, col.label)
-      th.appendText(' / ')
-      wireSortControl(th.createSpan({ text: 'Breach' }), th, 'sla', 'time to breach')
+      if (ctx.boardType !== 'plain') {
+        th.appendText(' / ')
+        wireSortControl(th.createSpan({ text: 'Breach' }), th, 'sla', 'time to breach')
+      }
     } else if (col.key) {
       th.createSpan({ text: col.label })
       wireSortControl(th, th, col.key, col.label)
