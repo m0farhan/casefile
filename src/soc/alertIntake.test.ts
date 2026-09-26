@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseAlertPaste } from './alertIntake'
+import { assetRule } from './ioc'
 import type { SeverityConfig } from '../types'
 
 const SEVERITIES: SeverityConfig[] = [
@@ -76,6 +77,28 @@ describe('parseAlertPaste', () => {
     expect(parseAlertPaste('Detected : 2024-05-13T06:22:00Z', CFG).detectedAt).toBe('2024-05-13T06:22:00.000Z')
   })
 
+  it('skips a key with nothing after its colon, trailing space or not', () => {
+    // `Rule : ` used to record an empty Rule, so the case got an empty title.
+    const r = parseAlertPaste('Rule : \nSeverity : High', CFG)
+    expect(r.title).toBe('Rule :')
+    expect(r.severityId).toBe('sev2')
+    expect(parseAlertPaste('Rule :\nSeverity : High', CFG).title).toBe('Rule :')
+  })
+
+  it('reads a paste with a long run of whitespace at once, not in seconds', () => {
+    // The key/value regex this replaced took 4 s on 3,000 spaces, on every keystroke.
+    const paste = ['Rule : SOC138', 'Severity : High', ' '.repeat(3000), '\u00a0'.repeat(3000), 'Time : x'].join('\n')
+    const start = performance.now()
+    const r = parseAlertPaste(paste, CFG)
+    expect(performance.now() - start).toBeLessThan(100)
+    expect(r.title).toBe('SOC138')
+    expect(r.severityId).toBe('sev2')
+  })
+
+  it('splits a line at its first colon only', () => {
+    expect(parseAlertPaste('Rule : Detected at 12:00:01 on WS-042', CFG).title).toBe('Detected at 12:00:01 on WS-042')
+  })
+
   it('falls back to the first non-empty line when there is no Rule line', () => {
     const result = parseAlertPaste('\nSuspicious login detected\nUser : bob', CFG)
     expect(result.title).toBe('Suspicious login detected')
@@ -85,6 +108,14 @@ describe('parseAlertPaste', () => {
     const result = parseAlertPaste('A'.repeat(80), CFG)
     expect(result.title).toBe('A'.repeat(60))
     expect(parseAlertPaste(`Rule : ${'B'.repeat(80)}`, CFG).title).toBe('B'.repeat(60))
+  })
+
+  it('never cuts an emoji in half at the cap', () => {
+    // A lone surrogate is stored on disk as U+FFFD, so the note is never found again.
+    expect(parseAlertPaste(`Rule : ${'y'.repeat(59)}\u{1F512} account locked`, CFG).title).toBe('y'.repeat(59))
+    expect(parseAlertPaste(`${'z'.repeat(59)}\u{1F512} account locked`, CFG).title).toBe('z'.repeat(59))
+    // An emoji that fits whole is kept whole.
+    expect(parseAlertPaste(`Rule : ${'y'.repeat(58)}\u{1F512} x`, CFG).title).toBe(`${'y'.repeat(58)}\u{1F512}`)
   })
 
   it('extracts defanged and real indicators from the whole paste', () => {
@@ -137,6 +168,38 @@ describe('parseAlertPaste, markdown-formatted alerts', () => {
 
   it('leaves underscores alone, because they live inside real values', () => {
     expect(parseAlertPaste('**Rule :** host_01 beaconing', CFG).title).toBe('host_01 beaconing')
+  })
+
+  // The SOC138 alert from a user's case, whose Indicators section was empty.
+  const SOC138 = [
+    'Event Time : 2021-03-13T20:20:58+03:00',
+    'Rule : SOC138 - Detected Suspicious Xls File',
+    'Source Address : 172.16.17.56',
+    'File Name : ORDER SHEET & SPEC.xlsm',
+    'File Hash : 7ccf88c0bbe3b29bf19d877c4596a8d4'
+  ]
+
+  it('records the MD5 file hash of the SOC138 alert, pasted plain or as a list', () => {
+    for (const paste of [SOC138, SOC138.map((l) => `- ${l}`)]) {
+      const iocs = parseAlertPaste(paste.join('\n'), CFG).iocs
+      expect(iocs.find((i) => i.value === '7ccf88c0bbe3b29bf19d877c4596a8d4')?.type).toBe('hash')
+      // The private source address is recorded too, as one of your own assets,
+      // so it is never searched or sent anywhere.
+      expect(iocs.map((i) => i.value)).toContain('172.16.17.56')
+      expect(assetRule('172.16.17.56', [])?.builtIn).toBe(true)
+    }
+  })
+
+  it('reads the header of an alert pasted as a list', () => {
+    // A `- ` bullet used to stay on the key, so the Rule and the Event Time
+    // were missed and the title became the first line, bullet and all.
+    const r = parseAlertPaste(SOC138.map((l) => `- ${l}`).join('\n'), CFG)
+    expect(r.title).toBe('SOC138 - Detected Suspicious Xls File')
+    expect(r.occurredAt).toBe('2021-03-13T17:20:58.000Z')
+    expect(parseAlertPaste('+ **Rule :** `SOC138`\n• Severity : High', CFG)).toMatchObject({
+      title: 'SOC138',
+      severityId: 'sev2'
+    })
   })
 })
 

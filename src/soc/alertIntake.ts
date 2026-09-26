@@ -62,11 +62,24 @@ function firstStamp(fields: Map<string, string>, keys: readonly string[]): strin
 function fieldLines(text: string): Map<string, string> {
   const map = new Map<string, string>()
   for (const line of text.split('\n')) {
-    const m = /^\s*([^:]+?)\s*:\s*(.+?)\s*$/.exec(line)
-    if (!m) continue
-    const key = stripEmphasis(m[1]).toLowerCase().replace(/\s+/g, ' ')
-    if (!key) continue
-    if (!map.has(key)) map.set(key, stripEmphasis(m[2]))
+    // Split at the first colon by hand. The regex this replaced,
+    // /^\s*([^:]+?)\s*:\s*(.+?)\s*$/, backtracked cubically on a long run of
+    // whitespace with no colon: 3,000 spaces froze the modal for 4 s, on
+    // every keystroke. Do not bring it back.
+    const colon = line.indexOf(':')
+    if (colon < 0) continue
+    // A list marker is not part of the key: an alert copied out of a ticket
+    // often arrives as `- Rule : …`. (`*` bullets already go with the emphasis.)
+    const key = stripEmphasis(line.slice(0, colon))
+      .replace(/^[-+•]\s+/, '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+    const value = stripEmphasis(line.slice(colon + 1))
+    // A key with nothing after its colon names nothing, so it is skipped —
+    // `Rule : ` (trailing space) used to record an empty Rule and give the
+    // case an empty title, while `Rule :` recorded nothing.
+    if (!key || !value) continue
+    if (!map.has(key)) map.set(key, value)
   }
   return map
 }
@@ -100,7 +113,12 @@ export function parseAlertPaste(text: string, cfg: { severities: SeverityConfig[
       .split('\n')
       .map((l) => l.trim())
       .find(Boolean) ?? ''
-  const title = (fields.get('rule') ?? firstLine).slice(0, TASK_SLUG_MAX_LENGTH).trim()
+  // A cut between the two halves of an emoji leaves a lone surrogate, which
+  // the filesystem stores as U+FFFD, so the note could never be found again.
+  const title = (fields.get('rule') ?? firstLine)
+    .slice(0, TASK_SLUG_MAX_LENGTH)
+    .replace(/[\uD800-\uDBFF]$/, '')
+    .trim()
 
   const sevLabel = fields.get('severity')
   const severity = sevLabel ? cfg.severities.find((s) => s.label.toLowerCase() === sevLabel.toLowerCase()) : undefined
