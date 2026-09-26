@@ -138,7 +138,7 @@ export class KanbanCard {
       card.addClass('pm-kanban-card--sev')
       card.style.setProperty('--pm-sev', sev.color)
     }
-    renderSeverityBadge(chips, sev, 'text')
+    renderSeverityBadge(chips, sev, 'text', task.severity)
     // SLA chip stays incident-only (slaState also gates on issueType, so this
     // is belt and braces).
     if (socBoard && task.issueType === 'incident') {

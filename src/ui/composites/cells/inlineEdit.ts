@@ -11,6 +11,11 @@ export interface InlineEditOpts {
 export function makeInlineEdit(opts: InlineEditOpts): void {
   const { container, display, inputType, value, onSave } = opts
   const input = container.createEl('input', { type: inputType, cls: 'pm-inline-edit', value })
+  // What the input holds once the browser has sanitised the seed: a date input
+  // turns anything that is not a bare YYYY-MM-DD into ''. Leaving without an
+  // edit compares against this, so it never saves '' over a value the input
+  // could not show.
+  const initial = input.value.trim()
   display.replaceWith(input)
   input.focus()
   if (inputType === 'text') input.select()
@@ -20,7 +25,7 @@ export function makeInlineEdit(opts: InlineEditOpts): void {
     if (saved) return
     saved = true
     const newVal = input.value.trim()
-    if (newVal !== value) {
+    if (newVal !== initial) {
       await onSave(newVal)
     } else {
       input.replaceWith(display)

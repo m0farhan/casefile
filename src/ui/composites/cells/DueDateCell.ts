@@ -1,4 +1,5 @@
 import type { Task } from '../../../types'
+import { parsePlainDate } from '../../../dates'
 import { formatDateLong } from '../../../utils'
 import type { DueUrgency } from '../dueChip'
 import { renderDueChip } from '../dueChip'
@@ -23,7 +24,9 @@ export class DueDateCell {
         container: this.el,
         display,
         inputType: 'date',
-        value: task.due,
+        // The picker opens on the day the chip shows, even when the stored due
+        // carries a time; a deliberate pick then writes a bare date.
+        value: parsePlainDate(task.due)?.toString() ?? '',
         onSave: props.onSave
       })
     }

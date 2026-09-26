@@ -46,10 +46,12 @@ export function compareTask(
 
 /**
  * When the task last changed: the newest timestamp among its activity log,
- * createdAt and completed date — all real, stored values (task.updatedAt is
- * re-stamped by the hydrator when absent, so it can't be trusted as history).
- * Null when the task carries no timestamp at all. Mixed YYYY-MM-DD and ISO
- * datetime strings compare correctly lexicographically.
+ * createdAt and completed date. All three are stored values: a note that never
+ * recorded createdAt hydrates it as '', not as the time it was loaded.
+ * task.updatedAt is not used, because the hydrator re-stamps it when absent,
+ * so it can't be trusted as history. Null when the task carries no timestamp
+ * at all. Mixed YYYY-MM-DD and ISO datetime strings compare correctly
+ * lexicographically.
  */
 export function lastUpdated(task: Task): string | null {
   let newest = ''

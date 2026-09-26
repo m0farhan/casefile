@@ -1,6 +1,6 @@
 import { guardVerdictOnClose } from '../../soc/verdictGuard'
 import { ButtonComponent, ExtraButtonComponent, Menu, Notice } from 'obsidian'
-import type { Task, TaskStatus } from '../../types'
+import type { Task } from '../../types'
 import { flattenTasks, collectAllAssignees, collectAllTags } from '../../store'
 import { findTaskById } from '../../store/TaskIndex'
 import { formatBadgeText, isTerminalStatus } from '../../utils'
@@ -12,7 +12,6 @@ import type { TableContext } from './TableRenderer'
 import { updateSelectAllCheckbox } from './TableRow'
 
 export type BulkAction =
-  | { type: 'set-status'; status: TaskStatus }
   | { type: 'set-assignee'; assignee: string }
   | { type: 'set-tag'; tag: string }
   | { type: 'set-due-date'; due: string }
@@ -60,93 +59,45 @@ function updateBarContent(bar: HTMLElement, ctx: TableContext, onAction: (a: Bul
   const left = bar.createDiv('pm-bulk-bar-left')
   left.createSpan({ text: `${count} selected`, cls: 'pm-bulk-bar-count' })
 
-  // Status button — routes through runBulkPatch (defined below) instead of
-  // onAction: identical write (updateTasks + clear + refresh), plus undo.
+  // Status, severity and verdict are applied only through runBulkPatch, never
+  // onAction: every bulk status change passes the verdict guard (CP-01) and
+  // gets an exact undo.
   new ButtonComponent(left).setButtonText('Set status').onClick((e) => {
     const menu = new Menu()
     for (const s of ctx.statuses) {
       menu.addItem((item) =>
-        item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => runBulkPatch({ status: s.id }))
+        item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => runBulkPatch(ctx, { status: s.id }))
       )
     }
     menu.showAtMouseEvent(e)
   })
-
-  // Status / Severity / Verdict buttons — applied here through
-  // store.updateTasks (the same batch path TableView's BulkAction handler
-  // uses; it activity-stamps severity and verdict) instead of via onAction,
-  // so the BulkAction union stays as-is and the undo can restore each task's
-  // captured prior values through that same path. A bulk close runs the
-  // verdict guard ONCE for all selected incidents without a verdict (CP-01);
-  // restoring prior values never moves a task INTO terminal without a
-  // verdict it already had — no re-prompt on undo.
-  const runBulkPatch = async (patch: Partial<Task>): Promise<void> => {
-    const ids = [...ctx.state.selectedTaskIds]
-    if (!ids.length) return
-    try {
-      let verdict: string | undefined
-      if (patch.status !== undefined && isTerminalStatus(patch.status, ctx.statuses)) {
-        const unverdicted = ids
-          .map((id) => findTaskById(ctx.project, id))
-          .filter((t): t is Task => !!t && t.issueType === 'incident' && !t.verdict)
-        if (unverdicted.length) {
-          const extra = await guardVerdictOnClose(ctx.plugin, ctx.project, unverdicted[0], patch.status)
-          if (extra === null) return // cancelled: the whole bulk change is dropped
-          verdict = extra.verdict
-        }
-      }
-      // Capture each task's prior values of the patched fields BEFORE the write.
-      const keys = [...Object.keys(patch), ...(verdict ? ['verdict'] : [])] as (keyof Task)[]
-      const prior = new Map<string, Partial<Task>>()
-      for (const id of ids) {
-        const t = findTaskById(ctx.project, id)
-        if (t) prior.set(id, Object.fromEntries(keys.map((k) => [k, t[k]])))
-      }
-      if (verdict) {
-        const v = verdict
-        await ctx.plugin.store.updateTasks(ctx.project, ids, (t) =>
-          t.issueType === 'incident' && !t.verdict ? { ...patch, verdict: v } : patch
-        )
-      } else {
-        await ctx.plugin.store.updateTasks(ctx.project, ids, patch)
-      }
-      ctx.state.selectedTaskIds.clear()
-      await ctx.onRefresh()
-      const n = prior.size
-      showUndoNotice(`Updated ${n} task${n === 1 ? '' : 's'}`, async () => {
-        await ctx.plugin.store.updateTasks(ctx.project, [...prior.keys()], (t) => prior.get(t.id) ?? null)
-        await ctx.onRefresh()
-      })
-    } catch (err) {
-      console.error('Bulk action failed', err)
-      new Notice('Bulk action failed. Please try again.')
-      await ctx.onRefresh()
-    }
-  }
 
   new ButtonComponent(left).setButtonText('Set severity').onClick((e) => {
     const menu = new Menu()
     for (const s of ctx.plugin.store.configFor(ctx.project).severities) {
       menu.addItem((item) =>
-        item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => runBulkPatch({ severity: s.id }))
+        item.setTitle(formatBadgeText(s.icon, s.label)).onClick(() => runBulkPatch(ctx, { severity: s.id }))
       )
     }
     menu.addSeparator()
-    menu.addItem((item) => item.setTitle('Clear severity').onClick(() => runBulkPatch({ severity: '' })))
+    menu.addItem((item) => item.setTitle('Clear severity').onClick(() => runBulkPatch(ctx, { severity: '' })))
     menu.showAtMouseEvent(e)
   })
 
-  new ButtonComponent(left).setButtonText('Set verdict').onClick((e) => {
-    const menu = new Menu()
-    for (const v of ctx.plugin.store.configFor(ctx.project).verdicts) {
-      menu.addItem((item) =>
-        item.setTitle(formatBadgeText(v.icon, v.label)).onClick(() => runBulkPatch({ verdict: v.id }))
-      )
-    }
-    menu.addSeparator()
-    menu.addItem((item) => item.setTitle('Clear verdict').onClick(() => runBulkPatch({ verdict: '' })))
-    menu.showAtMouseEvent(e)
-  })
+  // A plain board records no verdict, so it gets no verdict button.
+  if (ctx.boardType !== 'plain') {
+    new ButtonComponent(left).setButtonText('Set verdict').onClick((e) => {
+      const menu = new Menu()
+      for (const v of ctx.plugin.store.configFor(ctx.project).verdicts) {
+        menu.addItem((item) =>
+          item.setTitle(formatBadgeText(v.icon, v.label)).onClick(() => runBulkPatch(ctx, { verdict: v.id }))
+        )
+      }
+      menu.addSeparator()
+      menu.addItem((item) => item.setTitle('Clear verdict').onClick(() => runBulkPatch(ctx, { verdict: '' })))
+      menu.showAtMouseEvent(e)
+    })
+  }
 
   // Assignee button
   new ButtonComponent(left).setButtonText('Set assignee').onClick((e) => {
@@ -296,4 +247,77 @@ function updateBarContent(bar: HTMLElement, ctx: TableContext, onAction: (a: Bul
       updateSelectAllCheckbox(ctx.state)
       renderBulkActionBar({ ctx, onAction })
     })
+}
+
+/**
+ * Apply a status, severity or verdict patch to the selection through
+ * store.updateTasks (which activity-stamps severity and verdict), with an undo
+ * that restores each task's captured prior values through that same path.
+ *
+ * A bulk close runs the verdict guard ONCE for all selected incidents without
+ * a verdict (CP-01); restoring prior values never moves a task INTO terminal
+ * without a verdict it already had — no re-prompt on undo.
+ */
+export async function runBulkPatch(ctx: TableContext, patch: Partial<Task>): Promise<void> {
+  // A verdict belongs to incidents only: other selected tasks are left out of
+  // the write, the undo and the count, so the notice counts what changed.
+  const ids = [...ctx.state.selectedTaskIds].filter(
+    (id) => patch.verdict === undefined || findTaskById(ctx.project, id)?.issueType === 'incident'
+  )
+  if (!ids.length) {
+    if (patch.verdict !== undefined) new Notice('No incidents selected: a verdict is recorded on incidents only')
+    return
+  }
+  try {
+    let verdict: string | undefined
+    if (patch.status !== undefined && isTerminalStatus(patch.status, ctx.statuses)) {
+      const unverdicted = ids
+        .map((id) => findTaskById(ctx.project, id))
+        .filter((t): t is Task => !!t && t.issueType === 'incident' && !t.verdict)
+      if (unverdicted.length) {
+        const extra = await guardVerdictOnClose(
+          ctx.plugin,
+          ctx.project,
+          unverdicted[0],
+          patch.status,
+          unverdicted.length
+        )
+        if (extra === null) return // cancelled: the whole bulk change is dropped
+        verdict = extra.verdict
+      }
+    }
+    // Capture each task's prior values of the patched fields BEFORE the write.
+    // A status change also moves the stamps the store sets beside it (the
+    // completion date and the incident response/resolution times), so those
+    // are captured too: undoing a close must not leave the SLA clock stopped.
+    const keys = [
+      ...Object.keys(patch),
+      ...(verdict ? ['verdict'] : []),
+      ...(patch.status !== undefined ? ['completed', 'respondedAt', 'resolvedAt'] : [])
+    ] as (keyof Task)[]
+    const prior = new Map<string, Partial<Task>>()
+    for (const id of ids) {
+      const t = findTaskById(ctx.project, id)
+      if (t) prior.set(id, Object.fromEntries(keys.map((k) => [k, t[k]])))
+    }
+    if (verdict) {
+      const v = verdict
+      await ctx.plugin.store.updateTasks(ctx.project, ids, (t) =>
+        t.issueType === 'incident' && !t.verdict ? { ...patch, verdict: v } : patch
+      )
+    } else {
+      await ctx.plugin.store.updateTasks(ctx.project, ids, patch)
+    }
+    ctx.state.selectedTaskIds.clear()
+    await ctx.onRefresh()
+    const n = prior.size
+    showUndoNotice(`Updated ${n} task${n === 1 ? '' : 's'}`, async () => {
+      await ctx.plugin.store.updateTasks(ctx.project, [...prior.keys()], (t) => prior.get(t.id) ?? null)
+      await ctx.onRefresh()
+    })
+  } catch (err) {
+    console.error('Bulk action failed', err)
+    new Notice('Bulk action failed. Please try again.')
+    await ctx.onRefresh()
+  }
 }
