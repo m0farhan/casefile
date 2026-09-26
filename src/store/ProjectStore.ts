@@ -78,6 +78,18 @@ function recoverBodyInto(task: Task, rawBody: string): void {
   task.comments = comments
 }
 
+/** A Project's keys that are not the board's own fields: its cases, and what the store derives from where its note sits. */
+const NOT_BOARD_FIELDS = new Set(['tasks', 'taskIndex', 'filePath', 'detached'])
+
+/** Each board field as JSON, the form the three-way board merge compares. */
+function boardFields(project: Project): Map<string, string | undefined> {
+  const fields = new Map<string, string | undefined>()
+  for (const [key, value] of Object.entries(project)) {
+    if (!NOT_BOARD_FIELDS.has(key)) fields.set(key, JSON.stringify(value))
+  }
+  return fields
+}
+
 /** A basename of this exact length that prefixes the title's slug is kept as-is. */
 const LEGACY_SLUG_CAP = 40
 
@@ -127,6 +139,13 @@ export function inferIssueKeyPrefix(tasks: Task[]): string {
     if (m) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
+}
+
+/** Refuse a title that makes no file name at all: '' or '...' would write `Tasks/.md`. */
+function assertNameable(title: string): void {
+  if (taskFilePath(title, '').endsWith('/.md')) {
+    throw new Error('A case title needs at least one character that can go in a file name.')
+  }
 }
 
 /** Thrown when saving a task would collide with an existing file in the vault. */
@@ -192,6 +211,13 @@ export class ProjectStore implements TaskSource {
    * loadProjectBody fills it, or until a 'full' save reads it back inline.
    */
   private hydratedBodies = new WeakSet<Task | Project>()
+
+  /**
+   * Each board's fields as its note last had them (read, refreshed or
+   * written): the base of the three-way merge that brings in an outside edit
+   * to the note without dropping one the caller has made in memory.
+   */
+  private boardBase = new WeakMap<Project, Map<string, string | undefined>>()
 
   /**
    * Boards loaded this session, keyed by file path: one object per board for
@@ -503,6 +529,7 @@ export class ProjectStore implements TaskSource {
     // Memory matches disk now: drop dirty entries left for this path.
     this.clearDirty(project)
     this.projectCache.set(file.path, project)
+    this.boardBase.set(project, boardFields(project))
     return project
   }
 
@@ -514,9 +541,10 @@ export class ProjectStore implements TaskSource {
    * is left as it is and stays stale, to be re-read after it.
    *
    * The cases are always re-read. The board's own fields (title, config,
-   * keys…) are taken from disk only when its note was changed from outside;
-   * otherwise memory is as new as disk, and may hold an edit the caller is
-   * about to save.
+   * keys…) are taken from disk only when its note was changed from outside,
+   * and then only those memory has not changed since it last read them
+   * (mergeBoardFromDisk); otherwise memory is as new as disk, and may hold an
+   * edit the caller is about to save.
    * ponytail: a board whose save keeps failing keeps its dirty cases, so it
    * is not re-read until one save lands.
    */
@@ -538,19 +566,38 @@ export class ProjectStore implements TaskSource {
       return fresh ? project : null
     }
     if (touched.has(path)) {
-      for (const key of Object.keys(project)) {
-        if (!(key in fresh)) Reflect.deleteProperty(project, key)
-      }
-      Object.assign(project, fresh)
+      this.mergeBoardFromDisk(project, fresh)
       if (this.hydratedBodies.has(fresh)) this.hydratedBodies.add(project)
       else this.hydratedBodies.delete(project)
-    } else {
-      project.tasks = fresh.tasks
-      project.taskIndex = fresh.taskIndex
-      if (fresh.detached) project.detached = fresh.detached
-      else delete project.detached
     }
+    project.tasks = fresh.tasks
+    project.taskIndex = fresh.taskIndex
+    if (fresh.detached) project.detached = fresh.detached
+    else delete project.detached
     return project
+  }
+
+  /**
+   * Three-way merge of a board note changed outside Responder into the board
+   * object: each board field memory has not changed since it last read the
+   * note takes the note's value; one memory has changed keeps the caller's
+   * edit. Taking the whole note dropped an edit about to be saved (a new
+   * saved view); writing the whole object erased the outside one (a team
+   * member added on another device).
+   */
+  private mergeBoardFromDisk(project: Project, fresh: Project): void {
+    const base = this.boardBase.get(project)
+    const mine = project as unknown as Record<string, unknown>
+    const disk = fresh as unknown as Record<string, unknown>
+    for (const key of new Set([...Object.keys(mine), ...Object.keys(disk)])) {
+      if (NOT_BOARD_FIELDS.has(key)) continue
+      if (base && JSON.stringify(mine[key]) !== base.get(key)) continue
+      if (key in disk) mine[key] = disk[key]
+      else Reflect.deleteProperty(mine, key)
+    }
+    // Only ever raised: a key handed out on either side is never handed out again.
+    project.nextKeySeq = Math.max(project.nextKeySeq, fresh.nextKeySeq)
+    this.boardBase.set(project, boardFields(fresh))
   }
 
   /**
@@ -836,6 +883,7 @@ export class ProjectStore implements TaskSource {
     const fmDesc = frontmatter?.description
     project.description = typeof fmDesc === 'string' ? fmDesc : body.trim()
     this.hydratedBodies.add(project)
+    this.boardBase.get(project)?.set('description', JSON.stringify(project.description))
   }
 
   // ─── Save ──────────────────────────────────────────────────────────────────
@@ -946,11 +994,23 @@ export class ProjectStore implements TaskSource {
       const file = this.app.vault.getAbstractFileByPath(project.filePath)
       if (file instanceof TFile) {
         this.markSelfWrite(project.filePath)
+        let written: Map<string, string | undefined> | undefined
         // Atomic read-modify-write. The mutator recovers the on-disk description
         // when the in-memory project hasn't been hydrated yet, and always
         // carries the hand-written body remainder over into the rewrite.
         await this.app.vault.process(file, (content) => {
           const { frontmatter, body } = parseFrontmatter(content)
+          // The note was changed outside Responder since this board object
+          // read it (Sync, git, a hand edit). Its fields are merged in before
+          // the write, so a board-level save (the board dialog, a saved view)
+          // writes the caller's edit and not memory's old copy of the rest.
+          // The cases that change touched are still re-read on next use.
+          const touched = this.projectCache.get(file.path) === project ? this.stale.get(file.path) : undefined
+          if (touched?.has(file.path) && frontmatter?.[FRONTMATTER_KEY] === true) {
+            this.mergeBoardFromDisk(project, hydrateProjectFromFrontmatter(frontmatter, body, file.path, file.basename))
+            touched.delete(file.path)
+            if (!touched.size) this.stale.delete(file.path)
+          }
           if (!this.hydratedBodies.has(project)) {
             const fmDesc = frontmatter?.description
             project.description = typeof fmDesc === 'string' ? fmDesc : body.trim()
@@ -960,14 +1020,18 @@ export class ProjectStore implements TaskSource {
           // old description from surviving as phantom hand content.
           const prevDesc = typeof frontmatter?.description === 'string' ? frontmatter.description : project.description
           const extraBody = stripGeneratedProjectContent(body, prevDesc)
+          written = boardFields(project)
           return serializeProject(project, this.statusesFor(project), extraBody, frontmatter)
         })
         this.hydratedBodies.add(project)
+        if (written) this.boardBase.set(project, written)
       } else {
         const content = serializeProject(project, this.statusesFor(project))
+        const written = boardFields(project)
         this.markSelfWrite(project.filePath)
         await this.app.vault.create(project.filePath, content)
         this.hydratedBodies.add(project)
+        this.boardBase.set(project, written)
       }
       this.persisted.add(project)
       // One object per board: the cached one is what every holder has, so a
@@ -1255,9 +1319,7 @@ export class ProjectStore implements TaskSource {
    * behind that failed every later save of the board.
    */
   private assertTitleSavable(project: Project, task: Task, parentId?: string | null): void {
-    if (taskFilePath(task.title, '').endsWith('/.md')) {
-      throw new Error('A case title needs at least one character that can go in a file name.')
-    }
+    assertNameable(task.title)
     const conflict = this.findTaskFileConflict(project, task, parentId)
     if (conflict) throw conflict
   }
@@ -1384,8 +1446,10 @@ export class ProjectStore implements TaskSource {
       if (source) {
         const { frontmatter, body } = parseFrontmatter(await this.app.vault.read(source))
         task.description = body
-        const extraFrontmatter = userExtras(frontmatter ?? {}, mapped)
-        if (extraFrontmatter) task.extraFrontmatter = extraFrontmatter
+        // What the conversion kept back for the case (a running time entry)
+        // joins the note's own properties rather than replacing them.
+        const extraFrontmatter = { ...userExtras(frontmatter ?? {}, mapped), ...task.extraFrontmatter }
+        if (Object.keys(extraFrontmatter).length) task.extraFrontmatter = extraFrontmatter
       }
       const desired = taskFilePath(task.title, folder)
       const dest = this.uniqueChildPath(folder, desired.slice(desired.lastIndexOf('/') + 1))
@@ -1653,6 +1717,11 @@ export class ProjectStore implements TaskSource {
     if (task && patch.title !== undefined && patch.title !== oldTitle) {
       this.assertTitleSavable(project, { ...task, title: patch.title })
     }
+    // A patch that rewrites the body lands on the body as it is on disk. A
+    // case object read through the metadata cache (after any refresh of the
+    // board) holds no journal, so a comment added to it was replaced by the
+    // disk copy on save, and a description edit wrote over the journal.
+    if (task && patchNeedsBodyRewrite(patch)) await this.loadTaskBody(task)
     if (task) {
       this.stampCompletion(project, task, patch)
       this.stampActivity(project, task, patch)
@@ -1664,6 +1733,17 @@ export class ProjectStore implements TaskSource {
     // subtasks the patch merely doesn't know about are preserved.
     if (task && patch.subtasks !== undefined) {
       patch.subtasks = mergeMissingSubtasks(task, patch.subtasks, opts?.removedSubtaskIds ?? [], opts?.subtaskBase)
+      // A subtask added or retitled in the parent's editor is refused as a
+      // case's own title is, before the tree changes: one landing on a note
+      // that exists stayed in the tree unwritten, and every later save of the
+      // board failed on it. Under a subtask that is itself new, the folder is
+      // not on disk yet, so only the name is checked.
+      for (const { task: sub, parentId } of flattenTasks(patch.subtasks)) {
+        if (project.taskIndex.get(sub.id)?.task.title === sub.title) continue
+        const pid = parentId ?? taskId
+        if (project.taskIndex.has(pid)) this.assertTitleSavable(project, sub, pid)
+        else assertNameable(sub.title)
+      }
     }
     // Snapshot the pre-edit subtree to diff against once the tree has the new one.
     const oldSubtree = task && patch.subtasks !== undefined ? flattenTasks(task.subtasks).map((f) => f.task) : []
@@ -1673,8 +1753,6 @@ export class ProjectStore implements TaskSource {
     // (body rewrite). Description/archived/subtasks patches require a body rewrite too.
     const kind: DirtyKind = patchNeedsBodyRewrite(patch) || titleChanged ? 'full' : 'fm'
     this.markDirty(project, [taskId], kind)
-    // Patch-set description is the caller's intent; trust it as the new body.
-    if (task && patch.description !== undefined) this.hydratedBodies.add(task)
     if (task && titleChanged) {
       // Title change renames the file, which breaks direct children's Parent link.
       for (const sub of task.subtasks) this.markDirty(project, [sub.id], 'full')
@@ -1788,6 +1866,8 @@ export class ProjectStore implements TaskSource {
       // Copy a shared patch object before stamping so one task's completion date
       // doesn't bleed onto the next iteration through the same reference.
       const p = { ...raw }
+      // As in updateTask: a body rewrite starts from the body on disk.
+      if (patchNeedsBodyRewrite(p)) await this.loadTaskBody(task)
       if (!administrative) this.stampCompletion(project, task, p)
       this.stampActivity(project, task, p, administrative)
       const oldTitle = task.title
@@ -1795,7 +1875,6 @@ export class ProjectStore implements TaskSource {
       const titleChanged = p.title !== undefined && p.title !== oldTitle
       const kind: DirtyKind = patchNeedsBodyRewrite(p) || titleChanged ? 'full' : 'fm'
       this.markDirty(project, [id], kind)
-      if (p.description !== undefined) this.hydratedBodies.add(task)
       if (titleChanged) {
         for (const sub of task.subtasks) this.markDirty(project, [sub.id], 'full')
       }
@@ -2113,7 +2192,7 @@ export class ProjectStore implements TaskSource {
     const task = findTaskById(project, taskId)
     if (!task) return
     const from = task.completed
-    await doArchiveTask(this.app, project, taskId)
+    await doArchiveTask(this.app, project, taskId, (path) => this.markSelfWrite(path))
     if (!task.archived) return
     await this.appendActivity(project, taskId, {
       at: new Date().toISOString(),
@@ -2128,7 +2207,7 @@ export class ProjectStore implements TaskSource {
   async unarchiveTask(project: Project, taskId: string): Promise<void> {
     await this.refreshIfStale(project)
     const task = findTaskById(project, taskId)
-    await doUnarchiveTask(this.app, project, taskId)
+    await doUnarchiveTask(this.app, project, taskId, (path) => this.markSelfWrite(path))
     if (task && !task.archived) {
       await this.appendActivity(project, taskId, {
         at: new Date().toISOString(),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TaskNotesTaskInfo } from './tasknotes'
 import { buildImportForest, type TaskNotesImportItem } from './tasknotesImport'
 
@@ -129,5 +129,26 @@ describe('TaskNotes time entries', () => {
     item.info = info
     const { roots } = buildImportForest([item], OPTS)
     expect(roots[0].timeLogs).toEqual([{ date: '2026-07-06', hours: 1.5, note: 'triage' }])
+  })
+})
+
+describe('TaskNotes time entries west of UTC', () => {
+  // Node re-reads TZ when it is assigned; restored after, in case the worker is reused.
+  beforeAll(() => {
+    vi.stubEnv('TZ', 'America/New_York')
+  })
+  afterAll(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('are dated by the local day the entry started, as a logged hour is', () => {
+    expect(new Date('2026-09-26T01:30:00Z').getTimezoneOffset()).toBeGreaterThan(0)
+    const item = makeItem('Tasks/t.md')
+    const info = makeInfo({ path: 'Tasks/t.md', title: 'T' }) as TaskNotesTaskInfo & { timeEntries: unknown[] }
+    // 21:30-22:30 on the 25th in New York.
+    info.timeEntries = [{ startTime: '2026-09-26T01:30:00Z', endTime: '2026-09-26T02:30:00Z' }]
+    item.info = info
+    const { roots } = buildImportForest([item], OPTS)
+    expect(roots[0].timeLogs).toEqual([{ date: '2026-09-25', hours: 1, note: '' }])
   })
 })
