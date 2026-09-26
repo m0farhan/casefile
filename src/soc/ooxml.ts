@@ -1425,6 +1425,23 @@ async function readMedia(
   }
 }
 
+/**
+ * The file types a victim runs by opening them, shared with the top-level
+ * attachment facts so the two lists cannot drift again: .vbe and .cpl were
+ * flagged only inside a ZIP, and .pif and .apk only outside one. .xll is a DLL
+ * that Excel loads as an add-in.
+ */
+export const EXECUTABLE_NAME =
+  /\.(exe|dll|scr|com|cpl|pif|msi|lnk|hta|js|jse|vbs|vbe|wsf|wsh|ps1|bat|cmd|jar|apk|xll)$/i
+/**
+ * Compiled help and management-console files: HTML or XML that can run
+ * script when opened. Not executables, and not called that — the same false
+ * fact the disk-image row was split out to stop.
+ */
+export const SCRIPT_CARRIER_NAME = /\.(chm|msc)$/i
+/** Files that only name another location or program to open — a URL, a web query, a library or search pointer, a settings deep link. */
+export const SHORTCUT_NAME = /\.(url|iqy|library-ms|searchconnector-ms|settingcontent-ms)$/i
+
 /** Names a document runtime treats as code or as a door to another file. Checked on the entry name only. */
 const NOTABLE_ENTRIES: [RegExp, string][] = [
   [/(^|\/)vbaProject\.bin$/i, 'named as a VBA macro project'],
@@ -1433,14 +1450,14 @@ const NOTABLE_ENTRIES: [RegExp, string][] = [
   [/(^|\/)externalLinks?\/[^/]+\.xml$/i, 'named as a link to an external workbook'],
   [/(^|\/)activeX\//i, 'named as an ActiveX control'],
   [/(^|\/)embeddings\//i, 'stored in the embedded-files folder'],
-  [
-    /\.(exe|dll|scr|com|cpl|msi|lnk|hta|js|jse|vbs|vbe|wsf|wsh|ps1|bat|cmd|jar)$/i,
-    'named like an executable or script'
-  ],
+  [EXECUTABLE_NAME, 'named like an executable or script'],
+  [SCRIPT_CARRIER_NAME, 'named as a file type that can carry script'],
+  [SHORTCUT_NAME, 'named as a shortcut-style file that names another location or program to open'],
   // Its own row: a disk image is neither, and saying so was a false fact. It
   // is a container that Windows mounts with one double-click, which is why it
-  // is called out at all.
-  [/\.(iso|img|vhdx?)$/i, 'named like a disk image'],
+  // is called out at all. Nested archives are not opened, so it also says the
+  // one thing an entry list cannot: what is inside was not looked at.
+  [/\.(iso|img|vhdx?)$/i, 'named like a disk image — the files inside it are not listed here'],
   [/\.(html?|svg|one)$/i, 'named as a web page, SVG or OneNote file']
 ]
 

@@ -1497,11 +1497,27 @@ describe('files inside the archive', () => {
 })
 
 describe('entryNote rows for what a victim double-clicks', () => {
-  it('calls a disk image a disk image, not an executable', () => {
+  it('calls a disk image a disk image, not an executable, and says its files are not listed', () => {
     for (const name of ['a/b.iso', 'Invoice.img', 'x.vhd', 'x.vhdx']) {
-      expect(entryNote(name)).toBe('named like a disk image')
+      expect(entryNote(name)).toBe('named like a disk image — the files inside it are not listed here')
     }
     expect(entryNote('payload/Invoice.pdf.exe')).toBe('named like an executable or script')
+  })
+
+  it('names every type the top-level attachment facts name, in words true of each', () => {
+    // The two lists had drifted: .pif and .apk were flagged only outside a ZIP,
+    // and .xll, .url, .chm, .msc, .iqy and .library-ms nowhere.
+    for (const ext of ['exe', 'vbe', 'cpl', 'pif', 'apk', 'xll', 'lnk']) {
+      expect(entryNote(`Invoice.${ext}`)).toBe('named like an executable or script')
+    }
+    for (const ext of ['chm', 'msc']) {
+      expect(entryNote(`Invoice.${ext}`)).toBe('named as a file type that can carry script')
+    }
+    for (const ext of ['url', 'iqy', 'library-ms', 'searchconnector-ms', 'settingcontent-ms']) {
+      expect(entryNote(`Invoice.${ext}`)).toBe(
+        'named as a shortcut-style file that names another location or program to open'
+      )
+    }
   })
 
   it('names web pages, SVG and OneNote files', () => {
