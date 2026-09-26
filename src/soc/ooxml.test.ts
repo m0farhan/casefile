@@ -1385,6 +1385,84 @@ describe('files inside the archive', () => {
     expect(facts?.notes.join(' ')).toContain('1 inner file could not be read whole here')
   })
 
+  it('hands back a program named as a picture as a file, not a picture', async () => {
+    // By name alone it was an "embedded picture": never checked against its
+    // name, and its hash never reached Indicators or the case.
+    const appleDouble = Uint8Array.from([0x00, 0x05, 0x16, 0x07, 0x00, 0x02, 0x00, 0x00, ...new Uint8Array(40)])
+    const facts = await readZipDocument(
+      zip([
+        { name: 'photo.jpg', data: mz },
+        { name: '__MACOSX/._scan.png', data: appleDouble },
+        { name: 'scan.png', data: PNG }
+      ])
+    )
+    expect(facts?.images.map((i) => i.name)).toEqual(['scan.png'])
+    expect(facts?.files.map((f) => [f.name, f.bytes])).toEqual([
+      ['photo.jpg', mz],
+      ['__MACOSX/._scan.png', appleDouble]
+    ])
+    expect(facts?.notes).toEqual([])
+  })
+
+  it('gives a program named as a picture and padded past the cap its first bytes', async () => {
+    const big = new Uint8Array(8_000_001)
+    big.set([0x4d, 0x5a])
+    const facts = await readZipDocument(
+      zip([{ name: 'photo.jpg', data: await deflateRaw(big), method: 8, size: big.length }])
+    )
+    expect(facts?.images).toEqual([])
+    expect(facts?.files.map((f) => [f.name, f.head, f.bytes])).toEqual([['photo.jpg', big.subarray(0, 32), null]])
+    // Still counted by its name, so the tally stays true about what was named what.
+    expect(facts?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+  })
+
+  it('does not list a picture it could not read whole as a file', async () => {
+    const big = new Uint8Array(8_000_001)
+    big.set(PNG)
+    const facts = await readZipDocument(
+      zip([{ name: 'scan.png', data: await deflateRaw(big), method: 8, size: big.length }])
+    )
+    expect(facts?.images).toEqual([])
+    expect(facts?.files).toEqual([])
+    expect(facts?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+  })
+
+  it('leaves out an empty file however it was compressed', async () => {
+    // Python's zipfile deflates an empty file to two bytes, and hashing what
+    // came out put the empty-file SHA-256 into Indicators and the case.
+    const deflatedEmpty = await deflateRaw(new Uint8Array(0))
+    for (const keep of [
+      { name: '.keep', data: new Uint8Array(0) },
+      { name: '.keep', data: deflatedEmpty, method: 8, size: 0 }
+    ]) {
+      const facts = await readZipDocument(zip([{ name: 'run.js', data: enc.encode('WScript.Echo(1)') }, keep]))
+      expect(facts?.files.map((f) => f.name)).toEqual(['run.js'])
+      expect(facts?.notes).toEqual([])
+    }
+    // A stream that broke before its first byte is not known to be empty.
+    const broken = await readZipDocument(
+      zip([{ name: 'x.bin', data: Uint8Array.from([0x07, 0xff, 0xff]), method: 8, size: 0 }])
+    )
+    expect(broken?.files).toEqual([])
+    expect(broken?.notes.join(' ')).toContain('1 inner file could not be read whole')
+  })
+
+  it('says an empty picture holds nothing, not that it could not be read', async () => {
+    const deflatedEmpty = await deflateRaw(new Uint8Array(0))
+    for (const image of [
+      { name: 'word/media/image1.png', data: new Uint8Array(0) },
+      { name: 'word/media/image1.png', data: deflatedEmpty, method: 8, size: 0 }
+    ]) {
+      const facts = await readZipDocument(zip([{ name: '[Content_Types].xml', data: enc.encode('<Types/>') }, image]))
+      expect(facts?.images).toEqual([])
+      expect(facts?.notes).toEqual(['1 entry named as a picture holds 0 bytes, so there is nothing to draw.'])
+    }
+    // Declared 10 and holding none is not empty: that one really was not read.
+    const short = await readZipDocument(zip([{ name: 'word/media/image1.png', data: new Uint8Array(0), size: 10 }]))
+    expect(short?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+    expect(short?.notes.join(' ')).not.toContain('0 bytes')
+  })
+
   it('opens at most 24 files and says how many were left', async () => {
     const facts = await readZipDocument(zip(many(30, (i) => ({ name: `f${i}.bin`, data: mz }))))
     expect(facts?.files).toHaveLength(24)

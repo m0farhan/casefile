@@ -18,8 +18,10 @@
  * oleObject, an embedding) — because the payload's hash is the lookup the
  * analyst actually needs, and a PE named Invoice.pdf is only caught by its
  * bytes. Pictures and files share one set of caps and are handed back as bytes
- * for the caller to sniff and hash; nothing here decides what they are. The
- * document body's own XML is never inflated.
+ * for the caller to sniff and hash. The only thing decided here is which list
+ * an entry goes to: a picture is named as one AND begins as one, and anything
+ * else is a file whatever its name. The document body's own XML is never
+ * inflated.
  *
  * Same standing rule as the rest of the SOC modules: this states what the
  * bytes say and stops. No score, no rating, no "suspicious". An entry list
@@ -69,14 +71,17 @@ export interface ExternalTarget {
   id: string
 }
 
-/** An entry named as a PNG, JPEG or GIF, read whole but not yet trusted: the caller sniffs it. */
+/** An entry named as a PNG, JPEG or GIF whose first bytes are one, read whole: the caller still sniffs it. */
 export interface OfficeImage {
   /** The entry name it came from. */
   name: string
   bytes: Uint8Array
 }
 
-/** Any other entry this reads, for the caller to say what its bytes are and hash them. */
+/**
+ * Any other entry this reads, for the caller to say what its bytes are and
+ * hash them — including one named as a picture whose bytes do not begin as one.
+ */
 export interface InnerFile {
   name: string
   /**
@@ -139,10 +144,16 @@ const MAX_TARGETS = 512
  * Raster names, in any folder: an .odt keeps its pictures in Pictures/, and a
  * plain .zip holding a screenshot keeps it at the root. Only `media/` was
  * looked at before, and a card then said no picture was found in a file whose
- * pictures were never looked for. The bytes still go through the caller's
- * magic-byte gate, so a lie here draws nothing.
+ * pictures were never looked for. A name is only a claim: an entry is handed
+ * back as a picture when its first bytes agree, and as a file otherwise.
  */
 const MEDIA = /\.(png|jpe?g|jfif|gif)$/i
+/** How a JPEG, PNG and GIF begin — the only pictures the caller draws, and the caller's own signatures for them. */
+const RASTER_MAGIC = [
+  [0xff, 0xd8, 0xff],
+  [0x89, 0x50, 0x4e, 0x47],
+  [0x47, 0x49, 0x46, 0x38]
+]
 /** Picture formats nothing here draws. Counted, so their absence from the drawn pictures is not read as absence. */
 const UNDRAWN_PICTURE = /\.(emf|wmf|svg|tiff?|bmp|webp)$/i
 /** Present in every Office container; its absence is what makes a .zip a plain archive. */
@@ -1191,9 +1202,12 @@ function unread({ pictures, files }: Tally): string {
  * half a picture, and the half that is missing may be the half that mattered.
  * An inner file that cannot be read whole comes back with its first bytes and
  * no body, because its first bytes are still true and a hash of part of it is
- * not its hash. Every entry left unread is counted in a note, each count under
- * the reason that actually stopped it, so "no pictures drawn" never reads as
- * "no pictures" and a spent budget is never passed off as a damaged file.
+ * not its hash. An entry named as a picture whose bytes begin as something
+ * else is an inner file, read whole or not. Every entry left unread is counted
+ * in a note, each count under the reason that actually stopped it, so "no
+ * pictures drawn" never reads as "no pictures" and a spent budget is never
+ * passed off as a damaged file. An empty entry is not unread: an empty file is
+ * left out, and an empty picture has a note of its own.
  */
 async function readMedia(
   bytes: Uint8Array,
@@ -1216,6 +1230,7 @@ async function readMedia(
   let tried = 0
   const skipped: Tally = { pictures: 0, files: 0 }
   const overBudget: Tally = { pictures: 0, files: 0 }
+  let empty = 0
   for (const [i, entry] of wanted.entries()) {
     if (tried >= MAX_MEDIA || budget <= 0) {
       const rest = wanted.slice(i)
@@ -1244,12 +1259,17 @@ async function readMedia(
       }
       break
     }
+    // By name, for the tallies: an entry that is never read has only its name,
+    // and one note per kind has to count every entry the same way.
     const picture = MEDIA.test(entry.name)
     const kind = picture ? 'pictures' : 'files'
     const located = entry.encrypted ? null : locateData(bytes, view, entry)
-    // Both fields call it empty, so it is: there is nothing to hash, and
-    // "could not be read" about it would be false.
-    if (!picture && located?.length === 0 && entry.size === 0) continue
+    // Both fields call it empty, so it is: there is nothing to hash or draw,
+    // and "could not be read" about it would be false.
+    if (located?.length === 0 && entry.size === 0) {
+      if (picture) empty++
+      continue
+    }
     if (!located || located.length === 0 || !(entry.methodCode === 0 || (entry.methodCode === 8 && canInflate))) {
       skipped[kind]++
       continue
@@ -1263,12 +1283,24 @@ async function readMedia(
       entry.methodCode === 0
         ? {
             bytes: bytes.subarray(located.start, located.start + Math.min(located.length, cap)),
-            truncated: located.length > cap
+            truncated: located.length > cap,
+            failed: false
           }
         : await inflate(
             bytes.subarray(located.start, located.start + Math.min(located.length, MAX_MEDIA_BYTES + 65_536)),
             cap
           )
+    // The empty file as Python's zipfile and Java write it: a two-byte deflate
+    // stream that inflates to nothing. Hashed, it put the empty-file SHA-256 into
+    // Indicators and linked every case holding any empty file; said about a
+    // picture, "could not be read whole" was false. A stream that broke before
+    // producing a byte cannot tell empty from damaged, so it stays counted as
+    // unread.
+    if (entry.size === 0 && out.bytes.length === 0 && !out.truncated) {
+      if (out.failed) skipped[kind]++
+      else if (picture) empty++
+      continue
+    }
     // Whole means the length the directory declares, and nothing about how the
     // bytes end. A decompressor also errors on bytes AFTER a complete stream,
     // which is every streamed entry read to the end of the file, so a stream
@@ -1276,7 +1308,7 @@ async function readMedia(
     // Judging by the tail kept a broken GIF whose partial output happened to
     // end in 0x3B, and hashed the prefix as the picture; a null size never
     // matches, so an entry of unknown length is never called whole.
-    const whole = !out.truncated && out.bytes.length === entry.size && (out.bytes.length > 0 || !picture)
+    const whole = !out.truncated && out.bytes.length === entry.size
     // Charged BEFORE anything is kept or thrown away: the inflate already
     // happened. A stored entry that is not kept is a view of the input and
     // costs nothing.
@@ -1284,11 +1316,21 @@ async function readMedia(
       budget -= out.bytes.length
       media.left -= out.bytes.length
     }
-    if (picture && whole) {
+    // A picture by its bytes as well as its name. By name alone, a program
+    // stored as Invoice.jpg was handed back as a picture: it was printed as an
+    // "embedded picture", never checked against its name, and its hash never
+    // reached Indicators or the case — renaming the payload was enough to walk
+    // past the check that catches the same bytes named Invoice.pdf.
+    const raster = picture && RASTER_MAGIC.some((magic) => startsWith(out.bytes, magic))
+    if (raster && whole) {
       facts.images.push({ name: entry.name, bytes: out.bytes })
       continue
     }
-    if (!picture && (whole || out.bytes.length >= HEAD_BYTES)) {
+    // Everything else goes to the caller as a file, so its first bytes are
+    // typed against its name — a picture-named payload padded past 8 MB
+    // included. A picture that begins as one but was not read whole is not a
+    // file with a picture's name: it stays a picture, counted below.
+    if (!raster && (whole || out.bytes.length >= HEAD_BYTES)) {
       // A copy, so a cut 8 MB inflate is not held alive by a 32-byte view.
       facts.files.push({ name: entry.name, head: out.bytes.slice(0, HEAD_BYTES), bytes: whole ? out.bytes : null })
     }
@@ -1302,6 +1344,11 @@ async function readMedia(
   if (skipped.pictures || skipped.files) {
     facts.notes.push(
       `${tally(skipped)} could not be read whole here — encrypted, damaged, over ${MAX_MEDIA_BYTES / 1_000_000} MB, or compressed in a way this device cannot inflate — ${unread(skipped)}`
+    )
+  }
+  if (empty) {
+    facts.notes.push(
+      `${empty === 1 ? '1 entry named as a picture holds' : `${empty} entries named as pictures hold`} 0 bytes, so there is nothing to draw.`
     )
   }
   const cut = overBudget.pictures + overBudget.files
