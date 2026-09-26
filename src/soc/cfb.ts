@@ -253,11 +253,18 @@ function sizeAt(view: DataView, at: number, shift: number): number | null {
 }
 
 /**
- * Names Office treats as code or as a door to another file. Keys are upper
- * case because the format compares names that way, so `MACROS` is the same
- * storage to Word as `Macros`. `Macros` is Word's VBA storage and
- * `_VBA_PROJECT_CUR` Excel's; `VBA`, `_VBA_PROJECT` and `PROJECT` sit inside
- * either.
+ * Names Office treats as code or as a door to another file, and the one that
+ * says the real document is sealed inside. Keys are upper case because the
+ * format compares names that way, so `MACROS` is the same storage to Word as
+ * `Macros`. `Macros` is Word's VBA storage and `_VBA_PROJECT_CUR` Excel's;
+ * `VBA`, `_VBA_PROJECT` and `PROJECT` sit inside either.
+ *
+ * `EncryptedPackage` is where Word, Excel and PowerPoint put a whole .docx,
+ * .xlsx or .pptx once it is encrypted (MS-OFFCRYPTO) — with a password, rights
+ * management or a certificate alike, so the note says "encrypted" and not
+ * "password-protected". Without this row, a password-protected workbook sent
+ * with the password in the body shows only as a compound file where a ZIP
+ * was expected, and nothing says why its macros and links go unlisted.
  */
 const NOTABLE_NAMES = new Map([
   ['MACROS', 'named as VBA macro storage'],
@@ -266,7 +273,8 @@ const NOTABLE_NAMES = new Map([
   ['_VBA_PROJECT_CUR', 'named as VBA macro storage'],
   ['PROJECT', 'named as VBA macro storage'],
   ['\u0001OLE10NATIVE', 'named as an embedded OLE package'],
-  ['OBJECTPOOL', 'named as embedded objects']
+  ['OBJECTPOOL', 'named as embedded objects'],
+  ['ENCRYPTEDPACKAGE', 'named as an encrypted Office package, whose contents cannot be read here']
 ])
 
 /**
