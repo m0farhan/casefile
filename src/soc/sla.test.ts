@@ -21,6 +21,10 @@ function incident(overrides: Parameters<typeof makeTask>[0] = {}) {
 }
 
 describe('slaState', () => {
+  it('has no result for a resolution stamped before the clock started', () => {
+    expect(slaState(incident({ resolvedAt: '2026-07-30T07:00:00.000Z' }), POLICIES, T0)).toBeNull()
+  })
+
   it('returns null for non-incidents, missing severity, and unknown policy', () => {
     expect(slaState(makeTask({ issueType: 'task', severity: 'sev1' }), POLICIES, T0)).toBeNull()
     expect(slaState(makeTask({ issueType: 'incident' }), POLICIES, T0)).toBeNull()

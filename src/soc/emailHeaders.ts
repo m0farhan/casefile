@@ -636,6 +636,13 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
  */
 export function quoteUntrusted(value: string): string {
   const flat = visibleName(value.replace(/[\r\n\u2028\u2029]+/g, ' '))
+    // Dataview runs a code span whose trimmed text starts with '=' (a query)
+    // or '$=' (JavaScript), and every value here was typed or sent by someone
+    // else. The '=' is shown in visibleName's own escape form: still visible,
+    // nothing invisible added, and no longer a query prefix.
+    // ponytail: Dataview's default prefixes only; a vault that changes them
+    // in Dataview's settings is not read.
+    .replace(/^(\s*\$?)=/, '$1<U+003D>')
   if (!flat) return '(empty)'
   let longest = 0
   for (const run of flat.match(/`+/g) ?? []) longest = Math.max(longest, run.length)

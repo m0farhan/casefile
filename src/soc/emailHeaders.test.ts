@@ -616,3 +616,14 @@ describe('report wording when no host is named', () => {
     expect(report).toMatch(/SPF: pass — Received-SPF, no asserting host stated/)
   })
 })
+
+describe('quoteUntrusted and Dataview', () => {
+  it('never lets a code span start with a query prefix', () => {
+    for (const v of ['=x', '$=x', ' =x', "$=app['vault']['getName']()"]) {
+      const out = quoteUntrusted(v)
+      expect(out.replace(/^`+ ?/, '').trimStart()).not.toMatch(/^\$?=/)
+      expect(out).toContain('<U+003D>')
+    }
+    expect(quoteUntrusted('a=b')).toBe('`a=b`')
+  })
+})

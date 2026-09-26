@@ -63,8 +63,10 @@ export function slaState(task: Task, policies: Record<string, SlaPolicy>, now: n
   if (task.resolvedAt) {
     const resolved = Date.parse(task.resolvedAt)
     // A hand-edited stamp such as 'unknown' ends the clock at no known time.
-    // Compared as NaN it read as met, and the report printed "NaNm".
-    if (Number.isNaN(resolved)) return null
+    // Compared as NaN it read as met, and the report printed "NaNm". A stamp
+    // before the anchor is readable but impossible for this clock — it read
+    // as met by more than the whole target — so it is not computable either.
+    if (Number.isNaN(resolved) || resolved < anchor) return null
     const deadline = anchor + policy.resolutionMins * 60_000
     return {
       phase: 'resolution',
