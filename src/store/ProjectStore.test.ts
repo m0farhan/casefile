@@ -3,7 +3,7 @@ import { TFile, TFolder } from 'obsidian'
 import { describe, expect, it, vi } from 'vitest'
 import { makeFakeApp, type FakeVault } from '../../test/fakeVault'
 import { DEFAULT_SETTINGS, makeTask, type PMSettings, type Project, type StatusConfig, type Task } from '../types'
-import { ProjectStore } from './ProjectStore'
+import { inferIssueKeyPrefix, ProjectStore } from './ProjectStore'
 import { parseFrontmatter } from './YamlParser'
 import { buildTaskIndex } from './TaskIndex'
 import { findTask, flattenTasks } from './TaskTreeOps'
@@ -1230,6 +1230,46 @@ describe('issue keys', () => {
         .map((f) => f.task.title)
         .sort()
     ).toEqual(['Alpha', 'XX-1: Beta'])
+  })
+
+  it('adoptIssueKeys leaves CVE and APT ids in titles alone and never takes CVE as the prefix', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Ids', 'Projects')
+    const titles = [
+      'SOC-1: Data collection',
+      'SOC-2: Correlation',
+      'CVE-2024-3400 exploited on edge FW',
+      'APT-29 spearphish'
+    ]
+    const tasks: Task[] = []
+    for (const [i, title] of titles.entries()) {
+      const t = makeTask({ title, createdAt: `2026-07-0${i + 1}T00:00:00Z` })
+      await store.insertTask(project, t)
+      tasks.push(t)
+    }
+    const result = expectDefined(await store.adoptIssueKeys(project))
+    expect(result.prefix).toBe('SOC')
+    expect(tasks.map((t) => [t.key, t.title])).toEqual([
+      ['SOC-1', 'Data collection'],
+      ['SOC-2', 'Correlation'],
+      ['SOC-3', 'CVE-2024-3400 exploited on edge FW'],
+      ['SOC-4', 'APT-29 spearphish']
+    ])
+
+    const cves = await store.createProject('Cves', 'Projects')
+    await addNamed(store, cves, 'CVE-2024-3400 exploited')
+    await addNamed(store, cves, 'CVE-2023-4966 Citrix Bleed')
+    expect(inferIssueKeyPrefix(cves.tasks)).toBe('')
+    expect(await store.adoptIssueKeys(cves)).toBeNull()
+  })
+
+  it('adoptIssueKeys uses the prefix the analyst confirmed over the titles', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Confirm', 'Projects')
+    const apt = await addNamed(store, project, 'APT-29 spearphish')
+    expect(inferIssueKeyPrefix(project.tasks)).toBe('APT')
+    await store.adoptIssueKeys(project, 'soc')
+    expect([apt.key, apt.title]).toEqual(['SOC-1', 'APT-29 spearphish'])
   })
 
   it('never repeats a key after keys were switched off and on again', async () => {

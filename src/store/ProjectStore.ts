@@ -106,6 +106,27 @@ function resolveTaskPath(task: Task, folder: string, previousPath: string | unde
   return desired
 }
 
+/**
+ * A key embedded at the start of a title ("SOC-4: Fix things"). The number
+ * must end the token (the lookahead), so "CVE-2024-3400 exploited" is never
+ * read as key CVE-2024 with "-3400 exploited" left as the title.
+ */
+const EMBEDDED_KEY = /^([A-Z][A-Z0-9]+)-(\d+)(?=[:\s]|$):?\s*/
+
+/**
+ * The prefix most titles on a board already carry as an embedded key, or ''
+ * when none does. Exported so the adopt command can show it to the analyst to
+ * confirm before any key is written: keys are immutable.
+ */
+export function inferIssueKeyPrefix(tasks: Task[]): string {
+  const counts = new Map<string, number>()
+  for (const { task } of flattenTasks(tasks)) {
+    const m = EMBEDDED_KEY.exec(task.title)
+    if (m) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
+}
+
 /** Thrown when saving a task would collide with an existing file in the vault. */
 export class TaskFileNameConflictError extends Error {
   constructor(public readonly path: string) {
@@ -1380,23 +1401,24 @@ export class ProjectStore implements TaskSource {
    * Keyless tasks get fresh sequential keys in createdAt order. Idempotent:
    * a second run finds no embedded keys and no keyless tasks, and changes
    * nothing. Not on the TaskSource interface — a one-time pm-file concern.
+   *
+   * The prefix is the board's own, else `chosenPrefix` (what the analyst
+   * confirmed), else the majority among embedded keys (inferIssueKeyPrefix).
+   * Only a title whose embedded prefix IS that prefix donates its key: a
+   * 'CVE-…' or 'APT-29 …' title keeps its text and gets a fresh key.
    */
   async adoptIssueKeys(
     project: Project,
-    fallbackPrefix?: string
+    chosenPrefix?: string
   ): Promise<{ prefix: string; adopted: number; assigned: number; renamedBasenames: string[] } | null> {
     const flat = flattenTasks(project.tasks).map((f) => f.task)
-    const embedded = new Map<string, { seq: number; title: string }>()
-    const counts = new Map<string, number>()
+    const embedded = new Map<string, { prefix: string; seq: number; title: string }>()
     for (const t of flat) {
-      const m = /^([A-Z][A-Z0-9]+)-(\d+):?\s*/.exec(t.title)
-      if (!m) continue
-      embedded.set(t.id, { seq: Number(m[2]), title: t.title.slice(m[0].length) || t.title })
-      counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
+      const m = EMBEDDED_KEY.exec(t.title)
+      if (m) embedded.set(t.id, { prefix: m[1], seq: Number(m[2]), title: t.title.slice(m[0].length) || t.title })
     }
-    const majority = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
     const hadPrefix = !!project.keyPrefix
-    const prefix = project.keyPrefix || majority || fallbackPrefix?.toUpperCase() || ''
+    const prefix = project.keyPrefix || chosenPrefix?.toUpperCase() || inferIssueKeyPrefix(project.tasks)
     if (!/^[A-Z][A-Z0-9]*$/.test(prefix)) return null
 
     let adopted = 0
@@ -1414,7 +1436,7 @@ export class ProjectStore implements TaskSource {
     // duplicates fall through to fresh assignment, title left untouched).
     for (const t of flat) {
       const e = embedded.get(t.id)
-      if (!e || t.key || usedSeqs.has(e.seq)) continue
+      if (!e || e.prefix !== prefix || t.key || usedSeqs.has(e.seq)) continue
       usedSeqs.add(e.seq)
       t.key = `${prefix}-${e.seq}`
       if (t.filePath) renamedBasenames.push(t.filePath.replace(/^.*\//, ''))
