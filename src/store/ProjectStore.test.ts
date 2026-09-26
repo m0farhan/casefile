@@ -2629,3 +2629,56 @@ describe('ProjectStore archived parents and their subtasks', () => {
     expect(findTask((await restart()).p.tasks, child.id)?.archived).toBe(true)
   })
 })
+
+describe('ProjectStore boards moved, renamed or deleted under an open object', () => {
+  it('a save through a deleted board object does not bring the board back', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Gone', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    await store.deleteProject(project)
+    await store.updateTask(project, task.id, { status: 'done' })
+    await store.appendActivity(project, task.id, { at: '2026-01-01T00:00:00.000Z', field: 'sla', from: '', to: 'x' })
+    expect(vault.getAbstractFileByPath('Projects/Gone/Gone.md')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Gone/Tasks/Case.md')).toBeNull()
+  })
+
+  it('a board folder dragged away is not recreated, nor its case duplicated, by the stale object', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Goals', 'Projects')
+    const task = await addNamed(store, project, 'Case 1')
+    await vault.rename(vault.getAbstractFileByPath('Projects/Goals') as TFolder, 'IR/Goals')
+    await store.updateTask(project, task.id, { status: 'done' })
+    expect(vault.getAbstractFileByPath('Projects/Goals/Goals.md')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Goals/Tasks/Case 1.md')).toBeNull()
+    expect(
+      vault
+        .getMarkdownFiles()
+        .map((f) => f.path)
+        .sort()
+    ).toEqual(['IR/Goals/Goals.md', 'IR/Goals/Tasks/Case 1.md'])
+  })
+
+  it('a case note moved away is not recreated at its old path', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Moved', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    await vault.rename(vault.getAbstractFileByPath(expectDefined(task.filePath)) as TFile, 'Elsewhere/Case.md')
+    await expect(store.updateTask(project, task.id, { status: 'done' })).rejects.toThrow('no longer at')
+    expect(vault.getAbstractFileByPath('Projects/Moved/Tasks/Case.md')).toBeNull()
+  })
+
+  it('a board whose folder was renamed loads as detached and never wipes its case list', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Cases', 'IR')
+    await addNamed(store, project, 'Phish A')
+    await addNamed(store, project, 'Phish B')
+    await vault.rename(vault.getAbstractFileByPath('IR/Cases') as TFolder, 'IR/Incidents')
+    const note = vault.getAbstractFileByPath('IR/Incidents/Cases.md') as TFile
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const loaded = expectDefined(await store2.loadProject(note))
+    expect(loaded.detached).toEqual({ recorded: 2, folder: 'IR/Incidents/Cases_tasks' })
+    await store2.saveProject(loaded)
+    expect(parseFrontmatter(await vault.cachedRead(note)).frontmatter?.taskIds).toHaveLength(2)
+    expect(vault.getAbstractFileByPath('IR/Incidents/Cases_tasks')).toBeNull()
+  })
+})

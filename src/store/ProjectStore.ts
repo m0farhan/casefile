@@ -451,10 +451,19 @@ export class ProjectStore implements TaskSource {
         const taskIds = strList(frontmatter.taskIds)
         project.tasks = await this.loadTasksFromFolder(taskFolder, taskIds)
         rebuildTaskIndex(project)
+        // The note records cases but the folder they live in is not where the
+        // note's path says: the note or its folder was renamed in the file
+        // explorer. Say so rather than show an empty board, and never save
+        // (which would write `taskIds: []`). ponytail: no guessing a sibling
+        // `Tasks/` folder — it may be another board's.
+        if (taskIds.length && !(this.app.vault.getAbstractFileByPath(taskFolder) instanceof TFolder)) {
+          project.detached = { recorded: taskIds.length, folder: taskFolder }
+        }
         // Memory matches disk now, drop any stale dirty entries.
         this.clearDirty(project)
       }
 
+      this.persisted.add(project)
       this.projectCache.set(file.path, project)
       return project
     } catch (e) {
@@ -670,6 +679,28 @@ export class ProjectStore implements TaskSource {
 
   // ─── Save ──────────────────────────────────────────────────────────────────
 
+  /** Boards deleted this session. A save through one of these objects is dropped. */
+  private deletedProjects = new WeakSet<Project>()
+
+  /**
+   * Board objects whose note has existed on disk: loaded from it, or saved to
+   * it. Only a board that never had a note may create one; for any other, a
+   * missing note means it was moved, renamed or deleted, and recreating it at
+   * the old path would resurrect the board beside the real one.
+   */
+  private persisted = new WeakSet<Project>()
+
+  /** Why a save of this board must not go ahead, or null when it may. */
+  private saveRefusal(project: Project): string | null {
+    if (project.detached) {
+      return `it lists ${project.detached.recorded} case(s), but ${project.detached.folder} is not there. Its note or folder was renamed outside Responder; rename it back to save.`
+    }
+    if (this.persisted.has(project) && !(this.app.vault.getAbstractFileByPath(project.filePath) instanceof TFile)) {
+      return `its note is no longer at ${project.filePath}. It was moved, renamed or deleted outside Responder; reopen the board.`
+    }
+    return null
+  }
+
   async saveProject(project: Project): Promise<void> {
     const key = project.filePath
     const prev = this.saveQueues.get(key) ?? Promise.resolve()
@@ -691,10 +722,28 @@ export class ProjectStore implements TaskSource {
   }
 
   private async doSaveProject(project: Project): Promise<void> {
+    // Deleted with "Delete board": an object still held elsewhere (an open
+    // side panel, the SLA walk) has nothing to save into, and writing would
+    // bring the board back.
+    if (this.deletedProjects.has(project)) return
+
     // Snapshot the dirty map and drop the live entry up front (before any await),
     // so concurrent markDirty calls land in the next save's map, not this one's.
     const dirty = this.dirtyTasks.get(project.filePath) ?? new Map<string, DirtyKind>()
     this.dirtyTasks.delete(project.filePath)
+
+    // A board whose note or task folder is no longer where this object says
+    // (moved or renamed outside Responder, or deleted) is not written at all:
+    // not a recreated note at the old path, not a duplicate case beside it,
+    // and never a `taskIds: []` over the cases it records. The edits stay
+    // dirty, so they land if the board is put back.
+    const refusal = this.saveRefusal(project)
+    if (refusal) {
+      for (const [id, kind] of dirty) this.markDirty(project, [id], kind)
+      console.warn(`[PM] Not saving "${project.title}": ${refusal}`)
+      new Notice(`Responder: not saving "${project.title}" — ${refusal}`)
+      return
+    }
 
     try {
       project.updatedAt = new Date().toISOString()
@@ -759,6 +808,7 @@ export class ProjectStore implements TaskSource {
         await this.app.vault.create(project.filePath, content)
         this.hydratedBodies.add(project)
       }
+      this.persisted.add(project)
       // The object we just saved is the canonical in-memory copy (it may be a
       // clone of a previously cached project, e.g. from the project modal).
       this.projectCache.set(project.filePath, project)
@@ -864,12 +914,18 @@ export class ProjectStore implements TaskSource {
           })
           return
         }
-        // File missing somehow; fall through to recreate it.
+        // File missing: the full path below refuses to recreate it.
       }
 
       let existing = this.app.vault.getAbstractFileByPath(filePath)
       if (existing instanceof TFile && existing.path !== previousPath) {
         throw new TaskFileNameConflictError(filePath)
+      }
+      if (!existing && previousPath && !renamed) {
+        // The note was moved or deleted outside Responder. Recreating it here
+        // wrote a duplicate case beside the real one (or brought back one the
+        // analyst deleted), without its body.
+        throw new Error(`the note for "${task.title}" is no longer at ${previousPath}`)
       }
 
       if (!existing && renamed && previousPath) {
@@ -1913,6 +1969,10 @@ export class ProjectStore implements TaskSource {
   }
 
   async deleteProject(project: Project): Promise<void> {
+    // A save already running lands first, so it cannot write into the folder
+    // being trashed; every later save through this object is dropped.
+    await this.saveQueues.get(project.filePath)
+    this.deletedProjects.add(project)
     // v3: the project's own folder holds everything — trash it whole.
     // Older layouts: task folder + project file live apart, delete both.
     const ownFolder = projectFolderForProjectPath(project.filePath)
