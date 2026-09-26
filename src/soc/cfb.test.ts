@@ -240,6 +240,14 @@ describe('cfbNote', () => {
     expect(cfbNote('ObjectPool')).toBe('named as embedded objects')
   })
 
+  it('names the stream an encrypted .docx, .xlsx or .pptx is sealed in', () => {
+    for (const name of ['EncryptedPackage', 'ENCRYPTEDPACKAGE', 'encryptedpackage']) {
+      expect(cfbNote(name)).toBe('named as an encrypted Office package, whose contents cannot be read here')
+    }
+    // The settings stream beside it restates the same fact; one line says it.
+    expect(cfbNote('EncryptionInfo')).toBeNull()
+  })
+
   it('says nothing about ordinary names or a name that only contains a notable one', () => {
     for (const name of [
       'Root Entry',
