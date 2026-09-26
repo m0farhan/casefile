@@ -94,6 +94,32 @@ describe('parseEml', () => {
     expect(eml2.notes).toContain('A multipart/mixed part declared no boundary, so its contents were not read.')
   })
 
+  it('says so when no line opens a part with the declared boundary, instead of "headers only"', () => {
+    const note =
+      'A multipart/mixed part has no line opening a part with its declared boundary, so its contents were not read.'
+    const inner =
+      'A multipart/alternative part has no line opening a part with its declared boundary, so its contents were not read.'
+    const top = parseEml(
+      'From: a@b.test\nContent-Type: multipart/mixed; boundary="X"\n\n--Y\nContent-Type: text/plain\n\nClick https://evil.test/x\n--Y--\n'
+    )
+    // The nested boundary does appear, inside the longer `--INX`, so the note must not say it is absent.
+    const nested = parseEml(
+      'Content-Type: multipart/mixed; boundary="OUT"\n\n--OUT\nContent-Type: text/plain\n\nHello\n' +
+        '--OUT\nContent-Type: multipart/alternative; boundary="IN"\n\n--INX\nContent-Type: text/html\n\n' +
+        '<a href="https://evil.test/nested">x</a>\n--INX--\n--OUT--\n'
+    )
+    const closeOnly = parseEml('From: a@b.test\nContent-Type: multipart/mixed; boundary="X"\n\nbody\n--X--\n')
+    expect(top.notes).toEqual([note])
+    expect(nested.notes).toEqual([inner])
+    expect(closeOnly.notes).toEqual([note])
+  })
+
+  it('does not call a multipart with no boundary "headers only" as well', () => {
+    expect(parseEml('Content-Type: multipart/mixed\n\nbody').notes).toEqual([
+      'A multipart/mixed part declared no boundary, so its contents were not read.'
+    ])
+  })
+
   it('tells a headers-only paste apart from something that is not an email', () => {
     expect(parseEml('From: a@b.test\nSubject: hi').notes).toContain('No message body in this paste — headers only.')
     expect(parseEml('just prose').notes).toContain('No headers and no body — is this an email?')

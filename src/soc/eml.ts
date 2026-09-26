@@ -329,7 +329,10 @@ export function parseEml(raw: string): Eml {
   const root = splitHeadersAndBody(withoutLeadingBlankLines(raw))
   const out: Eml = { headers: root.headers, text: '', html: '', attachments: [], notes: [] }
   walk(root, out, 0)
-  if (!out.text && !out.html && !out.attachments.length) {
+  // Only when nothing at all was found or noted: every note that can stand
+  // beside an empty result says something was not read, and "headers only"
+  // next to it contradicted it.
+  if (!out.text && !out.html && !out.attachments.length && !out.notes.length) {
     out.notes.push(
       out.headers.length
         ? 'No message body in this paste — headers only.'
@@ -355,7 +358,18 @@ function walk(part: RawPart, out: Eml, depth: number): void {
       out.notes.push(`A ${mime} part declared no boundary, so its contents were not read.`)
       return
     }
-    for (const chunk of splitParts(part.body, boundary)) walk(splitHeadersAndBody(chunk), out, depth + 1)
+    const parts = splitParts(part.body, boundary)
+    // A body with no line opening a part — a truncated paste, or a boundary
+    // that is not the one the parts use — was lost without a word, and the
+    // root then called the mail "headers only". The boundary is the sender's
+    // text and may well appear inside a longer line, so the note does not
+    // quote it or say it is absent.
+    if (!parts.length && /\S/.test(part.body)) {
+      out.notes.push(
+        `A ${mime} part has no line opening a part with its declared boundary, so its contents were not read.`
+      )
+    }
+    for (const chunk of parts) walk(splitHeadersAndBody(chunk), out, depth + 1)
     return
   }
 
