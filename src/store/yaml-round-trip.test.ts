@@ -654,3 +654,24 @@ describe('a sender-controlled title cannot escape the wiki-link it is written in
     expect(line.match(/\]\]/g)?.length).toBe(1)
   })
 })
+
+describe('hand-written Project: and Parent: lines in a description', () => {
+  it('survive two round trips when they carry no alias', () => {
+    const description = 'Context from ticket:\nProject: [[Acme onboarding]]\nParent: [[INC-2024-001]]\nEnd of notes.'
+    let task = makeTask({ id: 'h1', description })
+    const parent = makeTask({ id: 'p1', title: 'Parent case', filePath: 'Projects/Tasks/Test/Parent case.md' })
+    for (let round = 0; round < 2; round++) task = roundTripTask(task, undefined, parent).task
+    expect(task.description).toBe(description)
+  })
+
+  it('the generated backlink is still stripped, brackets in the board name included', () => {
+    const md = serializeTask(
+      makeTask({ id: 'b1', description: 'Body.' }),
+      makeProject('Acme [Q3]', 'Acme [Q3]/Acme [Q3].md')
+    )
+    expect(md).toContain('Project: [[Acme [Q3]|Acme  Q3 ]]')
+    const { frontmatter, body } = parseFrontmatter(md)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    expect(hydrateTaskFromFile(frontmatter, body, 'x.md').task.description).toBe('Body.')
+  })
+})
