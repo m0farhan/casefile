@@ -174,6 +174,23 @@ describe('parser evasions that used to hide content from the analyst', () => {
     expect(named(`filename="${'\\a'.repeat(10_000_000)}"`)).toHaveLength(10_000_000)
   })
 
+  it('reads RFC 2231 continuations the way the client assembles them', () => {
+    // A literal first piece carries no charset'language' prefix to strip.
+    expect(named('filename*0="Mike\'s and Jane\'s travel "; filename*1="expenses.pdf"')).toBe(
+      "Mike's and Jane's travel expenses.pdf"
+    )
+    // Padding inside the quotes is the sender's, kept as sent.
+    expect(named('filename*0="invoice.pdf          "; filename*1=".exe"')).toBe('invoice.pdf          .exe')
+    // An RLO split across two encoded pieces is one character.
+    expect(named("filename*0*=UTF-8''invoice%E2%80; filename*1*=%AEfdp.exe")).toBe('invoice\u202efdp.exe')
+    // One undecodable byte no longer leaves the whole piece as %-escapes.
+    expect(named("filename*=UTF-8''%FFinvoice%E2%80%AEfdp.exe")).toBe('\ufffdinvoice\u202efdp.exe')
+    // The declared charset is honoured.
+    expect(named("filename*=iso-8859-1''caf%E9.pdf")).toBe('café.pdf')
+    // A raw override inside an encoded piece survives as itself.
+    expect(named("filename*=UTF-8''inv\u202eoice.pdf")).toBe('inv\u202eoice.pdf')
+  })
+
   it('opens a forwarded message and finds the payload inside it', () => {
     // Forward-as-attachment is how most reported phish reaches a SOC.
     const inner =

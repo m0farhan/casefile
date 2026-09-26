@@ -142,25 +142,47 @@ function extendedParam(all: Param[], key: string): string {
       // A continuation piece is percent-encoded only when its own name ends
       // with `*`; an unmarked piece is literal and must not be decoded.
       encoded: Boolean(m[2]) || m[1] === undefined,
-      text: p.value.trim()
+      // Untrimmed: `"invoice.pdf          "` is padding the sender chose, to
+      // push `.exe` out of sight, and trimming it showed a name nobody sent.
+      text: p.value
     })
   }
   if (!pieces.length) return ''
   pieces.sort((a, b) => a.index - b.index)
+  // charset'language' opens the first piece, and only an encoded one (RFC 2231
+  // §4). Stripped from a literal piece it ate "Mike's and Jane's travel ".
+  let charset = ''
+  const first = pieces[0]
+  const tag = first.index === 0 && first.encoded ? /^([^']*)'[^']*'/.exec(first.text) : null
+  if (tag) {
+    charset = tag[1]
+    first.text = first.text.slice(tag[0].length)
+  }
+  // A run of encoded pieces is one byte string, decoded once in its declared
+  // charset. Piece by piece, a UTF-8 character split across two pieces — an
+  // RLO, say — stayed as %-escapes and the override it spells went unremarked,
+  // and one stray %FF left a whole piece undecoded.
+  const utf8 = new TextEncoder()
   let out = ''
+  let run: number[] = []
+  const flush = (): void => {
+    if (run.length) out += decodeText(Uint8Array.from(run), charset, true, '')
+    run = []
+  }
   for (const piece of pieces) {
-    // charset'language'text — only ever on the first piece.
-    const text = piece.index === 0 ? piece.text.replace(/^[^']*'[^']*'/, '') : piece.text
     if (!piece.encoded) {
-      out += text
+      flush()
+      out += piece.text
       continue
     }
-    try {
-      out += decodeURIComponent(text)
-    } catch {
-      out += text
+    for (const chunk of piece.text.split(/(%[0-9A-Fa-f]{2})/)) {
+      if (/^%[0-9A-Fa-f]{2}$/.test(chunk)) run.push(parseInt(chunk.slice(1), 16))
+      // A literal character as the UTF-8 it was read from, not its low byte:
+      // U+202E cut to 0x2E is a '.', and the override would vanish.
+      else for (const byte of utf8.encode(chunk)) run.push(byte)
     }
   }
+  flush()
   return out
 }
 
