@@ -1,0 +1,226 @@
+import type { App } from 'obsidian'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { makeFakeApp } from '../../test/fakeVault'
+import type PMPlugin from '../main'
+import { ProjectStore } from '../store/ProjectStore'
+import { findTaskById } from '../store/TaskIndex'
+import { guardVerdictOnClose } from '../soc/verdictGuard'
+import { DEFAULT_SETTINGS, makeTask, type Task } from '../types'
+import { confirmDialog } from '../ui/ModalFactory'
+import { TaskModal } from './TaskModal'
+
+const { notices, menuItems } = vi.hoisted(() => ({
+  notices: [] as string[],
+  menuItems: [] as { title: string; run: () => void }[]
+}))
+
+// Modal and Menu as the modal uses them; everything else the import chain
+// extends resolves to a bare stand-in (views have no DOM here).
+vi.mock('obsidian', async (importOriginal) => {
+  const real = await importOriginal<Record<string, unknown>>()
+  function Stub(): void {}
+  const overrides: Record<string, unknown> = {
+    Notice: class {
+      constructor(message: string) {
+        notices.push(message)
+      }
+      hide(): void {}
+    },
+    Modal: class {
+      closed = false
+      constructor(public app: unknown) {}
+      close(): void {
+        this.closed = true
+        ;(this as unknown as { onClose(): void }).onClose()
+      }
+    },
+    Menu: class {
+      addItem(build: (item: object) => void): this {
+        const entry = { title: '', run: () => {} }
+        const item = {
+          setTitle: (t: string) => {
+            entry.title = t
+            return item
+          },
+          setIcon: () => item,
+          setWarning: () => item,
+          onClick: (fn: () => void) => {
+            entry.run = fn
+            return item
+          }
+        }
+        build(item)
+        menuItems.push(entry)
+        return this
+      }
+      addSeparator(): this {
+        return this
+      }
+      showAtPosition(): void {}
+    }
+  }
+  return new Proxy(real, {
+    get: (target, prop) => {
+      if (typeof prop === 'string' && prop in overrides) return overrides[prop]
+      if (prop in target) return target[prop as string]
+      if (typeof prop !== 'string' || prop === 'then') return undefined
+      return Stub
+    },
+    has: () => true
+  })
+})
+vi.mock('../ui/ModalFactory', () => ({
+  confirmDialog: vi.fn<() => Promise<boolean>>(),
+  openIndicatorSearch: vi.fn<() => void>(),
+  openTaskModal: vi.fn<() => void>()
+}))
+vi.mock('../soc/verdictGuard', () => ({ guardVerdictOnClose: vi.fn<() => Promise<object | null>>() }))
+
+/** The modal's private surface these tests drive; it is never rendered here. */
+interface Harness {
+  task: Task
+  closed: boolean
+  contentEl: { empty(): void }
+  persistTask(): Promise<void>
+  openOverflowMenu(anchor: unknown, titleError: (m: string) => void): void
+  closeThen(go: () => void): void
+  close(): void
+  onClose(): void
+}
+
+async function setup(fields: Partial<Task> = {}) {
+  const { app, vault } = makeFakeApp()
+  const store = new ProjectStore(app as unknown as App, () => DEFAULT_SETTINGS)
+  const project = await store.createProject('Board', 'Projects')
+  const plugin = { store, settings: DEFAULT_SETTINGS, refreshProjectViews: () => {} } as unknown as PMPlugin
+  const add = async (title: string, more: Partial<Task> = {}): Promise<Task> => {
+    const t = makeTask({ title, ...more })
+    await store.insertTask(project, t, null)
+    return t
+  }
+  const open = (task: Task | null): Harness => {
+    const m = new TaskModal(app as unknown as App, plugin, project, task, null, () => {}) as unknown as Harness
+    m.contentEl = { empty: () => {} }
+    return m
+  }
+  const live = (id: string): Task => {
+    const t = findTaskById(project, id)
+    if (!t) throw new Error(`no task ${id}`)
+    return t
+  }
+  const task = await add('Case', fields)
+  return { store, project, vault, add, open, live, task }
+}
+
+/** One macrotask: every promise the handler chained has settled by then (the fake vault never waits on I/O). */
+const settle = () => new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0))
+
+/** Runs the overflow menu's item and waits out its async handler. */
+async function choose(m: Harness, title: string, titleError: (message: string) => void = () => {}): Promise<void> {
+  menuItems.length = 0
+  m.openOverflowMenu({ getBoundingClientRect: () => ({ left: 0, bottom: 0 }) }, titleError)
+  const item = menuItems.find((i) => i.title === title)
+  if (!item) throw new Error(`no ${title} item`)
+  item.run()
+  await settle()
+}
+
+beforeEach(() => {
+  notices.length = 0
+  vi.mocked(confirmDialog).mockReset()
+  vi.mocked(guardVerdictOnClose).mockReset().mockResolvedValue({})
+})
+
+describe('TaskModal saving', () => {
+  it('a second save after the first one finished reaches the store', async () => {
+    const { open, live, task } = await setup()
+    const m = open(task)
+    m.task.description = 'edit one'
+    await m.persistTask()
+    m.task.description = 'edit two'
+    await m.persistTask()
+    expect(live(task.id).description).toBe('edit two')
+  })
+
+  it('after a failed Archive, later edits still save, and a rename is not its own conflict', async () => {
+    const { store, project, open, add, live } = await setup()
+    const first = await add('Dup')
+    await store.archiveTask(project, first.id)
+    const second = await add('Dup')
+    const m = open(second)
+    m.task.description = 'edit one'
+    vi.spyOn(console, 'error').mockImplementationOnce(() => {}) // safeAsync reports the failure
+    await choose(m, 'Archive') // the archive note name is taken, so the move fails
+    expect(live(second.id).archived).toBeFalsy()
+    m.task.description = 'edit two'
+    m.task.title = 'Renamed'
+    await m.persistTask()
+    expect(live(second.id).description).toBe('edit two')
+    expect(store.findTaskFileConflict(project, m.task)).toBeNull()
+  })
+
+  it('Archive runs the verdict prompt when it closes an incident, and Cancel archives nothing', async () => {
+    const { open, live, task } = await setup({ issueType: 'incident' })
+    vi.mocked(guardVerdictOnClose).mockResolvedValueOnce(null)
+    const m = open(task)
+    m.task.status = 'done'
+    await choose(m, 'Archive')
+    expect(guardVerdictOnClose).toHaveBeenCalledOnce()
+    expect(live(task.id).status).toBe('todo')
+    expect(live(task.id).archived).toBeFalsy()
+  })
+
+  it('Archive with a cleared title says so and writes nothing', async () => {
+    const { open, live, task, vault } = await setup()
+    const errors: string[] = []
+    const m = open(task)
+    m.task.title = ''
+    await choose(m, 'Archive', (e) => errors.push(e))
+    expect(errors).toEqual(['A title is required.'])
+    expect(live(task.id).title).toBe('Case')
+    expect(live(task.id).archived).toBeFalsy()
+    expect(vault.getAbstractFileByPath('Projects/Board/Tasks/Archive/.md')).toBeNull()
+  })
+
+  it('closing with a title another note has keeps the old title and saves the rest', async () => {
+    const { open, add, live, task } = await setup()
+    await add('Beta')
+    const m = open(task)
+    m.task.description = 'EVIDENCE: attacker IP seen'
+    m.task.title = 'Beta'
+    m.onClose()
+    await vi.waitFor(() => expect(live(task.id).description).toBe('EVIDENCE: attacker IP seen'))
+    expect(live(task.id).title).toBe('Case')
+    expect(notices).toEqual(['Title kept — a note named "Beta" already exists.'])
+  })
+})
+
+describe('TaskModal new-case draft', () => {
+  it('X, Esc or a click outside asks before a typed draft is dropped', async () => {
+    const { open, project } = await setup()
+    const m = open(null)
+    m.task.title = 'Suspicious login'
+    vi.mocked(confirmDialog).mockResolvedValueOnce(false)
+    m.close()
+    await vi.waitFor(() => expect(confirmDialog).toHaveBeenCalledOnce())
+    expect(m.closed).toBe(false)
+
+    vi.mocked(confirmDialog).mockResolvedValueOnce(true)
+    m.close()
+    await vi.waitFor(() => expect(m.closed).toBe(true))
+    expect(project.tasks.map((t) => t.title)).toEqual(['Case'])
+  })
+
+  it('leaving for another case waits for the answer, and Keep goes nowhere', async () => {
+    const { open } = await setup()
+    const m = open(null)
+    m.task.title = 'Suspicious login'
+    const go = vi.fn<() => void>()
+    vi.mocked(confirmDialog).mockResolvedValueOnce(false)
+    m.closeThen(go)
+    await vi.waitFor(() => expect(confirmDialog).toHaveBeenCalledOnce())
+    await settle()
+    expect(go).not.toHaveBeenCalled()
+    expect(m.closed).toBe(false)
+  })
+})

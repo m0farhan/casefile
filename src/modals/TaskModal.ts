@@ -53,6 +53,8 @@ export class TaskModal extends Modal {
   private saveKeyHandler: ((e: KeyboardEvent) => void) | null = null
   /** Title autofocus fires on the first render only; rerenders must not steal focus. */
   private focusedTitleOnce = false
+  /** A discard prompt is open; a second Esc or click-out must not stack another. */
+  private confirming = false
 
   constructor(
     app: App,
@@ -110,6 +112,43 @@ export class TaskModal extends Modal {
     return JSON.stringify(this.task) !== this.originalJson
   }
 
+  /** True when closing now would drop a new case the analyst has typed into. */
+  private needsDiscardConfirm(): boolean {
+    return this.isNew && !this.saved && !this.cancelled && this.isDirty()
+  }
+
+  /** Resolves true when the modal may close; asks first when a new case's draft would be lost. */
+  private async confirmLeave(): Promise<boolean> {
+    if (!this.needsDiscardConfirm()) return true
+    if (this.confirming) return false
+    this.confirming = true
+    try {
+      return await confirmDialog(this.app, 'Discard this new case?', 'Discard')
+    } finally {
+      this.confirming = false
+    }
+  }
+
+  /** X, Esc and a click outside all come through here. An existing case saves
+   * on close (onClose); a new one is written only by Create, so closing over
+   * a typed draft asks first. */
+  close(): void {
+    if (this.needsDiscardConfirm()) this.closeThen(() => {})
+    else super.close()
+  }
+
+  /** Leaves for another note, case or search. A new draft asks first, and
+   * `go` runs only once the modal has closed, so nothing opens over a prompt
+   * the analyst then answers with Keep. An existing case saves on the way out
+   * (UX-01). */
+  private readonly closeThen = safeAsync(async (go: () => void) => {
+    if (!(await this.confirmLeave())) return
+    this.saved = false
+    this.cancelled = this.isNew
+    this.close()
+    go()
+  })
+
   onClose(): void {
     if (this.plugin.settings.saveTaskOnClose && !this.isNew && !this.cancelled && !this.saved) {
       // A cleared title never discards the rest of the edits — keep the
@@ -118,7 +157,15 @@ export class TaskModal extends Modal {
         this.task.title = this.originalTitle
         new Notice('Title kept — a title is required.')
       }
-      const conflict = this.plugin.store.findTaskFileConflict(this.project, this.task)
+      // Nor does a title another note already has.
+      let conflict = this.plugin.store.findTaskFileConflict(this.project, this.task)
+      if (conflict && this.task.title !== this.originalTitle) {
+        this.task.title = this.originalTitle
+        new Notice(`Title kept — a note named "${conflict.fileName}" already exists.`)
+        conflict = this.plugin.store.findTaskFileConflict(this.project, this.task)
+      }
+      // A clash the title did not cause (its own note's path taken meanwhile)
+      // still stops the save, rather than fail half-way inside the store.
       if (conflict) {
         new Notice(`Task not saved: a note named "${conflict.fileName}" already exists.`)
       } else {
@@ -154,40 +201,75 @@ export class TaskModal extends Modal {
     await this.persistTask()
   })
 
+  /** A second caller shares the save in flight; once it settles, the next call saves again. */
   private persistTask(): Promise<void> {
-    if (this.persistPromise) return this.persistPromise
-    const p = (async () => {
+    this.persistPromise ??= (async () => {
       try {
         await this.runPersist()
-      } catch (err) {
+      } finally {
         this.persistPromise = null
-        throw err
       }
     })()
-    this.persistPromise = p
-    return p
+    return this.persistPromise
+  }
+
+  /** The checks a save makes before it writes: a title, a title no other note
+   * has, and the verdict prompt when the save changes the status. False when
+   * the save must not go ahead; the modal then stays open. */
+  private async readyToPersist(titleError: (message: string) => void): Promise<boolean> {
+    if (!this.task.title.trim()) {
+      titleError('A title is required.')
+      return false
+    }
+    // A new case is placed by insertTask, which runs its own parent-aware check.
+    const conflict = this.isNew ? null : this.plugin.store.findTaskFileConflict(this.project, this.task)
+    if (conflict) {
+      titleError(`A note named "${conflict.fileName}" already exists. Choose a different title.`)
+      return false
+    }
+    if (this.task.status !== this.originalStatus) {
+      const patch = await guardVerdictOnClose(this.plugin, this.project, this.task, this.task.status)
+      if (patch === null) return false // the close was cancelled: save nothing
+      if (patch.verdict) this.task.verdict = patch.verdict
+    }
+    return true
   }
 
   private async runPersist(): Promise<void> {
     // ponytail: 'Subtask of…' with no parent picked is not a subtask — a
     // top-level task typed 'subtask' confuses every tree walk downstream.
     if (this.task.type === 'subtask' && this.parentId == null) this.task.type = 'task'
-    const opts = { removedSubtaskIds: this.removedSubtaskIds }
     if (this.isNew) {
       await this.plugin.store.insertTask(this.project, this.task, this.parentId)
     } else {
       const patch = this.original ? diffTaskPatch(this.original, this.task) : this.task
-      await this.plugin.store.updateTask(this.project, this.task.id, patch, opts)
+      // subtaskBase makes the subtask merge three-way: a subtask changed on
+      // the board while the modal was open keeps that change.
+      const opts = { removedSubtaskIds: this.removedSubtaskIds, subtaskBase: this.original?.subtasks }
+      // The store gets its own copy, so the live task never shares this
+      // clone's arrays (TaskDetailView.persist, which says why).
+      await this.plugin.store.updateTask(this.project, this.task.id, structuredClone(patch), opts)
       if (this.parentId !== this.originalParentId) {
         await this.plugin.store.moveTask(this.project, this.task.id, this.parentId)
       }
     }
     this.removedSubtaskIds = []
+    // What was just saved is the new starting point. The modal stays open
+    // after a save when an Archive then fails, and a later save must send only
+    // what changed since, update rather than insert again, and find its own
+    // renamed note where the store put it.
+    this.isNew = false
+    this.originalParentId = this.parentId
+    this.originalStatus = this.task.status
+    this.originalTitle = this.task.title
+    this.task.filePath = findTaskById(this.project, this.task.id)?.filePath ?? this.task.filePath
+    this.original = JSON.parse(JSON.stringify(this.task)) as Task
+    this.originalJson = JSON.stringify(this.task)
     await this.plugin.store.scheduleAfterChange(this.project, this.task.id)
     await this.onSave(this.task)
   }
 
-  private openOverflowMenu(anchorEl: HTMLElement): void {
+  private openOverflowMenu(anchorEl: HTMLElement, titleError: (message: string) => void): void {
     const menu = new Menu()
     if (this.task.filePath) {
       const filePath = this.task.filePath
@@ -195,15 +277,12 @@ export class TaskModal extends Modal {
         item
           .setTitle('Open as note')
           .setIcon('file-text')
-          .onClick(() => {
-            this.saved = false
-            this.cancelled = false
-            this.close()
-            void this.app.workspace.openLinkText(filePath, '', true)
-          })
+          .onClick(() => this.closeThen(() => void this.app.workspace.openLinkText(filePath, '', true)))
       )
       menu.addSeparator()
     }
+    // Archive and Unarchive save first, through the same checks as Save:
+    // closing an incident on the way into the archive still asks for its verdict.
     if (this.task.archived) {
       menu.addItem((item) =>
         item
@@ -211,6 +290,7 @@ export class TaskModal extends Modal {
           .setIcon('archive-restore')
           .onClick(
             safeAsync(async () => {
+              if (!(await this.readyToPersist(titleError))) return
               await this.persistTask() // UX-01: never drop edits on the way out
               await this.plugin.store.unarchiveTask(this.project, this.task.id)
               new Notice('Task unarchived')
@@ -227,6 +307,7 @@ export class TaskModal extends Modal {
           .setIcon('archive')
           .onClick(
             safeAsync(async () => {
+              if (!(await this.readyToPersist(titleError))) return
               await this.persistTask() // UX-01: never drop edits on the way out
               await this.plugin.store.archiveTask(this.project, this.task.id)
               new Notice('Task archived')
@@ -316,15 +397,18 @@ export class TaskModal extends Modal {
 
     header.createDiv('pm-te-header-spacer')
 
+    // The title's inline error is built below; the menu reports into it.
+    let titleErrorFn: (message: string) => void = (m) => new Notice(m)
     if (!this.isNew) {
       const moreBtn = new ExtraButtonComponent(header).setIcon('more-horizontal').setTooltip('More actions')
       moreBtn.extraSettingsEl.addClass('pm-te-header-btn')
-      moreBtn.onClick(() => this.openOverflowMenu(moreBtn.extraSettingsEl))
+      moreBtn.onClick(() => this.openOverflowMenu(moreBtn.extraSettingsEl, titleErrorFn))
     }
     const closeBtn = new ExtraButtonComponent(header).setIcon('x').setTooltip('Close')
     closeBtn.extraSettingsEl.addClass('pm-te-header-btn')
-    // Same as Esc / click-out: save-on-close applies (UX-01). Only the
-    // footer Cancel discards, and it asks first when there is something to lose.
+    // Same as Esc / click-out: an existing case saves on close (UX-01), and a
+    // new case's draft asks before it is dropped. The footer Cancel discards,
+    // and it asks first when there is something to lose.
     closeBtn.onClick(() => {
       this.close()
     })
@@ -357,6 +441,7 @@ export class TaskModal extends Modal {
       titleInput.focus()
       titleInput.select()
     }
+    titleErrorFn = showTitleError
     titleInput.addEventListener('input', () => {
       this.task.title = titleInput.value
       clearTitleError()
@@ -397,6 +482,9 @@ export class TaskModal extends Modal {
       plugin: this.plugin,
       project: this.project,
       task: this.task,
+      // Called just before the editor opens the link itself, so it cannot
+      // wait: close() asks over a new draft, and the note opens behind the
+      // prompt either way.
       onNavigateAway: () => {
         this.saved = false
         this.cancelled = false
@@ -426,13 +514,8 @@ export class TaskModal extends Modal {
         },
         ownedAssets: () => this.plugin.settings.ownedAssets,
         findSightings: () => sightingsIndex(this.project.tasks, this.task.id, this.plugin.settings.ownedAssets),
-        onPivot: (value) => {
-          // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
-          this.saved = false
-          this.cancelled = false
-          this.close()
-          void openIndicatorSearch(this.plugin, value)
-        }
+        // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
+        onPivot: (value) => this.closeThen(() => void openIndicatorSearch(this.plugin, value))
       })
     }
 
@@ -456,13 +539,12 @@ export class TaskModal extends Modal {
           return
         }
         // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
-        this.saved = false
-        this.cancelled = false
-        this.close()
-        openTaskModal(this.plugin, this.project, {
-          task: live,
-          onSave: () => this.plugin.refreshProjectViews()
-        })
+        this.closeThen(() =>
+          openTaskModal(this.plugin, this.project, {
+            task: live,
+            onSave: () => this.plugin.refreshProjectViews()
+          })
+        )
       },
       onRemove: (subtaskId) => {
         this.removedSubtaskIds.push(subtaskId)
@@ -481,13 +563,12 @@ export class TaskModal extends Modal {
         const live = findTaskById(this.project, target.id)
         if (!live) return
         // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
-        this.saved = false
-        this.cancelled = false
-        this.close()
-        openTaskModal(this.plugin, this.project, {
-          task: live,
-          onSave: () => this.plugin.refreshProjectViews()
-        })
+        this.closeThen(() =>
+          openTaskModal(this.plugin, this.project, {
+            task: live,
+            onSave: () => this.plugin.refreshProjectViews()
+          })
+        )
       }
     })
 
@@ -531,16 +612,8 @@ export class TaskModal extends Modal {
       if (saving) return
       saving = true
       try {
-        if (!this.task.title.trim()) {
-          showTitleError('A title is required.')
-          return
-        }
+        if (!(await this.readyToPersist(showTitleError))) return
         clearTitleError()
-        if (this.task.status !== this.originalStatus) {
-          const patch = await guardVerdictOnClose(this.plugin, this.project, this.task, this.task.status)
-          if (patch === null) return // user cancelled the close — keep the modal open, save nothing
-          if (patch.verdict) this.task.verdict = patch.verdict
-        }
         await this.persistTask()
         this.saved = true
         this.close()
@@ -564,8 +637,10 @@ export class TaskModal extends Modal {
     this.saveKeyHandler = (e: KeyboardEvent) => {
       // Inside a multi-line field (journal composer, description editor)
       // Shift+Enter is a newline, never save-and-close (CP-11).
+      // The title is a textarea only so it can wrap; it takes no newline, and
+      // Shift+Enter in it saves, as the button says.
       const t = e.target as HTMLElement | null
-      if (t && (t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (t && t !== titleInput && (t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault()
         void doSave()
