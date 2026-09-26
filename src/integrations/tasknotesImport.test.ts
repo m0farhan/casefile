@@ -66,6 +66,18 @@ describe('buildImportForest', () => {
     expect(roots[0].recurrence).toBeUndefined()
   })
 
+  it('drops a rule listing several days, and keeps a one-day rule that its label still describes', () => {
+    const recurrenceOf = (rule: string): unknown => {
+      const item = makeItem('Tasks/r.md')
+      item.info = makeInfo({ path: 'Tasks/r.md', title: 'R', recurrence: rule })
+      return buildImportForest([item], OPTS).roots[0].recurrence
+    }
+    expect(recurrenceOf('FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR')).toBeUndefined()
+    expect(recurrenceOf('DTSTART:20260706;FREQ=WEEKLY;BYDAY=MO,WE,FR;UNTIL=20261231')).toBeUndefined()
+    expect(recurrenceOf('FREQ=WEEKLY;INTERVAL=1;BYDAY=MO')).toEqual({ interval: 'weekly', every: 1 })
+    expect(recurrenceOf('FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=15')).toEqual({ interval: 'monthly', every: 3 })
+  })
+
   it('turns project links between imported tasks into parent/child edges', () => {
     const parent = makeItem('Tasks/parent.md')
     const child = makeItem('Tasks/child.md', { parentPaths: ['Tasks/parent.md'] })

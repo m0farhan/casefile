@@ -28,11 +28,21 @@ const RRULE_INTERVALS: Record<string, Recurrence['interval']> = {
   YEARLY: 'yearly'
 }
 
-/** Map a simple RRULE (FREQ + optional INTERVAL) to our recurrence model; complex rules are dropped. */
+/**
+ * Map an RRULE to our recurrence model. FREQ and INTERVAL are carried over;
+ * BY*, COUNT and UNTIL are not. A one-day BYDAY, BYMONTHDAY or BYMONTH (what
+ * every TaskNotes preset writes) is the task's own anchor day, so "Repeats
+ * weekly" still says what the rule does. A BYDAY listing several days
+ * (weekdays, Mon/Wed/Fri) is not: the label would understate it, so that rule
+ * is dropped, as is a FREQ the model has no interval for (HOURLY).
+ */
 function mapRecurrence(rrule: string | undefined): Recurrence | undefined {
   const freq = rrule?.match(/FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)/)
-  if (!freq) return undefined
-  const every = rrule?.match(/INTERVAL=(\d+)/)
+  if (!rrule || !freq) return undefined
+  // Split into parts rather than one regex over the whole rule, so the check
+  // stays linear however long a hand edit made it.
+  if (rrule.split(/[;:\s]/).some((part) => part.startsWith('BYDAY=') && part.includes(','))) return undefined
+  const every = rrule.match(/INTERVAL=(\d+)/)
   return { interval: RRULE_INTERVALS[freq[1]], every: every ? parseInt(every[1], 10) : 1 }
 }
 
