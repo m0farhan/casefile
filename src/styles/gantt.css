@@ -228,6 +228,16 @@
   fill: color-mix(in srgb, var(--interactive-accent) 3%, transparent);
 }
 
+/* A row whose date the chart range cannot show: the stored date, in text */
+.pm-gantt-out-of-range {
+  font-size: 11px;
+  fill: var(--text-muted);
+  dominant-baseline: central;
+}
+.pm-gantt-out-of-range:hover {
+  fill: var(--text-normal);
+}
+
 /* Empty row click-to-set-dates */
 .pm-gantt-empty-row-hit:hover {
   fill: color-mix(in srgb, var(--interactive-accent) 3%, transparent);

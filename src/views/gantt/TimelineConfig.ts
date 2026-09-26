@@ -31,19 +31,36 @@ const MIN_DAYS: Record<GanttGranularity, number> = {
   quarter: 365
 }
 
+// ponytail: a fixed ceiling on the chart span per granularity (about 2, 6, 20
+// and 40 years). One mistyped year, 2206 for 2026, would otherwise stretch every
+// per-day loop (grid, header, snap points) over tens of thousands of days on
+// each refresh. Raise a value if real cases ever need a wider view.
+export const MAX_DAYS: Record<GanttGranularity, number> = {
+  day: 732,
+  week: 2192,
+  month: 7305,
+  quarter: 14610
+}
+
 export function buildTimelineConfig(tasks: Task[], granularity: GanttGranularity): TimelineCfg {
   const allTasks = flattenTasks(tasks).map((f) => f.task)
-  const dates: Temporal.PlainDate[] = []
+  const now = today()
+  const dates: Temporal.PlainDate[] = [now]
+
+  // Only dates this close to today widen the range. The reach leaves room for
+  // the 7 + 14 days of padding and the month snap (up to 30 days) below, so the
+  // span stays within MAX_DAYS. Rows with a date the range misses say so in text.
+  const reach = Math.floor((MAX_DAYS[granularity] - 51) / 2)
+  const earliest = now.subtract({ days: reach })
+  const latest = now.add({ days: reach })
+  const inReach = (d: Temporal.PlainDate): boolean =>
+    Temporal.PlainDate.compare(d, earliest) >= 0 && Temporal.PlainDate.compare(d, latest) <= 0
 
   for (const t of allTasks) {
-    const start = parsePlainDate(t.start)
-    const due = parsePlainDate(t.due)
-    if (start) dates.push(start)
-    if (due) dates.push(due)
+    for (const d of [parsePlainDate(t.start), parsePlainDate(t.due)]) {
+      if (d && inReach(d)) dates.push(d)
+    }
   }
-
-  const now = today()
-  dates.push(now)
 
   let startDate = dates.reduce((min, d) => (Temporal.PlainDate.compare(d, min) < 0 ? d : min), dates[0])
   let endDate = dates.reduce((max, d) => (Temporal.PlainDate.compare(d, max) > 0 ? d : max), dates[0])
@@ -79,6 +96,14 @@ export function buildTimelineConfig(tasks: Task[], granularity: GanttGranularity
 
 export function dateToX(cfg: TimelineCfg, date: Temporal.PlainDate): number {
   return date.since(cfg.startDate, { largestUnit: 'days' }).days * cfg.dayWidth
+}
+
+/**
+ * True when a day falls outside the drawn range. No bar, diamond or arrow can
+ * stand for that day truthfully, so its row states the date in text instead.
+ */
+export function outOfRange(cfg: TimelineCfg, date: Temporal.PlainDate): boolean {
+  return Temporal.PlainDate.compare(date, cfg.startDate) < 0 || Temporal.PlainDate.compare(date, cfg.endDate) >= 0
 }
 
 export function xToDate(cfg: TimelineCfg, x: number): Temporal.PlainDate {

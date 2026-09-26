@@ -8,7 +8,15 @@ import { renderAddButton } from '../../ui/composites/addButton'
 import { SegmentedControl } from '../../ui/primitives/SegmentedControl'
 import type { SubView } from '../SubView'
 import type { TimelineCfg } from './TimelineConfig'
-import { buildTimelineConfig, dateToX, xToDate, HEADER_HEIGHT, ROW_HEIGHT, LABEL_WIDTH } from './TimelineConfig'
+import {
+  buildTimelineConfig,
+  dateToX,
+  xToDate,
+  getSnapPoints,
+  HEADER_HEIGHT,
+  ROW_HEIGHT,
+  LABEL_WIDTH
+} from './TimelineConfig'
 import { makeDragState } from './GanttDragHandler'
 import type { DragState } from './GanttDragHandler'
 import { makeLinkState, cancelLink } from './GanttLinkHandler'
@@ -299,6 +307,7 @@ export class GanttView implements SubView {
       svgEl: this.svgEl,
       headerSvgEl: this.headerSvgEl,
       cfg: this.cfg,
+      snapPoints: getSnapPoints(this.cfg),
       plugin: this.plugin,
       project: this.project,
       statuses: this.plugin.store.configFor(this.project).statuses,
