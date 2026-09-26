@@ -52,6 +52,9 @@ export function renderFilterDropdown(
         onChange(selected)
         updateLabel()
         for (const sync of rowSyncs) sync()
+        // Clear removes itself; focus moves to the first option rather than
+        // dropping to the document with the button.
+        list.querySelector<HTMLElement>('.pm-pop-item')?.focus()
         renderFooter()
       })
     }

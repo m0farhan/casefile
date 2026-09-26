@@ -312,6 +312,14 @@ describe('renderFilterDropdown', () => {
     expect(pops()).toHaveLength(1)
   })
 
+  it('Clear hands focus to the first option as it removes itself', () => {
+    const { chip } = mount(['closed'])
+    chip.fire('click')
+    clearRow()?.focus()
+    clearRow()?.fire('click')
+    expect(doc.activeElement).toBe(optionRows()[0])
+  })
+
   it('the Clear row appears once a first option is toggled on', () => {
     const { chip } = mount()
     chip.fire('click')
