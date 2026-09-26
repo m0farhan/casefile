@@ -261,6 +261,11 @@ export function hydrateProjectFromFrontmatter(
     filePath,
     savedViews: hydrateSavedViews((frontmatter.savedViews as unknown[]) ?? []),
     config: hydrateProjectConfig(frontmatter.config),
+    // Only a readable instant is kept. A hand-edited value that does not parse
+    // would otherwise reset the reports to a moment nobody chose.
+    ...(typeof frontmatter.reportsSince === 'string' && !Number.isNaN(Date.parse(frontmatter.reportsSince))
+      ? { reportsSince: frontmatter.reportsSince }
+      : {}),
     taskIndex: new Map()
   }
 }

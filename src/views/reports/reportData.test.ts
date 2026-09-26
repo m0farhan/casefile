@@ -6,6 +6,7 @@ import {
   openBySeverity,
   openedClosedPerWeek,
   reportSummary,
+  sinceBaseline,
   slaCompliance,
   timeInStatus,
   verdictBreakdown
@@ -243,5 +244,25 @@ describe('openBySeverity', () => {
       ['sev1']
     )
     expect(rows).toEqual([{ severityId: 'sev1', count: 1 }])
+  })
+})
+
+describe('sinceBaseline', () => {
+  const at = (createdAt: string) => makeTask({ createdAt })
+
+  it('counts everything when the board was never reset', () => {
+    const tasks = [at('2026-01-01T00:00:00Z'), at('not a date')]
+    expect(sinceBaseline(tasks, undefined)).toEqual({ counted: tasks, before: 0, undated: 0 })
+  })
+
+  it('counts cases created at or after the reset, and says what it left out', () => {
+    const early = at('2026-09-26T12:59:59.999Z')
+    const exact = at('2026-09-26T13:00:00.000Z')
+    const later = at('2026-09-27T08:00:00+01:00')
+    const blank = at('')
+    const out = sinceBaseline([early, exact, later, blank], '2026-09-26T13:00:00.000Z')
+    expect(out.counted).toEqual([exact, later])
+    expect(out.before).toBe(1)
+    expect(out.undated).toBe(1)
   })
 })

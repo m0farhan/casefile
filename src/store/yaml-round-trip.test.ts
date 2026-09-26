@@ -385,6 +385,21 @@ describe('Responder field round-trips', () => {
     expect(project.keyPrefix).toBe('SOC')
     expect(project.nextKeySeq).toBe(7)
   })
+
+  it('round-trips a reports reset, and omits it on boards never reset', () => {
+    const never = makeProject('Never', 'Projects/Never.md')
+    expect(roundTripProject(never).frontmatter).not.toHaveProperty('reportsSince')
+
+    const reset = makeProject('Reset', 'Projects/Reset.md')
+    reset.reportsSince = '2026-09-26T13:02:00.000Z'
+    expect(roundTripProject(reset).project.reportsSince).toBe('2026-09-26T13:02:00.000Z')
+  })
+
+  it('drops a reports reset that is not a readable instant', () => {
+    const { frontmatter, body } = parseFrontmatter('---\nid: p\nreportsSince: last tuesday\n---\n')
+    if (!frontmatter) throw new Error('frontmatter missing')
+    expect(hydrateProjectFromFrontmatter(frontmatter, body, 'Projects/P.md', 'P')).not.toHaveProperty('reportsSince')
+  })
 })
 
 describe('comments section round-trip', () => {

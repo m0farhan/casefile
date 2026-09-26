@@ -1,3 +1,4 @@
+import { ButtonComponent, Notice, setTooltip } from 'obsidian'
 import type PMPlugin from '../../main'
 import type { FilterState, Project, Task } from '../../types'
 import { matchesFilter } from '../../store/TaskFilter'
@@ -11,6 +12,7 @@ import {
   openBySeverity,
   openedClosedPerWeek,
   reportSummary,
+  sinceBaseline,
   slaCompliance,
   timeInStatus,
   verdictBreakdown,
@@ -46,12 +48,17 @@ export class ReportsView implements SubView {
     // Reports are historical: archiving a closed case must not erase it from
     // the charts, so the corpus always includes archived tasks.
     const reportFilter: FilterState = { ...this.filter, showArchived: true }
-    const tasks = flattenTasks(this.project.tasks)
-      .map((f) => f.task)
-      .filter((t) => matchesFilter(t, reportFilter, cfg.statuses, queryCtx))
+    const baseline = sinceBaseline(
+      flattenTasks(this.project.tasks)
+        .map((f) => f.task)
+        .filter((t) => matchesFilter(t, reportFilter, cfg.statuses, queryCtx)),
+      this.project.reportsSince
+    )
+    const tasks = baseline.counted
     const incidents = tasks.filter((t) => t.issueType === 'incident')
     const now = Date.now()
 
+    this.renderBaseline(root, baseline.before, baseline.undated)
     this.renderSummary(root, tasks, incidents, now)
     // Sections lay out as dashboard cards in a fluid grid, Jira-gadget style.
     const grid = root.createDiv('pm-report-grid')
@@ -66,6 +73,57 @@ export class ReportsView implements SubView {
       this.renderSlaCompliance(grid, incidents, now)
       this.renderLifecycleDurations(grid, incidents)
     }
+  }
+
+  /**
+   * Reset: every chart below counts only cases created from now on. Nothing is
+   * deleted — the cases stay on the board, and "Show all time" puts them back
+   * in the counts — so it asks nothing first. What a reset leaves out is said
+   * above the numbers, because a zero after a reset reads exactly like a quiet
+   * board otherwise.
+   */
+  private renderBaseline(root: HTMLElement, before: number, undated: number): void {
+    const since = this.project.reportsSince
+    const row = root.createDiv('pm-report-baseline')
+    const text = row.createDiv('pm-report-baseline-text')
+    if (since) {
+      const when = new Date(since).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      text.createSpan({ cls: 'pm-report-baseline-since', text: `Counting cases created since ${when}.` })
+      const left: string[] = []
+      if (before) left.push(`${before} created earlier`)
+      if (undated) left.push(`${undated} with no readable creation time`)
+      if (left.length) text.createSpan({ text: ` Not counted: ${left.join(', ')}.` })
+      new ButtonComponent(row).setButtonText('Show all time').onClick(() => void this.setSince(undefined))
+    }
+    const reset = new ButtonComponent(row)
+      .setButtonText('Reset reports')
+      .onClick(() => void this.setSince(new Date().toISOString()))
+    setTooltip(
+      reset.buttonEl,
+      'Count only cases created from now on. Nothing is deleted: the cases stay on the board, and Show all time brings them back.'
+    )
+  }
+
+  private async setSince(since: string | undefined): Promise<void> {
+    const previous = this.project.reportsSince
+    const apply = (value: string | undefined): void => {
+      if (value) this.project.reportsSince = value
+      else delete this.project.reportsSince
+    }
+    apply(since)
+    try {
+      await this.plugin.store.saveProject(this.project)
+    } catch (err: unknown) {
+      // Put the old value back: a screen showing a reset the board note does
+      // not hold would come undone on the next reload, with no sign why.
+      apply(previous)
+      console.error('[PM]', err)
+      new Notice('Could not save to the board note, so the reports are unchanged.')
+      this.render()
+      return
+    }
+    this.render()
+    new Notice(since ? 'Reports reset. Nothing was deleted.' : 'Reports show all time again.')
   }
 
   private renderSummary(root: HTMLElement, tasks: Task[], incidents: Task[], now: number): void {

@@ -74,6 +74,8 @@ export function serializeProject(project: Project, statuses: StatusConfig[] = []
     fm.keyPrefix = project.keyPrefix
     fm.nextKeySeq = project.nextKeySeq
   }
+  // Written only after a reset — boards that never reset stay diff-clean.
+  if (project.reportsSince) fm.reportsSince = project.reportsSince
   const config = serializeProjectConfig(project.config)
   if (config) fm.config = config
 

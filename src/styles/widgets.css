@@ -430,6 +430,25 @@ button.pm-comment-add:hover {
   gap: 14px;
 }
 
+/* Reset bar: what the numbers below count, and the controls that change it */
+.pm-report-baseline {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pm-report-baseline-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: var(--font-ui-small);
+  color: var(--gs-ink-muted);
+}
+.pm-report-baseline-since {
+  color: var(--gs-ink);
+  font-weight: 600;
+}
+
 /* Headline numbers: quiet stat tiles above the card grid */
 .pm-report-summary {
   display: grid;

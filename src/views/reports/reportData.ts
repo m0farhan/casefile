@@ -7,6 +7,50 @@ import { slaAnchor, slaState } from '../../soc/sla'
  * as "no data", never interpolated.
  */
 
+// Project lives in types.ts, which a concurrent change owns — the optional
+// field is added by augmentation instead, as recents.ts does for settings.
+// Fold into types.ts when convenient.
+declare module '../../types' {
+  interface Project {
+    /**
+     * "Reset reports": the Reports tab counts only cases created at or after
+     * this ISO instant. Absent means all time. Nothing is deleted — every case
+     * stays on the board, and clearing this brings them back into the counts.
+     */
+    reportsSince?: string
+  }
+}
+
+/** The cases a reset report counts, and how many it leaves out and why. */
+export interface ReportBaseline {
+  counted: Task[]
+  /** Created before the reset. */
+  before: number
+  /** Creation time missing or unreadable, so it cannot be placed either side of the reset. */
+  undated: number
+}
+
+/**
+ * Split the corpus at the reset instant. A case whose creation time cannot be
+ * read is left out and counted as such, rather than guessed into either side:
+ * counting it would put a case the analyst reset away back into the numbers,
+ * and dropping it silently would hide that it exists.
+ */
+export function sinceBaseline(tasks: Task[], since: string | undefined): ReportBaseline {
+  const from = since ? Date.parse(since) : Number.NaN
+  if (Number.isNaN(from)) return { counted: tasks, before: 0, undated: 0 }
+  const counted: Task[] = []
+  let before = 0
+  let undated = 0
+  for (const task of tasks) {
+    const at = Date.parse(task.createdAt)
+    if (Number.isNaN(at)) undated++
+    else if (at < from) before++
+    else counted.push(task)
+  }
+  return { counted, before, undated }
+}
+
 export interface WeekBucket {
   /** ISO week label, e.g. "2026-W31" (the Monday-based ISO week of the year). */
   label: string
