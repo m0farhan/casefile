@@ -2158,3 +2158,59 @@ describe('ProjectStore task titles that name a shared folder', () => {
     expect(vault.getAbstractFileByPath(pic)).toBeInstanceOf(TFile)
   })
 })
+
+describe('ProjectStore loader repairs', () => {
+  for (const copyName of ['Case A 1', 'Case A.sync-conflict-20260926-101010-ABCDEFG']) {
+    it(`keeps the original when "${copyName}.md" carries the same case id, and never writes the copy`, async () => {
+      const { store, vault, app } = newStore()
+      const project = await store.createProject('Dup', 'Projects')
+      const a = await addNamed(store, project, 'Case A')
+      const b = await addNamed(store, project, 'Case B')
+      const original = expectDefined(a.filePath)
+      const copyPath = `Projects/Dup/Tasks/${copyName}.md`
+      await vault.create(copyPath, await vault.cachedRead(vault.getAbstractFileByPath(original) as TFile))
+      vault.resetCounts()
+
+      const store2 = new ProjectStore(app, () => SETTINGS)
+      const reloaded = expectDefined(await store2.loadProject(vault.getAbstractFileByPath(project.filePath) as TFile))
+      expect(findTask(reloaded.tasks, a.id)?.filePath).toBe(original)
+      await store2.updateTask(reloaded, a.id, { status: 'done' })
+      await store2.updateTask(reloaded, b.id, { status: 'done' })
+      expect(
+        parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(original) as TFile)).frontmatter?.status
+      ).toBe('done')
+      expect(vault.modifyCount.get(copyPath) ?? 0).toBe(0)
+    })
+  }
+
+  /** A board whose case notes are written by hand, loaded by a fresh store. */
+  async function load(notes: Record<string, string>, taskIds: string[]): Promise<Project | null> {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Loop', 'Projects')
+    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    await vault.modify(pf, (await vault.cachedRead(pf)).replace('taskIds: []', `taskIds: ${JSON.stringify(taskIds)}`))
+    for (const [id, fm] of Object.entries(notes)) {
+      await vault.create(
+        `Projects/Loop/Tasks/${id}.md`,
+        `---\npm-task: true\nid: "${id}"\ntitle: "${id}"\n${fm}\n---\n`
+      )
+    }
+    return new ProjectStore(app, () => SETTINGS).loadProject(pf)
+  }
+  const ids = (p: Project | null): string[] =>
+    flattenTasks(expectDefined(p).tasks)
+      .map((f) => f.task.id)
+      .sort()
+
+  it('loads a subtask loop, a parentId loop and a self-loop with each case once', async () => {
+    expect(ids(await load({ A: 'subtaskIds: ["B"]', B: 'subtaskIds: ["A"]' }, ['A', 'B']))).toEqual(['A', 'B'])
+    expect(ids(await load({ A: 'parentId: "B"', B: 'parentId: "A"' }, []))).toEqual(['A', 'B'])
+    expect(ids(await load({ A: 'subtaskIds: ["A"]' }, ['A']))).toEqual(['A'])
+  })
+
+  it('shows a case listed both on the board and under a parent once', async () => {
+    const p = await load({ P: 'subtaskIds: ["T"]', T: '' }, ['P', 'T'])
+    expect(ids(p)).toEqual(['P', 'T'])
+    expect(expectDefined(p).tasks.map((t) => t.id)).toEqual(['P'])
+  })
+})

@@ -451,9 +451,33 @@ export class ProjectStore implements TaskSource {
     collect(folder)
 
     const results = await Promise.all(files.map((file) => this.loadTaskFile(file)))
+
+    // One file per case id. A "Make a copy" or a sync-conflict copy carries
+    // the original's id; letting the last file win hid the original and made
+    // every later save of the board collide with it. The file whose name
+    // still matches its title wins, else the first one seen. The others are
+    // never written: they are the analyst's to merge or delete.
+    const winner = new Map<string, number>()
+    const namedRight = (i: number): boolean => {
+      const { task } = results[i]
+      const path = files[i].path
+      return !!task && resolveTaskPath(task, path.slice(0, path.lastIndexOf('/')), path) === path
+    }
+    for (let i = 0; i < files.length; i++) {
+      const task = results[i].task
+      if (!task) continue
+      const current = winner.get(task.id)
+      if (current === undefined || (!namedRight(current) && namedRight(i))) winner.set(task.id, i)
+    }
+    const ignored: string[] = []
+
     for (let i = 0; i < files.length; i++) {
       const { task, subtaskIds, parentId } = results[i]
       if (task) {
+        if (winner.get(task.id) !== i) {
+          ignored.push(files[i].path)
+          continue
+        }
         if (files[i].path.startsWith(archivePrefix)) {
           task.archived = true
         }
@@ -462,6 +486,29 @@ export class ProjectStore implements TaskSource {
         if (parentId) parentIdMap.set(task.id, parentId)
       }
     }
+    this.warnDuplicates(ignored)
+
+    // Place every task at most once, and never under its own descendant. A
+    // sync conflict, a git merge or a hand edit can list a child under two
+    // parents, under a parent and the board, or in a loop; a loop made the
+    // whole board unloadable (stack overflow) and a double placement showed
+    // and saved the case twice. First claim wins; later ones are logged.
+    const parentOf = new Map<string, string>()
+    const attach = (parent: Task, child: Task): boolean => {
+      if (parentOf.has(child.id)) return false
+      // ponytail: parentOf stays a forest (every attach is checked here), so
+      // this upward walk ends; its cost is the tree depth per attach.
+      for (let p: string | undefined = parent.id; p !== undefined; p = parentOf.get(p)) {
+        if (p === child.id) return false
+      }
+      parent.subtasks.push(child)
+      parentOf.set(child.id, parent.id)
+      return true
+    }
+    const refused = (parent: Task, child: Task): void =>
+      console.warn(
+        `[PM] Not placing task "${child.title}" (${child.id}) under "${parent.title}" (${parent.id}): it is already placed, or that would form a loop`
+      )
 
     for (const [taskId, sids] of subtaskIdsMap) {
       const task = taskMap.get(taskId)
@@ -469,36 +516,31 @@ export class ProjectStore implements TaskSource {
       task.subtasks = []
       for (const sid of sids) {
         const sub = taskMap.get(sid)
-        if (sub) task.subtasks.push(sub)
+        if (sub && !attach(task, sub)) refused(task, sub)
       }
     }
 
     // Self-healing: re-parent orphaned tasks using parentId from their files
-    const childIds = new Set<string>()
-    for (const t of taskMap.values()) {
-      for (const s of t.subtasks) childIds.add(s.id)
-    }
     for (const [taskId, pid] of parentIdMap) {
-      if (childIds.has(taskId)) continue // already parented
+      if (parentOf.has(taskId)) continue // already parented
       const parent = taskMap.get(pid)
-      if (!parent) continue
       const task = taskMap.get(taskId)
-      if (!task) continue
-      parent.subtasks.push(task)
-      childIds.add(taskId)
-      // Ensure parent's subtaskIds stay in sync
-      if (!subtaskIdsMap.has(pid)) subtaskIdsMap.set(pid, [])
-      const sids = subtaskIdsMap.get(pid)
-      if (sids && !sids.includes(taskId)) sids.push(taskId)
+      if (!parent || !task) continue
+      if (!attach(parent, task)) {
+        refused(parent, task)
+        continue
+      }
       console.warn(
         `[PM] Self-healed orphan: re-parented task "${task.title}" (${taskId}) under "${parent.title}" (${pid})`
       )
     }
 
+    // Roots: the board's own order first, then every task nothing placed.
+    // A task already placed as a child is not a root as well.
     const result: Task[] = []
     const pushed = new Set<string>()
     for (const id of topLevelIds) {
-      if (pushed.has(id)) continue
+      if (pushed.has(id) || parentOf.has(id)) continue
       const task = taskMap.get(id)
       if (task) {
         result.push(task)
@@ -507,10 +549,23 @@ export class ProjectStore implements TaskSource {
     }
     for (const task of taskMap.values()) {
       if (pushed.has(task.id)) continue
-      if (!childIds.has(task.id)) result.push(task)
+      if (!parentOf.has(task.id)) result.push(task)
     }
 
     return result
+  }
+
+  /** Case notes ignored this session for sharing an id, so each is named once, not on every reload. */
+  private warnedDuplicates = new Set<string>()
+
+  private warnDuplicates(paths: string[]): void {
+    const fresh = paths.filter((p) => !this.warnedDuplicates.has(p))
+    if (!fresh.length) return
+    for (const p of fresh) this.warnedDuplicates.add(p)
+    console.warn('[PM] Ignoring notes that share a case id with another note:', fresh)
+    new Notice(
+      `Responder: ignoring ${fresh.length} note(s) that share a case id with another note: ${fresh.join(', ')}`
+    )
   }
 
   async loadTaskFile(file: TFile): Promise<{ task: Task | null; subtaskIds: string[]; parentId: string | null }> {
