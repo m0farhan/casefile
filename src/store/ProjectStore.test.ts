@@ -1925,3 +1925,61 @@ describe('ProjectStore move-cycle guard', () => {
     expect(project.taskIndex.get(parent.id)?.parentId ?? null).toBeNull()
   })
 })
+
+describe('ProjectStore notes with CRLF line endings', () => {
+  it('loads a CRLF board and case cold, and a save keeps the real description', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Crlf', 'Projects')
+    const task = await addNamed(store, project, 'Case A')
+    await store.updateTask(project, task.id, { description: 'real desc\nline two' })
+    for (const path of [project.filePath, expectDefined(task.filePath)]) {
+      const f = vault.getAbstractFileByPath(path)
+      if (!(f instanceof TFile)) throw new Error(`missing ${path}`)
+      await vault.modify(f, (await vault.cachedRead(f)).replace(/\n/g, '\r\n'))
+    }
+
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const pf = vault.getAbstractFileByPath(project.filePath)
+    if (!(pf instanceof TFile)) throw new Error('missing project file')
+    const reloaded = expectDefined(await store2.loadProject(pf))
+    const live = expectDefined(findTask(reloaded.tasks, task.id))
+    await store2.loadTaskBody(live)
+    expect(live.description).toBe('real desc\nline two')
+
+    await store2.updateTask(reloaded, task.id, { title: 'Case B' })
+    const after = await vault.cachedRead(
+      expectDefined(vault.getAbstractFileByPath(expectDefined(live.filePath))) as TFile
+    )
+    const { frontmatter, body } = parseFrontmatter(after)
+    expect(frontmatter?.title).toBe('Case B')
+    expect(body).not.toContain('pm-task')
+    expect(body.startsWith('real desc\nline two')).toBe(true)
+  })
+})
+
+describe('ProjectStore board description', () => {
+  const countLines = (content: string, line: string): number =>
+    parseFrontmatter(content)
+      .body.split('\n')
+      .filter((l) => l === line).length
+
+  it('is written once however many saves, when the title contains it', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Phishing', 'Projects')
+    project.description = 'Phishing'
+    await store.saveProject(project)
+    const file = vault.getAbstractFileByPath(project.filePath) as TFile
+    for (let i = 0; i < 10; i++) await store.saveProject(project)
+    expect(countLines(await vault.cachedRead(file), 'Phishing')).toBe(1)
+  })
+
+  it('is written once when it was saved with a trailing newline', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Queue', 'Projects')
+    project.description = 'Board for phishing cases.\n'
+    await store.saveProject(project)
+    const file = vault.getAbstractFileByPath(project.filePath) as TFile
+    for (let i = 0; i < 3; i++) await store.saveProject(project)
+    expect(countLines(await vault.cachedRead(file), 'Board for phishing cases.')).toBe(1)
+  })
+})
