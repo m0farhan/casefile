@@ -26,7 +26,7 @@ import {
   repointDescendantFiles,
   updateTaskInTree
 } from './TaskTreeOps'
-import { hydrateProjectFromFrontmatter, hydrateTaskFromFile, hydrateTasks, strList } from './YamlHydrator'
+import { hydrateProjectFromFrontmatter, hydrateTaskFromFile, hydrateTasks, strList, userExtras } from './YamlHydrator'
 import {
   FRONTMATTER_KEY,
   TASK_FRONTMATTER_KEY,
@@ -37,6 +37,7 @@ import {
 } from './YamlParser'
 import {
   buildTaskFrontmatter,
+  KNOWN_TASK_FRONTMATTER_KEYS,
   serializeProject,
   serializeTask,
   taskFilePath,
@@ -47,6 +48,7 @@ import {
 import { ensureFolder, isSharedTaskFolder, moveTaskAttachmentFolder } from './vaultFs'
 import { caseFilePath, projectFileName, projectFolderForProjectPath, taskFolderForProjectPath } from './layout'
 import type { ImportNoteOptions, TaskSource } from './TaskSource'
+import { TASKNOTES_MAPPED_KEYS } from '../integrations/tasknotesImport'
 
 /**
  * 'fm' — only frontmatter changed; body content is unaffected. Save path can
@@ -1141,11 +1143,18 @@ export class ProjectStore implements TaskSource {
     const { frontmatter, body } = parseFrontmatter(content)
     if (frontmatter?.[TASK_FRONTMATTER_KEY] === true) return 'skipped'
 
+    // The note's own properties come along: tags onto the case, everything
+    // the case does not own as extra properties. A move rewrites the note in
+    // place, so anything left out here was gone for good.
+    const fm = frontmatter ?? {}
+    const extraFrontmatter = userExtras(fm)
     const task = makeTask({
       title: file.basename,
       description: body,
       status: opts.status,
-      priority: opts.priority
+      priority: opts.priority,
+      tags: strList(fm.tags, true).map((t) => t.replace(/^#/, '')),
+      ...(extraFrontmatter ? { extraFrontmatter } : {})
     })
     const folder = this.projectTaskFolder(project)
     await this.ensureFolder(folder)
@@ -1164,6 +1173,14 @@ export class ProjectStore implements TaskSource {
       if (moved instanceof TFile) {
         await this.app.vault.process(moved, () => newContent)
       }
+      // Properties with a name the case owns (status, due, …) cannot sit
+      // beside the case's own, so a move replaces them. Say which.
+      const replaced = Object.keys(fm).filter((k) => k !== 'tags' && KNOWN_TASK_FRONTMATTER_KEYS.has(k))
+      if (replaced.length) {
+        new Notice(
+          `Responder: "${file.basename}" is now a case; its own ${replaced.join(', ')} were replaced by the case's.`
+        )
+      }
     } else {
       await this.app.vault.create(newFilePath, newContent)
     }
@@ -1181,8 +1198,11 @@ export class ProjectStore implements TaskSource {
     project: Project,
     roots: Task[],
     sources: Map<string, TFile>,
-    handling: 'move' | 'copy'
+    handling: 'move' | 'copy',
+    /** Source keys the conversion already carried onto the case; they are not kept as extra properties. */
+    mappedKeys: Iterable<string> = TASKNOTES_MAPPED_KEYS
   ): Promise<number> {
+    const mapped = [...mappedKeys]
     const baseFolder = this.projectTaskFolder(project)
     await this.ensureFolder(baseFolder)
     let imported = 0
@@ -1198,8 +1218,10 @@ export class ProjectStore implements TaskSource {
       if (folder !== baseFolder) await this.ensureFolder(folder)
       const source = sources.get(task.id)
       if (source) {
-        const { body } = parseFrontmatter(await this.app.vault.read(source))
+        const { frontmatter, body } = parseFrontmatter(await this.app.vault.read(source))
         task.description = body
+        const extraFrontmatter = userExtras(frontmatter ?? {}, mapped)
+        if (extraFrontmatter) task.extraFrontmatter = extraFrontmatter
       }
       const desired = taskFilePath(task.title, folder)
       const dest = this.uniqueChildPath(folder, desired.slice(desired.lastIndexOf('/') + 1))

@@ -20,11 +20,19 @@ export function parseFrontmatter(content: string): {
   if (end === -1) return { frontmatter: null, body: content }
   const raw = content.slice(4, end)
   const body = content.slice(end + 4).trim()
+  let parsed: unknown
   try {
-    return { frontmatter: parseYaml(raw) as Record<string, unknown>, body }
+    parsed = parseYaml(raw)
   } catch {
     return { frontmatter: null, body: content }
   }
+  // A note that opens with a `---` rule around a paragraph parses as a bare
+  // string. That is not frontmatter: keep the whole note as body, or the
+  // paragraph is lost. (An empty block, null, stays frontmatter as before.)
+  if (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed))) {
+    return { frontmatter: null, body: content }
+  }
+  return { frontmatter: parsed as Record<string, unknown>, body }
 }
 
 /** A generated checkbox wiki-link list item, as emitted under `## Subtasks` / `## Tasks`. */

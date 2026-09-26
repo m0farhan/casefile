@@ -28,6 +28,13 @@ describe('parseFrontmatter', () => {
     expect(body).toBe(doc)
   })
 
+  it('treats a --- rule around a paragraph as body, not frontmatter', () => {
+    const doc = '---\nFirst paragraph\n---\nrest'
+    expect(parseFrontmatter(doc)).toEqual({ frontmatter: null, body: doc })
+    expect(parseFrontmatter('---\n- a\n---\nrest').frontmatter).toBeNull()
+    expect(parseFrontmatter('---\n\n---\nrest')).toEqual({ frontmatter: null, body: 'rest' })
+  })
+
   it('falls back to null on malformed yaml', () => {
     const doc = '---\n: : :\n---\nbody'
     const { frontmatter } = parseFrontmatter(doc)

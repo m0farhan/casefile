@@ -36,6 +36,53 @@ function mapRecurrence(rrule: string | undefined): Recurrence | undefined {
   return { interval: RRULE_INTERVALS[freq[1]], every: every ? parseInt(every[1], 10) : 1 }
 }
 
+/**
+ * Frontmatter keys a TaskNotes note uses for values this conversion already
+ * carries onto the case (under TaskNotes' default names). They are not kept
+ * as extra properties beside the case's own, where they would go stale and
+ * contradict it after the first edit.
+ * ponytail: default names only; a custom TaskNotes field mapping or a
+ * property-based task marker is excluded when the caller passes those names.
+ */
+export const TASKNOTES_MAPPED_KEYS = [
+  'scheduled',
+  'completedDate',
+  'dateCreated',
+  'dateModified',
+  'projects',
+  'blockedBy',
+  'timeEntries'
+]
+
+/** One TaskNotes time entry as its API returns it. */
+interface TaskNotesTimeEntry {
+  startTime?: string
+  endTime?: string
+  description?: string
+}
+
+/**
+ * TaskNotes time entries as time logs: the day the entry started, the hours
+ * between its start and end, and its description. An entry without a readable
+ * start and a later end (one still running) has no duration yet and is left
+ * out rather than guessed.
+ */
+function mapTimeEntries(entries: unknown): Task['timeLogs'] {
+  if (!Array.isArray(entries)) return undefined
+  const logs: NonNullable<Task['timeLogs']> = []
+  for (const e of entries as TaskNotesTimeEntry[]) {
+    const start = Date.parse(e?.startTime ?? '')
+    const end = Date.parse(e?.endTime ?? '')
+    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) continue
+    logs.push({
+      date: new Date(start).toISOString().slice(0, 10),
+      hours: Math.round(((end - start) / 3_600_000) * 100) / 100,
+      note: typeof e.description === 'string' ? e.description : ''
+    })
+  }
+  return logs.length ? logs : undefined
+}
+
 function dateOnly(value: string | undefined): string {
   return value ? value.slice(0, 10) : ''
 }
@@ -55,6 +102,8 @@ function mapItemToTask(item: TaskNotesImportItem, opts: TaskNotesImportOptions):
   if (info.timeEstimate && info.timeEstimate > 0) {
     task.timeEstimate = Math.round((info.timeEstimate / 60) * 100) / 100
   }
+  const timeLogs = mapTimeEntries((info as TaskNotesTaskInfo & { timeEntries?: unknown }).timeEntries)
+  if (timeLogs) task.timeLogs = timeLogs
   if (info.dateCreated) task.createdAt = info.dateCreated
   if (info.dateModified) task.updatedAt = info.dateModified
   if (info.archived) task.archived = true

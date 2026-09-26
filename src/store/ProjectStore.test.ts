@@ -1037,6 +1037,38 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(reloaded.tasks.map((t) => t.title)).toContain('Idea')
   })
 
+  it('a move keeps the note properties: tags on the case, the rest as its own properties', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Props', 'Projects')
+    const note = await vault.create(
+      'Notes/Alert.md',
+      '---\ntags: [phishing, "#finance"]\nsource: INC-4471\nreporter: alice\naliases: [Wire fraud]\npm-project: false\n---\nThe body.'
+    )
+    expect(await store.importNoteAsTask(project, note, { status: 'todo', priority: 'medium', handling: 'move' })).toBe(
+      'imported'
+    )
+    const moved = vault.getAbstractFileByPath('Projects/Props/Tasks/Alert.md') as TFile
+    const { frontmatter, body } = parseFrontmatter(await vault.read(moved))
+    expect(frontmatter).toMatchObject({
+      'pm-task': true,
+      tags: ['phishing', 'finance'],
+      source: 'INC-4471',
+      reporter: 'alice',
+      aliases: ['Wire fraud']
+    })
+    expect(frontmatter).not.toHaveProperty('pm-project')
+    expect(body.startsWith('The body.')).toBe(true)
+  })
+
+  it('a note opening with a --- rule keeps its first paragraph', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Rule', 'Projects')
+    const note = await vault.create('Notes/Ruled.md', '---\nFirst paragraph\n---\nrest')
+    await store.importNoteAsTask(project, note, { status: 'todo', priority: 'medium', handling: 'move' })
+    const moved = vault.getAbstractFileByPath('Projects/Rule/Tasks/Ruled.md') as TFile
+    expect(await vault.read(moved)).toContain('First paragraph')
+  })
+
   it('skips notes that are already tasks', async () => {
     const { store, vault, project } = await importInto('copy')
     const existing = vault.getAbstractFileByPath('Projects/Import/Tasks/Idea.md')
@@ -1080,6 +1112,23 @@ describe('ProjectStore.importTaskForest', () => {
     expect(expectDefined(top).subtasks.map((t) => t.title)).toEqual(['Child'])
     expect(expectDefined(top).subtasks[0].dependencies).toEqual([parent.id])
     expect(expectDefined(top).description).toBe('parent body')
+  })
+
+  it('a move keeps the source note properties, but not the TaskNotes fields already carried over', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Tn', 'Projects')
+    const src = await vault.create(
+      'TaskNotes/Call.md',
+      '---\ntitle: Call\nscheduled: 2026-07-06\ndateCreated: 2026-06-01\ncontexts: ["@soc"]\nsource: ticket\n---\nNotes.'
+    )
+    const task = makeTask({ title: 'Call' })
+    await store.importTaskForest(project, [task], new Map([[task.id, src]]), 'move')
+    const { frontmatter } = parseFrontmatter(
+      await vault.read(vault.getAbstractFileByPath(expectDefined(task.filePath)) as TFile)
+    )
+    expect(frontmatter).toMatchObject({ contexts: ['@soc'], source: 'ticket' })
+    expect(frontmatter).not.toHaveProperty('scheduled')
+    expect(frontmatter).not.toHaveProperty('dateCreated')
   })
 
   it('places archived tasks in the Archive subfolder', async () => {

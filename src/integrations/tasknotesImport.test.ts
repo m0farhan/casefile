@@ -104,3 +104,18 @@ describe('buildImportForest', () => {
     expect(roots[0].archived).toBe(true)
   })
 })
+
+describe('TaskNotes time entries', () => {
+  it('become time logs from their start and end, and a running entry is left out', () => {
+    const item = makeItem('Tasks/t.md')
+    const info = makeInfo({ path: 'Tasks/t.md', title: 'T' }) as TaskNotesTaskInfo & { timeEntries: unknown[] }
+    info.timeEntries = [
+      { startTime: '2026-07-06T09:00:00Z', endTime: '2026-07-06T10:30:00Z', description: 'triage' },
+      { startTime: '2026-07-07T09:00:00Z' },
+      { startTime: 'garbage', endTime: '2026-07-07T10:00:00Z' }
+    ]
+    item.info = info
+    const { roots } = buildImportForest([item], OPTS)
+    expect(roots[0].timeLogs).toEqual([{ date: '2026-07-06', hours: 1.5, note: 'triage' }])
+  })
+})
