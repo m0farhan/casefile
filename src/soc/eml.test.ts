@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseEml } from './eml'
+import { latin1Bytes, parseEml } from './eml'
 
 const b64 = (s: string): string => btoa(s)
 
@@ -178,5 +178,13 @@ describe('parser evasions that used to hide content from the analyst', () => {
       'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhttp://a.test' +
       '\n--B\nContent-Type: text/plain\n\n/evil\n--B--\n'
     expect(parseEml(mail).text).not.toContain('http://a.test/evil')
+  })
+})
+
+describe('latin1Bytes', () => {
+  it('gives one byte per code unit, for every byte value atob can return', () => {
+    const all = Uint8Array.from({ length: 256 }, (_, i) => i)
+    expect(latin1Bytes(String.fromCharCode(...all))).toEqual(all)
+    expect(latin1Bytes('')).toEqual(new Uint8Array(0))
   })
 })

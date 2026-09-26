@@ -11,6 +11,7 @@ import {
   parseIocPaste,
   refangIoc,
   unmatchableAssetRules,
+  visibleName,
   vtWaitMs
 } from './ioc'
 import { makeTask, type Ioc } from '../types'
@@ -36,7 +37,57 @@ describe('defangIoc — a defanged string must not lie about where it goes', () 
 
   it('leaves ordinary values defanged exactly as before', () => {
     expect(defangIoc('https://evil.co/path', 'url')).toBe('hxxps://evil[.]co/path')
+    expect(defangIoc('ftp://evil.co/f', 'url')).toBe('ftp://evil[.]co/f')
     expect(defangIoc('a@evil.co', 'email')).toBe('a[at]evil[.]co')
+    // A host:port is not a scheme, and an IPv6 literal only looks like one.
+    expect(defangIoc('evil.co:8080', 'domain')).toBe('evil[.]co:8080')
+    expect(defangIoc('fe80::1', 'ip')).toBe('fe80::1')
+    expect(defangIoc('fe80::1', 'domain')).toBe('fe80::1')
+  })
+
+  it('breaks every other scheme, not only a list of known-dangerous ones', () => {
+    // The handlers remote templates, linked OLE objects and PDF links use.
+    // Each one is live when copied into Run or a browser.
+    const cases: [string, string][] = [
+      ['ms-msdt:/id PCWDiagnostic /skip force', 'ms-msdt[:]/id PCWDiagnostic /skip force'],
+      [
+        'search-ms:query=invoice&crumb=location:\\\\attacker\\s',
+        'search-ms[:]query=invoice&crumb=location:\\\\attacker\\s'
+      ],
+      ['ms-word:ofe|u|\\\\attacker\\s\\a.docx', 'ms-word[:]ofe|u|\\\\attacker\\s\\a[.]docx'],
+      ['mhtml:\\\\attacker\\x.mht!x-usc:y', 'mhtml[:]\\\\attacker\\x[.]mht!x-usc:y']
+    ]
+    for (const [real, shown] of cases) {
+      expect(defangIoc(real, 'url')).toBe(shown)
+      expect(refangIoc(shown)).toBe(real)
+    }
+    // Judged on the value, so a row re-typed as an IP is still broken.
+    expect(defangIoc('javascript:alert(1)', 'ip')).toBe('javascript[:]alert(1)')
+  })
+
+  it('brackets a UNC prefix, so a dotless host is not left live', () => {
+    // \\fileserver\share has no dot to break, and opening it sends the
+    // analyst's NTLM hash to whoever answers.
+    expect(defangIoc('\\\\fileserver\\share', 'url')).toBe('[\\\\]fileserver\\share')
+    expect(defangIoc('\\\\attacker\\share\\t.dotm', 'url')).toBe('[\\\\]attacker\\share\\t[.]dotm')
+    expect(refangIoc(defangIoc('\\\\attacker\\share\\t.dotm', 'url'))).toBe('\\\\attacker\\share\\t.dotm')
+  })
+})
+
+describe('visibleName — an attacker-written name cannot rewrite the line it is printed in', () => {
+  it('turns bidi, zero-width, line-breaking and control characters into visible escapes', () => {
+    expect(visibleName('word/x\u202Eexe.xml')).toBe('word/x<U+202E>exe.xml')
+    expect(visibleName('a.xml\n1,024 bytes\tDeflate')).toBe('a.xml<U+000A>1,024 bytes<U+0009>Deflate')
+    expect(visibleName('\u0000\u007F\u0085\u061C\u200B\u200F\u2028\u2029\u2066\u2069\uFEFF')).toBe(
+      '<U+0000><U+007F><U+0085><U+061C><U+200B><U+200F><U+2028><U+2029><U+2066><U+2069><U+FEFF>'
+    )
+    // A tag character is invisible too, and outside the BMP.
+    expect(visibleName('x\u{E0041}')).toBe('x<U+E0041>')
+  })
+
+  it('leaves ordinary names, in any script, exactly as written', () => {
+    expect(visibleName('word/media/image1.png')).toBe('word/media/image1.png')
+    expect(visibleName('счёт 2026 — 請求書.pdf')).toBe('счёт 2026 — 請求書.pdf')
   })
 })
 
@@ -179,6 +230,18 @@ describe('extractIocsFromText', () => {
   it('rejects impossible IPs and trims trailing punctuation', () => {
     expect(extractIocsFromText('bad ip 999.1.1.1 here', []).filter((i) => i.type === 'ip')).toEqual([])
     expect(extractIocsFromText('contact evil[.]com.', []).map((i) => i.value)).toEqual(['evil.com'])
+  })
+  it('ends a URL at a brace, a backslash or a control character', () => {
+    // Without the stop, an RTF template ran on into the control words after it
+    // and NUL padding became part of the value: URLs that exist nowhere.
+    const urls = (text: string) =>
+      extractIocsFromText(text, [])
+        .filter((i) => i.type === 'url')
+        .map((i) => i.value)
+    const rtf = '{\\*\\template http://evil.example/t.dotm}{\\object\\objemb{\\*\\objclass Equation.3}}'
+    expect(urls(rtf)).toEqual(['http://evil.example/t.dotm'])
+    expect(urls('https://evil.example/a\\b')).toEqual(['https://evil.example/a'])
+    expect(urls('see https://evil.example/a\u0000\u0000\u0000tail')).toEqual(['https://evil.example/a'])
   })
 })
 

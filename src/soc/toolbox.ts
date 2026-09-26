@@ -1,4 +1,5 @@
 import { IOC_TYPE_LABELS, defangIoc, detectIocType, hasIocShape, refangIoc } from './ioc'
+import { latin1Bytes } from './eml'
 
 /**
  * Selection transforms for the analyst's right-click menu.
@@ -81,8 +82,7 @@ export function decodeBase64(input: string): Decoding[] {
   const padded = clean.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (clean.length % 4)) % 4)
   let bytes: Uint8Array
   try {
-    const binary = atob(padded)
-    bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+    bytes = latin1Bytes(atob(padded))
   } catch {
     return []
   }

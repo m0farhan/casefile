@@ -164,8 +164,15 @@ function splitParts(body: string, boundary: string): string[] {
   return out
 }
 
-function latin1Bytes(text: string): Uint8Array {
-  return Uint8Array.from(text, (c) => c.charCodeAt(0) & 0xff)
+/**
+ * One byte per code unit, as atob hands them back. A plain loop on purpose:
+ * `Uint8Array.from` with a callback walks the string iterator and calls back
+ * per byte, which made a 10 MB attachment take about 40 times longer to decode.
+ */
+export function latin1Bytes(text: string): Uint8Array {
+  const out = new Uint8Array(text.length)
+  for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff
+  return out
 }
 
 interface Decoded {

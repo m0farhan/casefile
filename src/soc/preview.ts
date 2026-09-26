@@ -19,6 +19,9 @@ export type PreviewKind = 'image' | 'text' | 'binary'
 /** Raster formats that are safe to draw: no scripting, no external references. */
 const DRAWABLE = /^(JPEG|PNG|GIF) image$/
 
+/** Signatures whose files are text, so the source view is the honest one. */
+const TEXT_SIGNATURE = /^(RTF document|script with a shebang)$/
+
 /**
  * How to show this attachment.
  *
@@ -29,7 +32,11 @@ const DRAWABLE = /^(JPEG|PNG|GIF) image$/
  */
 export function previewKind(contentType: string, filename: string, sniffed: string, bytes: Uint8Array): PreviewKind {
   if (DRAWABLE.test(sniffed)) return 'image'
-  // A recognised non-text signature settles it — an OLE document is bytes even
+  // Two signatures are text by nature, and their source is what an analyst
+  // needs: an RTF's \object and \*\template, a script's commands. The bytes
+  // still decide, so a shebang stub glued to a binary payload stays bytes.
+  if (TEXT_SIGNATURE.test(sniffed)) return looksLikeText(bytes) ? 'text' : 'binary'
+  // Any other recognised signature settles it — an OLE document is bytes even
   // though half of it reads as words.
   if (sniffed) return 'binary'
   if (/^text\//i.test(contentType) || /^(application\/)?(json|xml|javascript|x-sh)$/i.test(contentType)) return 'text'
@@ -74,7 +81,9 @@ export function imageDataUrl(bytes: Uint8Array, sniffed: string): string {
   if (!type || !bytes.length || bytes.length > IMAGE_CAP) return ''
   let binary = ''
   for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+    // apply rather than a spread: a spread walks the typed array through its
+    // iterator, and that made each picture about seven times slower to encode.
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[])
   }
   return `data:${type};base64,${btoa(binary)}`
 }

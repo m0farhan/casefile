@@ -19,8 +19,9 @@ export const IOC_TYPE_ICONS: Record<IocType, string> = {
 
 /**
  * Defang an IOC for display so it is never click- or copy-hazardous:
- * http→hxxp, dots→[.], @→[at]. The stored value stays real; only rendering
- * defangs. Hashes pass through untouched (nothing to neutralize).
+ * http→hxxp, dots→[.], @→[at], any other leading scheme→scheme[:], a leading
+ * UNC \\→[\\]. The stored value stays real; only rendering defangs. Hashes
+ * pass through untouched (nothing to neutralize).
  */
 export function defangIoc(value: string, type: IocType): string {
   if (type === 'hash') return value
@@ -33,10 +34,23 @@ export function defangIoc(value: string, type: IocType): string {
   // `paypal。com.evil。co` resolves to paypal.com.evil.co, so bracketing only
   // the ASCII dot marked the decoy and left the real apex looking clean.
   out = out.replace(DOT_SEPARATORS, '[.]')
-  // A scheme that executes or carries a payload is neutralised by name. It is
-  // not a host, so nothing above touches it, and `javascript:` copied out of a
-  // report is live wherever it lands.
-  out = out.replace(ACTIVE_SCHEME, (m) => `${m.slice(0, -1)}[:]`)
+  // Every other scheme loses its colon. A scheme is not a host, so nothing
+  // above touches it, and `javascript:`, `ms-msdt:` or `search-ms:` copied out
+  // of a report is live wherever it lands. A list of dangerous names always
+  // trailed the handlers attackers actually use in relationship targets and
+  // PDF links, so web schemes are the exception rather than the rule. An IPv6
+  // literal is skipped because fe80::1 has exactly the shape of a scheme. That
+  // is judged on the value, not the row's type, so a row re-typed as 'ip'
+  // cannot carry a live `javascript:` past this line.
+  if (!ipv6(value.trim())) {
+    out = out.replace(LEADING_SCHEME, (m, ws: string, scheme: string) =>
+      WEB_SCHEME.test(scheme) ? m : `${ws}${scheme}[:]`
+    )
+  }
+  // A UNC path opens an SMB connection, and hands over the analyst's NTLM
+  // hash, from Run or Explorer. A dotless host (\\fileserver\share) has no dot
+  // for the separator step to break, so the prefix itself is bracketed.
+  out = out.replace(/^(\s*)\\\\/, '$1[\\\\]')
   if (type === 'email' || type === 'url') out = out.replace(/@/g, '[at]')
   return out
 }
@@ -51,13 +65,35 @@ const DOT_SEPARATORS = /[.\u3002\uFF0E\uFF61]/g
 /** Bidi overrides and isolates, plus the Arabic letter mark. */
 const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069\u061C]/g
 
-/** Schemes that do something when followed, rather than naming a place. */
-const ACTIVE_SCHEME = /^(\s*)(javascript|data|vbscript|file|blob|jar):/i
+/**
+ * A leading scheme. It runs after the dots are bracketed, so a host:port
+ * (evil.com:8080) no longer has this shape and keeps its colon.
+ */
+const LEADING_SCHEME = /^(\s*)([a-z][a-z0-9+.-]*):/i
+
+/** The schemes whose defanged form is already inert: hxxp is not a scheme, and every dotted host is broken. */
+const WEB_SCHEME = /^(h(tt|xx)ps?|ftp)$/i
+
+/**
+ * An attacker-written name, made safe to print beside the tool's own words.
+ * Control, format and line-separator characters become a visible `<U+XXXX>`.
+ * Printed raw, a right-to-left override reverses the sentence it sits in, and
+ * a newline draws a listing row for an entry that does not exist. The escape
+ * is itself the tell, so nothing is silently dropped. Display only: matching
+ * and flagging must still see the raw name.
+ */
+export function visibleName(s: string): string {
+  return s.replace(INVISIBLE, (c) => `<U+${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}>`)
+}
+
+/** C0 and C1 controls, format characters (bidi, zero-width, BOM) and the line and paragraph separators. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 
 /**
  * Undo the common defang forms so pasted report indicators are stored real:
- * hxxp→http, [.]/(.)→., [at]/(at)/[@]→@, [:]→:. Inverse of defangIoc plus
- * the variants seen in vendor reports. Idempotent on already-real values.
+ * hxxp→http, [.]/(.)→., [at]/(at)/[@]→@, [:]→:, a leading [\\]→\\. Inverse of
+ * defangIoc plus the variants seen in vendor reports. Idempotent on
+ * already-real values.
  */
 // ponytail: covers the defang forms in real CTI reports; extend the map if a new one shows up
 export function refangIoc(value: string): string {
@@ -68,6 +104,7 @@ export function refangIoc(value: string): string {
     .replace(/[[(]at[\])]/gi, '@')
     .replace(/\[@\]/g, '@')
     .replace(/\[:\]/g, ':')
+    .replace(/^\[\\\\\]/, '\\\\')
 }
 
 /** Appended wherever an indicator leaves the UI (handover, copied block, report). */
@@ -164,7 +201,10 @@ export function detectIocType(value: string): IocType {
 }
 
 /** Defanged-or-real fragment patterns for prose scanning. */
-const RE_URL = /\bh(?:xx|tt)ps?(?:\[:\]|:)\/\/[^\s<>"')]+/gi
+// A URL stops at a control character, a brace or a backslash. None is legal
+// unencoded in a URL, and without the stop an RTF `{\*\template http://x/t.dotm}`
+// or NUL padding after a link ran on into a URL that exists nowhere.
+const RE_URL = /\bh(?:xx|tt)ps?(?:\[:\]|:)\/\/[^\s\p{Cc}<>"'){}\\]+/giu
 const RE_IP = /\b\d{1,3}(?:(?:\[\.\]|\(\.\)|\.)\d{1,3}){3}\b/g
 const RE_HASH = /\b[a-f0-9]{64}\b|\b[a-f0-9]{40}\b|\b[a-f0-9]{32}\b/gi
 const RE_EMAIL = /\b[\w.+-]+(?:@|\[at\]|\(at\))[\w-]+(?:(?:\[\.\]|\(\.\)|\.)[\w-]+)+\b/gi
