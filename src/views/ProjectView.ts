@@ -6,7 +6,8 @@ import {
   WorkspaceLeaf,
   TFile,
   setTooltip,
-  type EventRef
+  type TAbstractFile,
+  type ViewStateResult
 } from 'obsidian'
 import type PMPlugin from '../main'
 import { type Project, type ViewMode, type FilterState, type SavedView, makeDefaultFilter, makeId } from '../types'
@@ -31,8 +32,13 @@ export const PM_PROJECT_VIEW_TYPE = 'casefile-project'
 
 interface ProjectViewState {
   filePath: string
+  /** Set by a rename or move of this same board: keep the mode the analyst picked. Never saved. */
+  keepView?: boolean
   [key: string]: unknown
 }
+
+/** A saved view's filter, or the live one, copied whole: the filter dropdowns edit their arrays in place. */
+const copyFilter = (f: FilterState): FilterState => JSON.parse(JSON.stringify(f)) as FilterState
 
 export class ProjectView extends ItemView {
   plugin: PMPlugin
@@ -97,6 +103,7 @@ export class ProjectView extends ItemView {
               onSave: (updated) => {
                 this.project = updated
                 this.renderProjectToolbar()
+                this.renderCurrentView()
               }
             })
           })
@@ -124,7 +131,6 @@ export class ProjectView extends ItemView {
   private header: ProjectHeader | null = null
   private titleEl2!: HTMLElement
   private keydownHandler: ((e: KeyboardEvent) => void) | null = null
-  private fileModifyRef: EventRef | null = null
   private reloadDebounceTimer: number | null = null
   private initialized = false
   /** File path whose default view mode has been applied, so reloads don't reset a user's mode switch. */
@@ -151,10 +157,15 @@ export class ProjectView extends ItemView {
 
   async setState(state: ProjectViewState, result: unknown): Promise<void> {
     if (state.filePath && state.filePath !== this.filePath) {
+      // The same board at a new path: the mode the analyst switched to stays,
+      // instead of the board's default view coming back as if newly opened.
+      if (state.keepView === true && this.defaultViewAppliedFor === this.filePath) {
+        this.defaultViewAppliedFor = state.filePath
+      }
       this.filePath = state.filePath
       await this.loadProject()
     }
-    await super.setState(state, result as import('obsidian').ViewStateResult)
+    await super.setState(state, result as ViewStateResult)
   }
 
   getState(): ProjectViewState {
@@ -178,7 +189,6 @@ export class ProjectView extends ItemView {
       this.containerEl.removeEventListener('keydown', this.keydownHandler)
       this.keydownHandler = null
     }
-    this.fileModifyRef = null
     this.subview?.destroy?.()
     this.subview = null
     return Promise.resolve()
@@ -215,9 +225,7 @@ export class ProjectView extends ItemView {
       const taskFolder = taskFolderForProjectPath(this.filePath)
       return filePath.startsWith(taskFolder) || filePath === this.filePath
     }
-    this.fileModifyRef = this.app.vault.on('modify', (file) => {
-      if (!(file instanceof TFile) || !reloadIfRelevant(file.path)) return
-      if (this.plugin.store.consumeSelfWrite(file.path)) return
+    const scheduleReload = (): void => {
       if (this.reloadDebounceTimer !== null) window.clearTimeout(this.reloadDebounceTimer)
       this.reloadDebounceTimer = window.setTimeout(
         safeAsync(async () => {
@@ -226,8 +234,38 @@ export class ProjectView extends ItemView {
         }),
         300
       )
-    })
-    this.registerEvent(this.fileModifyRef)
+    }
+    const isNote = (file: TAbstractFile): file is TFile => file instanceof TFile && file.extension === 'md'
+    this.registerEvent(
+      this.app.vault.on('modify', (file) => {
+        if (!(file instanceof TFile) || !reloadIfRelevant(file.path)) return
+        if (this.plugin.store.consumeSelfWrite(file.path)) return
+        scheduleReload()
+      })
+    )
+    // A case note created or renamed from outside (Sync, the file explorer,
+    // another plugin). Listening to modify and delete alone left the board on
+    // its old object: a card drag then recreated a renamed note at its old
+    // path, a second case with the same id, and a synced-in case stayed off
+    // the board until some other change.
+    this.registerEvent(
+      this.app.vault.on('create', (file) => {
+        if (!isNote(file) || !reloadIfRelevant(file.path)) return
+        if (this.plugin.store.consumeSelfWrite(file.path)) return
+        scheduleReload()
+      })
+    )
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        if (!isNote(file) || !(reloadIfRelevant(file.path) || reloadIfRelevant(oldPath))) return
+        // Both markers are consumed, so neither is left for a later event.
+        const self = [this.plugin.store.consumeSelfWrite(file.path), this.plugin.store.consumeSelfWrite(oldPath)]
+        // This board's own note: the plugin re-keys its settings and points
+        // this view at the new path (main.ts, rekeyProjectPath).
+        if (self.some(Boolean) || oldPath === this.filePath) return
+        scheduleReload()
+      })
+    )
     this.registerEvent(
       this.app.vault.on(
         'delete',
@@ -277,7 +315,10 @@ export class ProjectView extends ItemView {
 
   private async persistFilter(): Promise<void> {
     if (!this.filePath) return
+    // The entry also holds the board's swimlane grouping (KanbanView.setLaneGroup):
+    // replacing it whole dropped the lanes on every filter keystroke.
     this.plugin.settings.projectFilters[this.filePath] = {
+      ...this.plugin.settings.projectFilters[this.filePath],
       filter: this.filter,
       activeSavedViewId: this.activeSavedViewId
     }
@@ -291,7 +332,24 @@ export class ProjectView extends ItemView {
     this.bodyEl.empty()
     const msg = this.bodyEl.createDiv('pm-empty-state')
     msg.createEl('h3', { text: 'Board not found' })
-    msg.createEl('p', { text: `No project at ${this.filePath}. It may have been deleted or renamed.` })
+    msg.createEl('p', { text: `No board at ${this.filePath}. It may have been deleted or renamed.` })
+  }
+
+  /**
+   * The board note lists cases, but the folder its path says they are in is
+   * not there: the note or its folder was renamed outside Responder. An empty
+   * board would say there are no cases, which is not known; the store also
+   * refuses every save of it, so `taskIds` is never wiped.
+   */
+  private renderDetached(detached: NonNullable<Project['detached']>): void {
+    const msg = this.bodyEl.createDiv('pm-empty-state')
+    msg.createEl('h3', { text: 'Cases not found' })
+    msg.createEl('p', {
+      text:
+        `This board lists ${detached.recorded} case${detached.recorded === 1 ? '' : 's'}, but ${detached.folder} ` +
+        'is not there. Its note or its folder was renamed or moved outside Responder. Rename it back and ' +
+        'the cases show again; until then nothing on this board is saved.'
+    })
   }
 
   private renderProjectHeader(): void {
@@ -304,7 +362,8 @@ export class ProjectView extends ItemView {
       project: this.project,
       statuses: config.statuses,
       severities: config.severities,
-      verdicts: config.verdicts,
+      // A plain board records no verdicts, so it offers no filter on them.
+      verdicts: config.boardType === 'plain' ? undefined : config.verdicts,
       queryCtx: {
         priorities: config.priorities,
         severities: config.severities,
@@ -343,25 +402,30 @@ export class ProjectView extends ItemView {
 
   private handleSavedViewSelect(id: string | null): void {
     if (!this.project) return
+    let tableState: TableViewState | undefined
     if (id === null) {
       Object.assign(this.filter, makeDefaultFilter())
       this.activeSavedViewId = null
     } else {
       const sv = this.project.savedViews.find((v) => v.id === id)
       if (!sv) return
-      Object.assign(this.filter, sv.filter)
+      // A copy: sharing its arrays let the next dropdown click rewrite the saved view on disk.
+      Object.assign(this.filter, copyFilter(sv.filter))
       this.activeSavedViewId = sv.id
       if (sv.viewMode && sv.viewMode !== this.currentView) {
         this.currentView = sv.viewMode
         this.renderProjectToolbar()
       }
-      if (this.subview instanceof TableView) {
-        this.savedTableViewState = { sortKey: sv.sortKey as TableViewState['sortKey'], sortDir: sv.sortDir }
+      // Only a view that opens the table applies its sort. One saved from
+      // another view holds just the save-time placeholder, which would reset
+      // the analyst's own table sort.
+      if (this.currentView === 'table') {
+        tableState = { sortKey: sv.sortKey as TableViewState['sortKey'], sortDir: sv.sortDir }
       }
     }
     void this.persistFilter()
     this.header?.refresh()
-    this.renderCurrentView()
+    this.renderCurrentView(tableState)
   }
 
   private async handleSavedViewSave(name: string): Promise<void> {
@@ -371,7 +435,7 @@ export class ProjectView extends ItemView {
     const sv: SavedView = {
       id: makeId(),
       name,
-      filter: { ...this.filter },
+      filter: copyFilter(this.filter),
       sortKey: sortMeta.sortKey,
       sortDir: sortMeta.sortDir,
       viewMode: this.currentView
@@ -387,7 +451,7 @@ export class ProjectView extends ItemView {
     if (!this.project) return
     const sv = this.project.savedViews.find((v) => v.id === id)
     if (!sv) return
-    sv.filter = { ...this.filter }
+    sv.filter = copyFilter(this.filter)
     sv.viewMode = this.currentView
     if (this.subview instanceof TableView) {
       const ts = this.subview.getViewState()
@@ -431,6 +495,8 @@ export class ProjectView extends ItemView {
     iconEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
+        // The view's own keydown would also open the selected table row.
+        e.stopPropagation()
         void this.showBoardMenu()
       }
     })
@@ -441,21 +507,25 @@ export class ProjectView extends ItemView {
       'blur',
       safeAsync(async () => {
         if (!this.project) return
-        const next = this.titleEl2.textContent?.trim() ?? this.project.title
-        if (next && next !== this.project.title) {
-          // Title set before the rename so re-renders mid-move already show
-          // it. v3: the project folder and file carry the new name; on refusal
-          // (target folder occupied) revert the header and keep the old title.
-          const prev = this.project.title
-          this.project.title = next
-          if (!(await this.plugin.renameProjectFiles(this.project, next))) {
-            this.project.title = prev
-            this.titleEl2.textContent = prev
-            return
-          }
-          this.filePath = this.project.filePath
+        const next = this.titleEl2.textContent?.trim() ?? ''
+        // A board title cannot be empty (the board dialog refuses one too), and
+        // an unchanged blur is not an edit: it used to rewrite the board note
+        // and restamp updatedAt. Either way the header shows the real title.
+        if (!next || next === this.project.title) {
+          this.titleEl2.textContent = this.project.title
+          return
         }
+        // Title set before the rename so re-renders mid-move already show
+        // it. v3: the board folder and file carry the new name; on refusal
+        // (target folder occupied) revert the header and keep the old title.
+        const prev = this.project.title
         this.project.title = next
+        if (!(await this.plugin.renameProjectFiles(this.project, next))) {
+          this.project.title = prev
+          this.titleEl2.textContent = prev
+          return
+        }
+        this.filePath = this.project.filePath
         await this.plugin.store.saveProject(this.project)
       })
     )
@@ -492,7 +562,9 @@ export class ProjectView extends ItemView {
       new ButtonComponent(right).setButtonText('+ milestone').onClick(() => {
         if (!this.project) return
         openTaskModal(this.plugin, this.project, {
-          defaults: { type: 'milestone' },
+          // No start: the Start field is hidden for a milestone, so a default
+          // of today was saved unseen, and its dependency arrow ended there.
+          defaults: { type: 'milestone', start: '' },
           onSave: async () => {
             await this.refreshProject()
           }
@@ -539,7 +611,8 @@ export class ProjectView extends ItemView {
       })
   }
 
-  private renderCurrentView(): void {
+  /** `tableState` is a sort to open the table with (a saved view's), applied over the one captured from the old table. */
+  private renderCurrentView(tableState?: TableViewState): void {
     if (!this.project) return
 
     let savedGanttScroll: ReturnType<GanttView['getScrollPosition']> | null = null
@@ -558,10 +631,15 @@ export class ProjectView extends ItemView {
     } else if (this.currentView !== 'table') {
       this.savedTableViewState = null
     }
+    if (tableState) this.savedTableViewState = tableState
 
     this.subview?.destroy?.()
     this.bodyEl.empty()
     this.subview = null
+    if (this.project.detached) {
+      this.renderDetached(this.project.detached)
+      return
+    }
 
     switch (this.currentView) {
       case 'table': {
@@ -606,7 +684,7 @@ export class ProjectView extends ItemView {
    * Re-render after a plugin-initiated mutation. Store mutators update
    * project.tasks in place before they await the save, so memory is already
    * current and no disk reload is needed. External edits come in through the
-   * modify/delete listeners in onOpen. Prefers the subview's in-place refresh
+   * vault listeners in ensureInitialized. Prefers the subview's in-place refresh
    * over a full destroy-and-rebuild.
    */
   async refreshProject(): Promise<void> {

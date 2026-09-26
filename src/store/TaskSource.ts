@@ -45,16 +45,19 @@ export interface TaskSource {
     sources: Map<string, TFile>,
     handling: 'move' | 'copy'
   ): Promise<number>
+  /** `subtaskBase` is the editor's subtask array as it opened, which makes the subtask merge three-way. */
   updateTask(
     project: Project,
     taskId: string,
     patch: Partial<Task>,
-    opts?: { removedSubtaskIds?: string[] }
+    opts?: { removedSubtaskIds?: string[]; subtaskBase?: Task[] }
   ): Promise<void>
+  /** `administrative` (a palette remap) logs each change but sets or clears no completion date or lifecycle stamp. */
   updateTasks(
     project: Project,
     taskIds: string[],
-    patch: Partial<Task> | ((task: Task) => Partial<Task> | null)
+    patch: Partial<Task> | ((task: Task) => Partial<Task> | null),
+    opts?: { administrative?: boolean }
   ): Promise<void>
   moveTask(project: Project, taskId: string, newParentId: string | null): Promise<void>
   moveTasks(project: Project, taskIds: string[], newParentId: string | null): Promise<void>
@@ -69,7 +72,8 @@ export interface TaskSource {
   /** Runs dependency-based auto-scheduling; a no-op when the project's config disables it. */
   scheduleAfterChange(project: Project, changedTaskId?: string): Promise<number>
   saveTaskAttachment(project: Project, task: Task, fileName: string, data: ArrayBuffer): Promise<TFile>
-  findTaskFileConflict(project: Project, task: Task): TaskFileNameConflictError | null
+  /** `parentId` places a task that is not in the tree yet; left out, the tree says. */
+  findTaskFileConflict(project: Project, task: Task, parentId?: string | null): TaskFileNameConflictError | null
   /** Append one audit-log entry directly (SLA breach events etc.) and save. */
   appendActivity(project: Project, taskId: string, entry: Task['activity'][number]): Promise<void>
 }

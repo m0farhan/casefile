@@ -11,7 +11,8 @@ export interface ProjectCardProps {
   /** Full path of the board note, for the tooltip. */
   path: string
   onClick: () => void
-  onContextMenu: (e: MouseEvent) => void
+  /** Open the board's menu at this point: the pointer, or the card's corner from the keyboard. */
+  onContextMenu: (at: { x: number; y: number }) => void
 }
 
 export class ProjectCard {
@@ -45,6 +46,26 @@ export class ProjectCard {
     new ProgressBar(body).setSize('sm').setValue(percent).setColor(props.color)
 
     card.addEventListener('click', () => props.onClick())
-    card.addEventListener('contextmenu', (e) => props.onContextMenu(e))
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      props.onContextMenu({ x: e.clientX, y: e.clientY })
+    })
+    // Keyboard access, as on a kanban card. The menu is the only way to Move,
+    // Edit or Delete a board, and a Mac keyboard has no key that sends a
+    // contextmenu, so Shift+F10 and the Menu key open it here, at the card.
+    // preventDefault keeps the browser's own contextmenu from opening a second.
+    card.setAttribute('role', 'button')
+    card.setAttribute('tabindex', '0')
+    card.addEventListener('keydown', (e) => {
+      if (e.target !== card) return
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        props.onClick()
+      } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+        e.preventDefault()
+        const r = card.getBoundingClientRect()
+        props.onContextMenu({ x: r.left, y: r.bottom })
+      }
+    })
   }
 }

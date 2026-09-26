@@ -1,14 +1,19 @@
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian'
 import type PMPlugin from './main'
-import { type PMSettings, type SlaPolicy, DEFAULT_SETTINGS, makeId } from './types'
+import { type PMSettings, type Project, type SlaPolicy, type StatusConfig, DEFAULT_SETTINGS, makeId } from './types'
 import { flattenTasks } from './store/TaskTreeOps'
 import { getTaskNotesApi, importTaskNotesPalettes, isTaskNotesInstalled } from './integrations/tasknotes'
-import { renderPriorityListEditor, renderStatusListEditor } from './ui/PaletteListEditor'
+import { renderPriorityListEditor, renderStatusListEditor, statusFallback } from './ui/PaletteListEditor'
+import { confirmDialog } from './ui/ModalFactory'
 import { IconButton } from './ui/primitives/IconButton'
 import { unmatchableAssetRules } from './soc/ioc'
 
 export type { PMSettings }
 export { DEFAULT_SETTINGS }
+
+/** A palette whose deleted entries leave cases to move. */
+type PaletteField = 'status' | 'issueType' | 'severity' | 'verdict'
+type PaletteItem = { id: string; label: string }
 
 export class PMSettingTab extends PluginSettingTab {
   plugin: PMPlugin
@@ -43,7 +48,7 @@ export class PMSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Default view')
-      .setDesc('Which view opens when you open a project.')
+      .setDesc('Which view opens when you open a board.')
       .addDropdown((dd) =>
         dd
           .addOption('table', 'Table')
@@ -85,18 +90,21 @@ export class PMSettingTab extends PluginSettingTab {
           })
       )
 
-    new Setting(containerEl).setName('Default gantt granularity').addDropdown((dd) =>
-      dd
-        .addOption('day', 'Day')
-        .addOption('week', 'Week')
-        .addOption('month', 'Month')
-        .addOption('quarter', 'Quarter')
-        .setValue(this.plugin.settings.ganttGranularity)
-        .onChange(async (v) => {
-          this.plugin.settings.ganttGranularity = v as PMSettings['ganttGranularity']
-          await this.plugin.saveSettings()
-        })
-    )
+    new Setting(containerEl)
+      .setName('Gantt granularity')
+      .setDesc('The zoom the gantt view opens at. Changing the zoom inside the gantt view also changes this setting.')
+      .addDropdown((dd) =>
+        dd
+          .addOption('day', 'Day')
+          .addOption('week', 'Week')
+          .addOption('month', 'Month')
+          .addOption('quarter', 'Quarter')
+          .setValue(this.plugin.settings.ganttGranularity)
+          .onChange(async (v) => {
+            this.plugin.settings.ganttGranularity = v as PMSettings['ganttGranularity']
+            await this.plugin.saveSettings()
+          })
+      )
 
     new Setting(containerEl)
       .setName('Gantt week label')
@@ -166,11 +174,15 @@ export class PMSettingTab extends PluginSettingTab {
       )
 
     // ── Notifications ─────────────────────────────────────────────────────────
-    new Setting(containerEl).setName('Due date notifications').setHeading()
+    new Setting(containerEl).setName('Notifications').setHeading()
 
     new Setting(containerEl)
       .setName('Enable notifications')
-      .setDesc('Show a banner when tasks are approaching their due date.')
+      .setDesc(
+        'Show a banner when a task approaches its due date or an incident misses its response or resolution ' +
+          'target. ' +
+          "A missed target is recorded in the case's activity log either way."
+      )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.notificationsEnabled).onChange(async (v) => {
           this.plugin.settings.notificationsEnabled = v
@@ -210,7 +222,7 @@ export class PMSettingTab extends PluginSettingTab {
 
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Global list of people available as assignees across all projects.'
+      text: 'Global list of people available as assignees across all boards.'
     })
     // margin handled by .pm-settings-desc CSS class
 
@@ -232,7 +244,7 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Statuses').setHeading()
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Customize status labels, colors, and icons. Drag to reorder.'
+      text: 'Customize status labels, colors, and icons. Drag or use the arrows to reorder.'
     })
 
     const statusContainer = containerEl.createDiv('pm-settings-statuses')
@@ -263,7 +275,7 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Issue types').setHeading()
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Customize issue type labels, colors, and icons. Drag to reorder.'
+      text: 'Customize issue type labels, colors, and icons. Drag or use the arrows to reorder.'
     })
 
     const issueTypeContainer = containerEl.createDiv('pm-settings-statuses')
@@ -290,7 +302,7 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Severities').setHeading()
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Customize severity labels, colors, and icons. Drag to reorder from most to least severe.'
+      text: 'Customize severity labels, colors, and icons. Drag or use the arrows to reorder, from most to least severe.'
     })
 
     const severityContainer = containerEl.createDiv('pm-settings-statuses')
@@ -318,7 +330,7 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Verdicts').setHeading()
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Customize verdict labels, colors, and icons. Drag to reorder.'
+      text: 'Customize verdict labels, colors, and icons. Drag or use the arrows to reorder.'
     })
 
     const verdictContainer = containerEl.createDiv('pm-settings-statuses')
@@ -345,7 +357,11 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Incident response targets').setHeading()
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Severity drives the response clock on incidents. Times are minutes; leave both fields empty to run no clock for a severity.'
+      text:
+        'Severity drives the response clock on incidents. Times are calendar minutes, counted from the ' +
+        'detection time, or from case creation when none is recorded. The clock never pauses: a case ' +
+        'waiting in any open status, such as User Response, keeps counting and can breach. Set both ' +
+        'targets for a severity, or leave both empty to run no clock for it.'
     })
 
     this.slaContainer = containerEl.createDiv('pm-settings-sla')
@@ -506,28 +522,42 @@ export class PMSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Archive closed cases after (days)')
       .setDesc(
-        'Move a case into its project Archive folder this many days after the date it was completed. ' +
-          '0 turns it off. The case note is moved, not deleted, and the move is written into the case ' +
-          'timeline. A case you unarchive is never taken again — archive it by hand after that. ' +
+        "Move a closed case into its board's Archive folder this many days after it last moved into a " +
+          'closing status. Moving it between two closing statuses restarts the count, and a case whose ' +
+          'timeline never recorded that move counts from its completion date. Whole days, 0–365; 0 turns ' +
+          'it off. The case note is moved, not deleted, and the move is written into the case timeline. ' +
+          'A case you unarchive is never taken again — archive it by hand after that. ' +
           'A case with no completion date is never moved.'
       )
-      .addText((text) =>
-        text.setValue(String(this.plugin.settings.autoArchiveDays)).onChange(async (v) => {
-          const n = Number(v.trim())
+      .addText((text) => {
+        text.setValue(String(this.plugin.settings.autoArchiveDays))
+        // Read on commit (blur or Enter), not per keystroke: typing "400" used
+        // to save 4 and then 40 on the way, and the sweep moved files on 40.
+        text.inputEl.addEventListener('change', () => {
+          const n = Number(text.getValue().trim())
           // Refuse a value rather than quietly clamping it: an analyst who typed
           // "30" and got 7 would not know their files were about to move early.
-          if (!Number.isFinite(n) || n < 0 || n > 365 || !Number.isInteger(n)) return
+          // The box goes back to the saved value, so it shows what applies.
+          if (!Number.isFinite(n) || n < 0 || n > 365 || !Number.isInteger(n)) {
+            const kept = this.plugin.settings.autoArchiveDays
+            text.setValue(String(kept))
+            new Notice(`Archive window must be whole days, 0–365. Kept ${kept}.`)
+            return
+          }
           this.plugin.settings.autoArchiveDays = n
-          await this.plugin.saveSettings()
+          void this.plugin.saveSettings()
         })
-      )
+      })
 
     // ── Shift handover ────────────────────────────────────────────────────────
     new Setting(containerEl).setName('Shift handover').setHeading()
 
     new Setting(containerEl)
       .setName('Handover note path')
-      .setDesc('Vault path of the generated shift-handover note.')
+      .setDesc(
+        'Vault path of the shift-handover note. Choosing Write in the handover preview replaces the whole ' +
+          'note at this path each time, so use a path that holds nothing else.'
+      )
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS.handoverPath)
@@ -666,7 +696,10 @@ export class PMSettingTab extends PluginSettingTab {
         void this.plugin.saveSettings()
       })
 
-      const bodyArea = row.createEl('textarea', { cls: 'pm-input pm-settings-template-body' })
+      // Not pm-input: the settings tab sits outside the plugin's variable scope,
+      // and that class's rules would outrank Obsidian's native textarea border,
+      // background and focus ring with values that are empty here.
+      const bodyArea = row.createEl('textarea', { cls: 'pm-settings-template-body' })
       bodyArea.rows = 5
       bodyArea.value = tpl.bodyMarkdown
       bodyArea.placeholder = 'Checklist body (Markdown)'
@@ -677,46 +710,82 @@ export class PMSettingTab extends PluginSettingTab {
     })
   }
 
-  private async remapOrphanTasks(
-    field: 'status' | 'issueType' | 'severity' | 'verdict',
-    deletedId: string,
-    deletedLabel: string
-  ): Promise<void> {
-    const configs =
-      field === 'status'
-        ? this.plugin.settings.statuses
-        : field === 'issueType'
-          ? this.plugin.settings.issueTypes
-          : null
-    // Severity/verdict '' is the valid "none" state, so their orphans clear rather than remap.
-    let fallbackId = ''
-    let fallbackLabel = 'none'
-    if (configs) {
-      if (configs.length === 0) return
-      // Orphaned issue types remap to 'task' (the neutral default); statuses to the first entry.
-      const fallback = (field === 'issueType' && configs.find((c) => c.id === 'task')) || configs[0]
-      fallbackId = fallback.id
-      fallbackLabel = fallback.label
-    }
-    const folder = this.plugin.settings.projectsFolder
-    const projects = await this.plugin.store.loadAllProjects(folder)
-    let remapped = 0
+  /**
+   * Where a deleted palette entry's cases go. A status goes to the first other
+   * status of the same kind, closing to closing and open to open, so a remap
+   * never reopens or closes a case; with none of its kind there is nowhere
+   * true to put them, and null refuses the delete. An issue type goes to
+   * 'task', else the first. A severity or verdict is cleared: '' is their "none".
+   */
+  private orphanTarget(field: PaletteField, deleted: PaletteItem): { id: string; label: string } | null {
+    if (field === 'severity' || field === 'verdict') return { id: '', label: 'none' }
+    if (field === 'status') return statusFallback(this.plugin.settings.statuses, deleted as StatusConfig) ?? null
+    const rest = this.plugin.settings.issueTypes.filter((t) => t.id !== deleted.id)
+    return rest.find((t) => t.id === 'task') ?? rest[0] ?? null
+  }
+
+  /** The cases, per board, whose `field` is `id` on a board that follows the global list. */
+  private async casesUsing(field: PaletteField, id: string): Promise<{ project: Project; ids: string[] }[]> {
+    const projects = await this.plugin.store.loadAllProjects(this.plugin.settings.projectsFolder)
+    const hits: { project: Project; ids: string[] }[] = []
     for (const project of projects) {
-      // A project that defines this entry itself is unaffected by the global delete.
-      // Severities/verdicts are global-only in v1 — no per-project override to check.
+      // A board with its own list does not use the global one, so a global
+      // delete leaves its cases alone. Severities/verdicts are global-only.
       const own =
         field === 'status' ? project.config?.statuses : field === 'issueType' ? project.config?.issueTypes : undefined
-      if (own?.some((entry) => entry.id === deletedId)) continue
+      if (own?.length) continue
       const ids = flattenTasks(project.tasks)
-        .filter(({ task }) => task[field] === deletedId)
+        .filter(({ task }) => task[field] === id)
         .map(({ task }) => task.id)
-      if (ids.length) {
-        await this.plugin.store.updateTasks(project, ids, { [field]: fallbackId })
-        remapped += ids.length
-      }
+      if (ids.length) hits.push({ project, ids })
+    }
+    return hits
+  }
+
+  /**
+   * Asked before a palette entry is removed: says how many cases it changes
+   * and where they go, and refuses a status with no other of its kind. A
+   * delete used to rewrite every matching case on one unconfirmed click.
+   */
+  private async confirmPaletteDelete(field: PaletteField, deleted: PaletteItem): Promise<boolean> {
+    const target = this.orphanTarget(field, deleted)
+    if (!target) {
+      const kind = (deleted as StatusConfig).complete ? 'closing' : 'open'
+      new Notice(
+        `"${deleted.label}" is the only ${kind} status, so its cases would have nowhere of the same kind to go. Add another ${kind} status first.`
+      )
+      return false
+    }
+    const n = (await this.casesUsing(field, deleted.id)).reduce((sum, hit) => sum + hit.ids.length, 0)
+    if (!n) return true
+    const them = n === 1 ? 'that case' : 'them'
+    const change = target.id ? `moves ${them} to "${target.label}"` : `clears it from ${them}`
+    return confirmDialog(
+      this.app,
+      `${n} ${n === 1 ? 'case uses' : 'cases use'} "${deleted.label}". Deleting it ${change}, and the change is written to each case's activity log.`
+    )
+  }
+
+  /**
+   * Move the cases of a deleted entry to its target. Administrative: each
+   * change is logged, but no completion date or lifecycle stamp is set or
+   * cleared, since the case did not really close, reopen or get a response.
+   */
+  private async remapOrphanTasks(field: PaletteField, deleted: PaletteItem): Promise<void> {
+    const target = this.orphanTarget(field, deleted)
+    if (!target) return
+    let remapped = 0
+    for (const { project, ids } of await this.casesUsing(field, deleted.id)) {
+      await this.plugin.store.updateTasks(project, ids, { [field]: target.id }, { administrative: true })
+      remapped += ids.length
     }
     if (remapped > 0) {
-      new Notice(`Remapped ${remapped} task${remapped === 1 ? '' : 's'} from '${deletedLabel}' to '${fallbackLabel}'.`)
+      const cases = `${remapped} case${remapped === 1 ? '' : 's'}`
+      new Notice(
+        target.id
+          ? `Moved ${cases} from "${deleted.label}" to "${target.label}".`
+          : `Cleared "${deleted.label}" from ${cases}.`
+      )
     }
   }
 
@@ -725,7 +794,8 @@ export class PMSettingTab extends PluginSettingTab {
       app: this.app,
       statuses: this.plugin.settings.statuses,
       onChanged: () => void this.plugin.saveSettings(),
-      onDeleted: (deleted) => void this.remapOrphanTasks('status', deleted.id, deleted.label)
+      confirmDelete: (item) => this.confirmPaletteDelete('status', item),
+      onDeleted: (deleted) => void this.remapOrphanTasks('status', deleted)
     })
   }
 
@@ -736,7 +806,8 @@ export class PMSettingTab extends PluginSettingTab {
       app: this.app,
       priorities: this.plugin.settings.issueTypes,
       onChanged: () => void this.plugin.saveSettings(),
-      onDeleted: (deleted) => void this.remapOrphanTasks('issueType', deleted.id, deleted.label)
+      confirmDelete: (item) => this.confirmPaletteDelete('issueType', item),
+      onDeleted: (deleted) => void this.remapOrphanTasks('issueType', deleted)
     })
   }
 
@@ -749,10 +820,11 @@ export class PMSettingTab extends PluginSettingTab {
         void this.plugin.saveSettings()
         this.renderSlaRows() // severity labels/colors also show in the response-target rows
       },
+      confirmDelete: (item) => this.confirmPaletteDelete('severity', item),
       onDeleted: (deleted) => {
         Reflect.deleteProperty(this.plugin.settings.slaPolicies, deleted.id)
         void this.plugin.saveSettings()
-        void this.remapOrphanTasks('severity', deleted.id, deleted.label)
+        void this.remapOrphanTasks('severity', deleted)
         this.renderSlaRows()
       }
     })
@@ -764,11 +836,17 @@ export class PMSettingTab extends PluginSettingTab {
       app: this.app,
       priorities: this.plugin.settings.verdicts,
       onChanged: () => void this.plugin.saveSettings(),
-      onDeleted: (deleted) => void this.remapOrphanTasks('verdict', deleted.id, deleted.label)
+      confirmDelete: (item) => this.confirmPaletteDelete('verdict', item),
+      onDeleted: (deleted) => void this.remapOrphanTasks('verdict', deleted)
     })
   }
 
-  /** One row per severity: response/resolution targets in minutes. Empty pair = no clock. */
+  /**
+   * One row per severity: response/resolution targets in minutes. Empty pair
+   * = no clock. A row with one side blank, or a target of 0, is not saved:
+   * it used to save the blank side as 0 minutes, breaching every incident of
+   * that severity the moment it was created, into the append-only log.
+   */
   private renderSlaRows(): void {
     const container = this.slaContainer
     if (!container) return
@@ -782,30 +860,38 @@ export class PMSettingTab extends PluginSettingTab {
       const makeField = (label: string, value: number | undefined): HTMLInputElement => {
         row.createSpan({ text: label, cls: 'pm-settings-sla-field-label' })
         const input = row.createEl('input', { type: 'number', cls: 'pm-settings-sla-input' })
-        input.min = '0'
+        input.min = '1'
         input.placeholder = '—'
         if (value !== undefined) input.value = String(value)
         return input
       }
       const response = makeField('Response', policy?.responseMins)
       const resolution = makeField('Resolution', policy?.resolutionMins)
+      const hint = row.createSpan({ cls: 'pm-settings-sla-field-label' })
 
       const save = (): void => {
+        // null = blank; NaN = typed but not a whole number of minutes above 0.
         const parse = (el: HTMLInputElement): number | null => {
           if (el.value.trim() === '') return null
-          const n = Number(el.value)
-          return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null
+          const n = Math.round(Number(el.value))
+          return Number.isFinite(n) && n > 0 ? n : NaN
         }
         const responseMins = parse(response)
         const resolutionMins = parse(resolution)
         if (responseMins === null && resolutionMins === null) {
           Reflect.deleteProperty(this.plugin.settings.slaPolicies, sev.id)
+        } else if (
+          responseMins === null ||
+          resolutionMins === null ||
+          Number.isNaN(responseMins) ||
+          Number.isNaN(resolutionMins)
+        ) {
+          hint.setText('Not saved: set both targets above 0 minutes, or clear both for no clock.')
+          return
         } else {
-          this.plugin.settings.slaPolicies[sev.id] = {
-            responseMins: responseMins ?? 0,
-            resolutionMins: resolutionMins ?? 0
-          }
+          this.plugin.settings.slaPolicies[sev.id] = { responseMins, resolutionMins }
         }
+        hint.setText('')
         void this.plugin.saveSettings()
       }
       response.addEventListener('change', save)

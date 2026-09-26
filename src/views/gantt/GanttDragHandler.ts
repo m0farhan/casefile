@@ -5,6 +5,15 @@ import { safeAsync } from '../../utils'
 import { parsePlainDate } from '../../dates'
 import type { TimelineCfg } from './TimelineConfig'
 import { dateToX, xToDate, snapX } from './TimelineConfig'
+import { findTaskById } from '../../store/TaskIndex'
+
+/**
+ * Undo and redo write to the case by id. One deleted since the drag is
+ * refused, so the undo command says it could not, rather than "Reverted".
+ */
+function requireCase(project: Project, taskId: string): void {
+  if (!findTaskById(project, taskId)) throw new Error('The case is no longer on this board.')
+}
 
 export interface DragState {
   isDragging: boolean
@@ -124,7 +133,9 @@ export function attachDragHandle(
       }
       const redoPatch: Partial<Task> = { ...patch }
       plugin.pushUndo({
+        label: `dates of "${task.title}" on ${project.title}`,
         undo: async () => {
+          requireCase(project, taskId)
           await plugin.store.updateTask(project, taskId, { start: oldStart, due: oldDue })
           if (plugin.store.configFor(project).autoSchedule) {
             new Notice('Dates reverted. Dependent task dates may need adjustment.')
@@ -132,6 +143,7 @@ export function attachDragHandle(
           await onRefresh()
         },
         redo: async () => {
+          requireCase(project, taskId)
           await plugin.store.updateTask(project, taskId, redoPatch)
           await plugin.store.scheduleAfterChange(project, taskId)
           await onRefresh()
@@ -235,7 +247,9 @@ export function attachBarMove(
       }
       const redoPatch: Partial<Task> = { ...patch }
       plugin.pushUndo({
+        label: `dates of "${task.title}" on ${project.title}`,
         undo: async () => {
+          requireCase(project, taskId)
           await plugin.store.updateTask(project, taskId, { start: oldStart, due: oldDue })
           if (plugin.store.configFor(project).autoSchedule) {
             new Notice('Dates reverted. Dependent task dates may need adjustment.')
@@ -243,6 +257,7 @@ export function attachBarMove(
           await onRefresh()
         },
         redo: async () => {
+          requireCase(project, taskId)
           await plugin.store.updateTask(project, taskId, redoPatch)
           await plugin.store.scheduleAfterChange(project, taskId)
           await onRefresh()

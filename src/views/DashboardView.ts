@@ -2,6 +2,7 @@ import { ItemView, WorkspaceLeaf, TFile } from 'obsidian'
 import type PMPlugin from '../main'
 import { renderProjectListToolbar, renderProjectListContent } from './ProjectListRenderer'
 import type { ProjectListContext } from './ProjectListRenderer'
+import { taskFolderForProjectPath } from '../store/layout'
 
 export const PM_DASHBOARD_VIEW_TYPE = 'casefile-dashboard'
 
@@ -11,6 +12,13 @@ export class DashboardView extends ItemView {
   private bodyEl!: HTMLElement
   private renderToken = 0
   private reloadDebounceTimer: number | null = null
+  /**
+   * Each drawn board's note and case folder, from the last render. Boards are
+   * listed wherever they are filed, so a change under one of these counts
+   * even outside the default folder; listening to that folder alone left
+   * those cards' counts and locations stale.
+   */
+  private watched: string[] = []
 
   constructor(leaf: WorkspaceLeaf, plugin: PMPlugin) {
     super(leaf)
@@ -52,10 +60,11 @@ export class DashboardView extends ItemView {
     const isRelevant = (path: string) => {
       const folder = this.plugin.settings.projectsFolder
       // Empty folder = vault root: everything is in scope.
-      return folder === '' || path === folder || path.startsWith(`${folder}/`)
+      if (folder === '' || path === folder || path.startsWith(`${folder}/`)) return true
+      return this.watched.some((w) => path === w || path.startsWith(`${w}/`))
     }
-    const scheduleReload = (path: string) => {
-      if (!isRelevant(path)) return
+    const scheduleReload = (path: string, always = false) => {
+      if (!always && !isRelevant(path)) return
       if (this.reloadDebounceTimer !== null) window.clearTimeout(this.reloadDebounceTimer)
       this.reloadDebounceTimer = window.setTimeout(() => {
         this.reloadDebounceTimer = null
@@ -71,6 +80,15 @@ export class DashboardView extends ItemView {
         scheduleReload(oldPath)
       })
     )
+    // A board created, synced in or moved outside every watched path: seen
+    // once Obsidian has indexed it as one, which a vault 'create' comes before.
+    // ponytail: a board moved between two unwatched folders is caught here,
+    // through its new path, not through its rename.
+    this.registerEvent(
+      this.app.metadataCache.on('changed', (file, _data, cache) => {
+        if (cache.frontmatter?.['pm-project'] === true) scheduleReload(file.path, true)
+      })
+    )
   }
 
   render(): void {
@@ -78,7 +96,12 @@ export class DashboardView extends ItemView {
     renderProjectListToolbar(ctx)
     this.bodyEl.empty()
     this.bodyEl.addClass('pm-project-list-container')
-    void renderProjectListContent(ctx)
+    void this.renderList(ctx)
+  }
+
+  private async renderList(ctx: ProjectListContext): Promise<void> {
+    const projects = await renderProjectListContent(ctx)
+    if (!ctx.isStale()) this.watched = projects.flatMap((p) => [p.filePath, taskFolderForProjectPath(p.filePath)])
   }
 
   private makeCtx(): ProjectListContext {
