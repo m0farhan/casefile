@@ -2048,6 +2048,23 @@ describe('ProjectStore stale editor clone safety', () => {
     ).toEqual([other.id])
   })
 
+  it('closing an incident subtask through its parent stamps it like a direct update', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Checkbox', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const sub = makeTask({ title: 'Sub', issueType: 'incident', severity: 'sev2' })
+    await store.insertTask(project, sub, parent.id)
+    const snapshot = JSON.parse(JSON.stringify(parent)) as Task
+    const working = JSON.parse(JSON.stringify(parent)) as Task
+    Object.assign(working.subtasks[0], { status: 'done', progress: 100, completed: '2026-09-26' })
+    await store.updateTask(project, parent.id, { subtasks: working.subtasks }, { subtaskBase: snapshot.subtasks })
+    const live = expectDefined(findTask(project.tasks, sub.id))
+    expect(live.resolvedAt).not.toBe('')
+    expect(live.activity.map((a) => [a.field, a.from, a.to])).toEqual([['status', 'todo', 'done']])
+    const again = await reload(app, vault, project.filePath)
+    expect(findTask(again.tasks, sub.id)?.resolvedAt).toBe(live.resolvedAt)
+  })
+
   it('keeps an activity entry appended to the live task when a stale whole-clone patch saves', async () => {
     const { store } = newStore()
     const project = await store.createProject('Audit', 'Projects')

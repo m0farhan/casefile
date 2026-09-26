@@ -1406,9 +1406,24 @@ export class ProjectStore implements TaskSource {
         // Brand-new subtask: it needs its own file, body included.
         this.hydratedBodies.add(task)
         this.markDirty(project, [task.id], 'full')
-      } else if (prev.title !== task.title) {
+        continue
+      }
+      // A subtask changed through its parent's editor is stamped exactly as a
+      // direct update would stamp it: completion date, activity rows, and an
+      // incident's respondedAt/resolvedAt. Closing an incident subtask by its
+      // checkbox used to leave no row and no resolvedAt, so its SLA clock ran
+      // on. Activity stays store-owned: the live log, never the editor's copy.
+      const stamped = prev === task ? null : this.subtaskChanges(prev, task)
+      if (stamped) {
+        this.stampCompletion(project, prev, stamped)
+        this.stampActivity(project, prev, stamped)
+        Object.assign(task, stamped)
+      }
+      if (prev !== task) task.activity = stamped?.activity ?? prev.activity
+      if (prev.title !== task.title) {
         this.markDirty(project, [task.id], 'full')
       } else if (
+        stamped ||
         // Every mutable frontmatter field editable through the parent's subtask
         // panel must be compared here, or the edit is silently dropped.
         prev.status !== task.status ||
@@ -1434,6 +1449,15 @@ export class ProjectStore implements TaskSource {
       // nested descendants go with it; their later iterations no-op.)
       if (removed.filePath) await this.deleteTaskFiles(project, { ...removed, subtasks: [] })
     }
+  }
+
+  /** The tracked fields a subtask's saved copy changed, as a patch against the live one; null when none did. */
+  private subtaskChanges(prev: Task, next: Task): Partial<Task> | null {
+    const patch: Record<string, unknown> = {}
+    for (const field of [...ProjectStore.ACTIVITY_FIELDS, 'completed', 'iocs'] as const) {
+      if (JSON.stringify(prev[field]) !== JSON.stringify(next[field])) patch[field] = next[field]
+    }
+    return Object.keys(patch).length ? (patch as Partial<Task>) : null
   }
 
   /**
