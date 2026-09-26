@@ -1,6 +1,7 @@
-import { setIcon, type App } from 'obsidian'
-import { extractAttachmentRefs, refExtension, IMAGE_EXTENSIONS } from '../soc/attachments'
+import { Notice, setIcon, type App } from 'obsidian'
+import { extractAttachmentRefs, opensInApp, refExtension, IMAGE_EXTENSIONS } from '../soc/attachments'
 import { IconButton } from '../ui/primitives/IconButton'
+import { safeAsync } from '../utils'
 import type { Project, Task } from '../types'
 
 /** File size shown at honest precision — never rounded up past its unit. */
@@ -43,13 +44,33 @@ export function renderAttachmentsSection(
 
     if (file) {
       if (file.stat.size > 0) row.createSpan({ cls: 'pm-evidence-size', text: formatSize(file.stat.size) })
-      new IconButton(row)
-        .setIcon('arrow-up-right')
-        .setTooltip('Open')
-        .setRevealOnHover(true)
-        .onClick(() => {
-          void app.workspace.openLinkText(ref, sourcePath)
-        })
+      // Open only what Obsidian shows itself. Anything else it would hand to
+      // the system's default app: a dropped .html renders live and fetches, a
+      // .lnk or .hta runs. Decided on the file the link resolves to, not on
+      // the link text.
+      if (opensInApp(file.extension)) {
+        new IconButton(row)
+          .setIcon('arrow-up-right')
+          .setTooltip('Open')
+          .setRevealOnHover(true)
+          .onClick(() => {
+            void app.workspace.openLinkText(ref, sourcePath)
+          })
+      } else {
+        const path = file.path
+        new IconButton(row)
+          .setIcon('copy')
+          .setTooltip('Copy path — opens outside Obsidian')
+          .setRevealOnHover(true)
+          .onClick(
+            safeAsync(async () => {
+              await navigator.clipboard.writeText(path)
+              new Notice(
+                `Path copied — .${file.extension} files are not opened from a case; Obsidian would hand them to the system's default app.`
+              )
+            })
+          )
+      }
     } else {
       // A dangling reference is evidence of a problem — keep it listed.
       row.createSpan({ cls: 'pm-evidence-missing', text: 'missing' })

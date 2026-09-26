@@ -49,7 +49,9 @@ export function renderCommentsSection(
     const body = entry.createDiv('pm-comment-body')
     void MarkdownRenderer.render(plugin.app, scrubRemoteEmbeds(c.text), body, sourcePath, comp)
   }
-  neutralizeExternalLinks(list)
+  // With the app, a link or embed of a file Obsidian cannot show itself
+  // copies its path instead of handing the file to the system (evidence).
+  neutralizeExternalLinks(list, plugin.app, sourcePath)
 
   const composer = section.createDiv('pm-comment-composer')
   const input = composer.createEl('textarea', { cls: 'pm-comment-input' })
