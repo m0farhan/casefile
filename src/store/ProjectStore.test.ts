@@ -12,7 +12,7 @@ import {
   type StatusConfig,
   type Task
 } from '../types'
-import { inferIssueKeyPrefix, ProjectStore } from './ProjectStore'
+import { inferIssueKeyPrefix, NestedBoardError, ProjectStore } from './ProjectStore'
 import { parseFrontmatter } from './YamlParser'
 import { buildTaskIndex } from './TaskIndex'
 import { findTask, flattenTasks } from './TaskTreeOps'
@@ -2680,5 +2680,44 @@ describe('ProjectStore boards moved, renamed or deleted under an open object', (
     await store2.saveProject(loaded)
     expect(parseFrontmatter(await vault.cachedRead(note)).frontmatter?.taskIds).toHaveLength(2)
     expect(vault.getAbstractFileByPath('IR/Incidents/Cases_tasks')).toBeNull()
+  })
+})
+
+describe('ProjectStore boards inside other boards', () => {
+  it('refuses to create or move a board into a board folder, its own included', async () => {
+    const { store } = newStore()
+    await store.createProject('Incident Response', '')
+    await expect(store.createProject('Goals', 'Incident Response')).rejects.toThrow(NestedBoardError)
+    await expect(store.createProject('Goals', 'Incident Response/Tasks')).rejects.toThrow(
+      'inside the folder of the board'
+    )
+    const goals = await store.createProject('Goals', '')
+    await expect(store.moveProjectToOwnFolder(goals, 'Incident Response')).rejects.toThrow(NestedBoardError)
+    await expect(store.moveProjectToOwnFolder(goals, 'Goals')).rejects.toThrow(NestedBoardError)
+    expect(goals.filePath).toBe('Goals/Goals.md')
+    // A plain folder that merely holds boards is fine.
+    await store.createProject('Queue', 'SOC')
+    await store.createProject('Intel', 'SOC')
+  })
+
+  it('refuses to delete a board with another board filed inside its folder, naming it', async () => {
+    const { store, vault } = newStore()
+    const outer = await store.createProject('Incident Response', '')
+    await addNamed(store, outer, 'Outer case')
+    // Nested by hand in the file explorer.
+    await vault.create(
+      'Incident Response/Goals/Goals.md',
+      '---\npm-project: true\nid: "g"\ntitle: "Goals"\ntaskIds: []\n---\n'
+    )
+    await vault.create(
+      'Incident Response/Goals/Tasks/Inner case.md',
+      '---\npm-task: true\nid: "i"\ntitle: "Inner case"\n---\n'
+    )
+
+    const refused = await store.deleteProject(outer).catch((e: unknown) => e)
+    expect(refused).toBeInstanceOf(NestedBoardError)
+    expect((refused as NestedBoardError).boards).toEqual(['Incident Response/Goals/Goals.md'])
+    expect(vault.getAbstractFileByPath('Incident Response/Goals/Tasks/Inner case.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Incident Response/Incident Response.md')).toBeInstanceOf(TFile)
   })
 })

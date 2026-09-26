@@ -139,6 +139,21 @@ export class TaskFileNameConflictError extends Error {
   }
 }
 
+/**
+ * Thrown when a board would be created in or moved into another board's own
+ * folder (or its own), or when deleting a board would trash another board
+ * filed inside its folder. `boards` names the board notes involved.
+ */
+export class NestedBoardError extends Error {
+  constructor(
+    message: string,
+    public readonly boards: string[]
+  ) {
+    super(message)
+    this.name = 'NestedBoardError'
+  }
+}
+
 function fileNameFromPath(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '')
 }
@@ -1030,9 +1045,37 @@ export class ProjectStore implements TaskSource {
    * parts of) unrelated content, so callers must refuse instead.
    */
   newProjectFilePath(folder: string, title: string): string | null {
+    this.assertNotInsideBoard(folder)
     const filePath = caseFilePath(folder, title)
     const projectFolder = filePath.slice(0, filePath.lastIndexOf('/'))
     return this.app.vault.getAbstractFileByPath(projectFolder) ? null : filePath
+  }
+
+  /**
+   * Refuse a base folder that sits inside a board's own folder. A board filed
+   * there is trashed when the outer board is deleted and carried along when
+   * it is moved or renamed, with nobody told. Walks the folder's own path
+   * prefixes, so the cost is its depth; a prefix `P` is a board when `P/<name
+   * of P>.md` is one the metadataCache or this session knows.
+   * ponytail: a board Obsidian has not indexed yet and this session has not
+   * loaded is not seen; deleteProject's own check still catches it.
+   */
+  private assertNotInsideBoard(folder: string): void {
+    const parts = normalizePath(folder).split('/').filter(Boolean)
+    for (let i = 1; i <= parts.length; i++) {
+      const own = parts.slice(0, i).join('/')
+      const note = this.app.vault.getAbstractFileByPath(`${own}/${parts[i - 1]}.md`)
+      if (!(note instanceof TFile)) continue
+      const board =
+        this.projectCache.has(note.path) ||
+        this.app.metadataCache.getFileCache(note)?.frontmatter?.[FRONTMATTER_KEY] === true
+      if (board) {
+        throw new NestedBoardError(
+          `"${folder}" is inside the folder of the board "${note.basename}". Deleting or moving that board would take this one with it; pick a folder outside it.`,
+          [note.path]
+        )
+      }
+    }
   }
 
   async createProject(title: string, folder: string): Promise<Project> {
@@ -1742,6 +1785,7 @@ export class ProjectStore implements TaskSource {
     project: Project,
     base: string
   ): Promise<{ from: string; to: string; files: number } | 'occupied' | null> {
+    this.assertNotInsideBoard(base)
     const oldFile = project.filePath
     const name = oldFile.slice(oldFile.lastIndexOf('/') + 1).replace(/\.md$/, '')
     const targetFolder = normalizePath(`${base}/${name}`)
@@ -1969,15 +2013,24 @@ export class ProjectStore implements TaskSource {
   }
 
   async deleteProject(project: Project): Promise<void> {
-    // A save already running lands first, so it cannot write into the folder
-    // being trashed; every later save through this object is dropped.
-    await this.saveQueues.get(project.filePath)
-    this.deletedProjects.add(project)
     // v3: the project's own folder holds everything — trash it whole.
     // Older layouts: task folder + project file live apart, delete both.
     const ownFolder = projectFolderForProjectPath(project.filePath)
     const taskFolder = this.projectTaskFolder(project)
     const folder = this.app.vault.getAbstractFileByPath(ownFolder ?? taskFolder)
+    // Another board filed inside that folder would go to the trash with it,
+    // unnamed by the confirm. Refuse, naming it.
+    const nested = folder instanceof TFolder ? await this.boardNotesIn(folder, project.filePath) : []
+    if (nested.length) {
+      throw new NestedBoardError(
+        `Not deleting "${project.title}": ${nested.join(', ')} ${nested.length === 1 ? 'is a board' : 'are boards'} filed inside its folder. Move ${nested.length === 1 ? 'it' : 'them'} out first.`,
+        nested
+      )
+    }
+    // A save already running lands first, so it cannot write into the folder
+    // being trashed; every later save through this object is dropped.
+    await this.saveQueues.get(project.filePath)
+    this.deletedProjects.add(project)
     if (folder instanceof TFolder) {
       await this.deleteFolderRecursive(folder)
     }
@@ -1989,6 +2042,34 @@ export class ProjectStore implements TaskSource {
     this.clearDirty(project)
     this.saveQueues.delete(project.filePath)
     this.projectCache.delete(project.filePath)
+  }
+
+  /**
+   * Board notes inside `folder`, other than `except`. A note counts when the
+   * metadataCache says `pm-project: true`, this session loaded it as a board,
+   * or it has a board's own-folder shape (`<F>/<F>.md`) and reads as one.
+   * Only those few shaped notes are read, never every case in the folder.
+   */
+  private async boardNotesIn(folder: TFolder, except: string): Promise<string[]> {
+    const found: string[] = []
+    const walk = async (f: TFolder): Promise<void> => {
+      for (const child of f.children) {
+        if (child instanceof TFolder) {
+          await walk(child)
+          continue
+        }
+        if (!(child instanceof TFile) || child.extension !== 'md' || child.path === except) continue
+        const cached = this.app.metadataCache.getFileCache(child)?.frontmatter
+        const board = cached
+          ? cached[FRONTMATTER_KEY] === true
+          : this.projectCache.has(child.path) ||
+            (child.basename === f.name &&
+              parseFrontmatter(await this.app.vault.cachedRead(child)).frontmatter?.[FRONTMATTER_KEY] === true)
+        if (board) found.push(child.path)
+      }
+    }
+    await walk(folder)
+    return found
   }
 
   private async deleteFolderRecursive(folder: TFolder): Promise<void> {
