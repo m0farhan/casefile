@@ -667,7 +667,8 @@ describe('hand-written Project: and Parent: lines in a description', () => {
   it('the generated backlink is still stripped, brackets in the board name included', () => {
     const md = serializeTask(
       makeTask({ id: 'b1', description: 'Body.' }),
-      makeProject('Acme [Q3]', 'Acme [Q3]/Acme [Q3].md')
+      makeProject('Acme [Q3]', 'Acme [Q3]/Acme [Q3].md'),
+      null
     )
     expect(md).toContain('Project: [[Acme [Q3]|Acme  Q3 ]]')
     const { frontmatter, body } = parseFrontmatter(md)
