@@ -1,5 +1,5 @@
 export { archiveTask, unarchiveTask } from './ArchiveOps'
-export { ProjectStore, TaskFileNameConflictError } from './ProjectStore'
+export { inferIssueKeyPrefix, NestedBoardError, ProjectStore, TaskFileNameConflictError } from './ProjectStore'
 export type { ImportNoteOptions, TaskSource } from './TaskSource'
 export { computeSchedule, wouldCreateCycle } from './Scheduler'
 export {
@@ -34,6 +34,6 @@ export {
   updateTaskInTree
 } from './TaskTreeOps'
 export type { FlatTask } from './TaskTreeOps'
-export { hydrateTasks } from './YamlHydrator'
+export { hydrateTasks, safeColor } from './YamlHydrator'
 export { appendYaml, isOldFormat, parseFrontmatter } from './YamlParser'
 export { serializeProject, serializeTask } from './YamlSerializer'
