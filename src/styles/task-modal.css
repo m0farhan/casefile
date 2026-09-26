@@ -161,28 +161,24 @@
 .pm-desc-toolbar {
   display: flex;
   gap: 2px;
-  margin-bottom: 2px;
 }
 
-/* The description edits in place in a CodeMirror view styled to read exactly
-   like the old textarea: transparent until hover/focus paints a subtle
-   background and border; focus deepens the border. Auto height, wrapped lines
-   (EditorView.lineWrapping); the default cm-focused dotted outline is
-   suppressed in favor of the shared focus ring. */
+/* The description edits in place in a CodeMirror view: transparent until
+   hover or focus paints a subtle background and border; focus deepens the
+   border. Auto height, wrapped lines (EditorView.lineWrapping); the default
+   cm-focused dotted outline is suppressed in favor of the shared focus ring.
+   Its size, font and live-preview marks live in task-editor.css, which sets
+   the editor and the preview from one set of rules. */
 .pm-modal-description {
   width: 100%;
   box-sizing: border-box;
 }
 .pm-modal-description .cm-editor {
   box-sizing: border-box;
-  min-height: 80px;
-  padding: 6px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-s);
   background: transparent;
   color: var(--text-normal);
-  font-size: 13px;
-  line-height: 1.6;
 }
 .pm-modal-description .cm-editor:hover,
 .pm-modal-description .cm-editor.cm-focused {
@@ -209,67 +205,6 @@
 }
 .pm-modal-description .cm-placeholder {
   color: var(--text-faint);
-}
-
-/* Live-preview inline marks (markers hidden unless the selection is inside) */
-.cm-cf-strong {
-  font-weight: 600;
-}
-.cm-cf-em {
-  font-style: italic;
-}
-.cm-cf-code {
-  font-family: var(--gs-font-mono);
-  background: color-mix(in srgb, var(--gs-teal) 12%, transparent);
-  border-radius: 3px;
-  padding: 0 3px;
-}
-
-/* Live-preview line marks: the editor reads like a note tab */
-.pm-modal-description .cm-line.cm-cf-h1 {
-  font-size: 1.45em;
-  font-weight: 700;
-  padding-top: 4px;
-}
-.pm-modal-description .cm-line.cm-cf-h2 {
-  font-size: 1.3em;
-  font-weight: 700;
-  padding-top: 3px;
-}
-.pm-modal-description .cm-line.cm-cf-h3 {
-  font-size: 1.15em;
-  font-weight: 650;
-  padding-top: 2px;
-}
-.pm-modal-description .cm-line.cm-cf-h4,
-.pm-modal-description .cm-line.cm-cf-h5,
-.pm-modal-description .cm-line.cm-cf-h6 {
-  font-weight: 650;
-}
-.pm-modal-description .cm-line.cm-cf-quote {
-  border-left: 2px solid var(--gs-hairline-strong);
-  padding-left: 10px;
-  color: var(--gs-ink-subtle);
-}
-.pm-modal-description .cm-line.cm-cf-task-done {
-  color: var(--gs-ink-subtle);
-  text-decoration: line-through;
-}
-.pm-modal-description .cm-line.cm-cf-fenceline {
-  font-family: var(--gs-font-mono);
-  font-size: 0.92em;
-  background: var(--gs-surface-2);
-}
-.cm-cf-bullet {
-  color: var(--gs-ink-subtle);
-}
-.cm-cf-listmark {
-  color: var(--gs-ink-subtle);
-}
-.cm-cf-checkbox {
-  vertical-align: middle;
-  margin: 0 2px 2px 0;
-  cursor: pointer;
 }
 
 /* Subtasks */
