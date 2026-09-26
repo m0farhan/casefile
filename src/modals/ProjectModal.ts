@@ -1,13 +1,14 @@
 import { App, ButtonComponent, Modal, Notice } from 'obsidian'
 import type PMPlugin from '../main'
-import { type Project, type ProjectConfig, type CustomFieldDef, makeId, makeProject } from '../types'
-import { ProjectStore, rebuildTaskIndex } from '../store'
+import { type Project, type ProjectConfig, type CustomFieldDef, type StatusConfig, makeId, makeProject } from '../types'
+import { flattenTasks, NestedBoardError, ProjectStore, rebuildTaskIndex } from '../store'
 import { safeAsync } from '../utils'
 import { renderAddButton } from '../ui/composites/addButton'
 import { Avatar } from '../ui/primitives/Avatar'
 import { IconButton } from '../ui/primitives/IconButton'
-import { renderStatusListEditor } from '../ui/PaletteListEditor'
-import { caseFilePath, parentFolderOf, projectFileName } from '../store/layout'
+import { renderStatusListEditor, statusFallback } from '../ui/PaletteListEditor'
+import { confirmDialog } from '../ui/ModalFactory'
+import { caseFilePath, isProjectFolderLayout, parentFolderOf, projectFileName } from '../store/layout'
 
 const PROJECT_COLORS = [
   '#8b72be',
@@ -33,7 +34,15 @@ const PROJECT_ICONS = ['📋', '🚀', '💡', '🎯', '🔬', '🏗', '📊', '
  * avatar hashes, display toggles) that cannot be expressed in static CSS.
  */
 export class ProjectModal extends Modal {
+  /**
+   * The form's working copy. For an existing board it is only a draft: Save
+   * copies its board fields onto `live`. Saving the copy itself made it a
+   * second object for the board, and whichever was saved last won — board
+   * edits were reverted, breach entries erased, description edits lost.
+   */
   private project: Project
+  /** The board every other holder has; null when creating one. */
+  private live: Project | null
   private isNew: boolean
   /** Title at open time — a differing title on save is a rename. */
   private originalTitle: string
@@ -47,6 +56,7 @@ export class ProjectModal extends Modal {
     private onSave: (project: Project) => void | Promise<void>
   ) {
     super(app)
+    this.live = existingProject
     if (existingProject) {
       this.project = JSON.parse(JSON.stringify(existingProject)) as Project
       // The JSON round-trip turns the taskIndex Map into a plain object.
@@ -152,33 +162,35 @@ export class ProjectModal extends Modal {
     })
 
     // ── Board type ────────────────────────────────────────────────────────────
-    // Only on create. Changing a live board's type is a real decision with real
-    // consequences (a case board flipped to plain hides recorded verdicts), so
-    // it belongs in settings with an explanation, not behind an idle dropdown here.
-    if (this.isNew) {
-      const typeSection = el.createDiv('pm-project-modal-section')
-      typeSection.createEl('label', { text: 'Board type', cls: 'pm-label' })
-      const typeSelect = typeSection.createEl('select', { cls: 'pm-input' })
-      typeSelect.createEl('option', { text: 'Case board — for an alert or case queue', value: 'case' })
-      typeSelect.createEl('option', { text: 'Plain board — columns and cards only', value: 'plain' })
-      typeSelect.value = this.project.config?.boardType ?? 'case'
-      const typeHint = typeSection.createDiv({ cls: 'pm-modal-hint' })
-      const describe = () => {
-        typeHint.setText(
-          typeSelect.value === 'plain'
-            ? 'Columns, cards and severity — no response clocks, verdicts, indicators or alert intake. Use this for goals, projects and anything that is not a case queue.'
-            : 'Severity, response clocks, verdicts, indicators, the incident timeline and alert intake.'
-        )
-      }
-      describe()
-      typeSelect.addEventListener('change', () => {
-        const config = (this.project.config ??= {})
-        // Absent means case, so the key is only written when it is plain.
-        if (typeSelect.value === 'plain') config.boardType = 'plain'
-        else delete config.boardType
-        describe()
-      })
+    // Also on an existing board, where alert intake's refusal on a plain board
+    // sends the analyst. Switching only hides or shows the case fields: the
+    // store reads and writes a card's verdict, clock stamps and indicators on
+    // either type, so nothing recorded is removed and switching back shows it.
+    const typeSection = el.createDiv('pm-project-modal-section')
+    typeSection.createEl('label', { text: 'Board type', cls: 'pm-label' })
+    const typeSelect = typeSection.createEl('select', { cls: 'pm-input' })
+    typeSelect.createEl('option', { text: 'Case board — for an alert or case queue', value: 'case' })
+    typeSelect.createEl('option', { text: 'Plain board — columns and cards only', value: 'plain' })
+    typeSelect.value = this.project.config?.boardType ?? 'case'
+    const openedAs = typeSelect.value
+    const typeHint = typeSection.createDiv({ cls: 'pm-modal-hint' })
+    const describe = () => {
+      const what =
+        typeSelect.value === 'plain'
+          ? 'Columns, cards and severity — no response clocks, verdicts, indicators or alert intake. Use this for goals, projects and anything that is not a case queue.'
+          : 'Severity, response clocks, verdicts, indicators, the incident timeline and alert intake.'
+      const switching =
+        !this.isNew && typeSelect.value !== openedAs
+          ? ' Switching hides or shows the case fields; it never removes anything already recorded on a card.'
+          : ''
+      typeHint.setText(what + switching)
     }
+    describe()
+    typeSelect.addEventListener('change', () => {
+      // Absent means case, so the key is only written when it is plain.
+      this.patchConfig('boardType', typeSelect.value === 'plain' ? 'plain' : undefined)
+      describe()
+    })
 
     // ── Folder ────────────────────────────────────────────────────────────────
     // A board is found by its frontmatter, wherever it sits, so the settings
@@ -201,7 +213,9 @@ export class ProjectModal extends Modal {
       if (this.isNew) {
         folderHint.setText(`Creates ${target}, with its cases inside.`)
       } else if (base === this.originalFolder) {
-        folderHint.setText(`Lives at ${target}. Type another path to move it there.`)
+        // An older-layout board is not at <folder>/<Name>/<Name>.md: say where it really is.
+        const here = this.live && !isProjectFolderLayout(this.live.filePath) ? this.live.filePath : target
+        folderHint.setText(`Lives at ${here}. Type another path to move it there.`)
       } else {
         folderHint.setText(`Moves to ${target} — cases, archive and attachments come with it.`)
       }
@@ -326,7 +340,7 @@ export class ProjectModal extends Modal {
     const behaviorSection = el.createDiv('pm-modal-section')
     const behaviorHeader = behaviorSection.createDiv('pm-modal-section-header')
     behaviorHeader.createSpan({ text: 'View & scheduling', cls: 'pm-modal-subheading' })
-    behaviorHeader.createSpan({ text: 'Overrides for this project', cls: 'pm-modal-hint' })
+    behaviorHeader.createSpan({ text: 'Overrides for this board', cls: 'pm-modal-hint' })
     const behaviorGrid = behaviorSection.createDiv('pm-config-override-grid')
 
     this.renderOverrideSelect(behaviorGrid, 'Default view', 'defaultView', [
@@ -366,10 +380,23 @@ export class ProjectModal extends Modal {
           }
 
           const base = folderInput.value.trim().replace(/^\/+|\/+$/g, '')
+          const refuseFolder = (msg: string): void => {
+            new Notice(msg)
+            folderInput.addClass('pm-input-error')
+            folderInput.focus()
+          }
           if (this.isNew) {
             const store = this.plugin.store
-            const filePath =
-              store instanceof ProjectStore ? store.newProjectFilePath(base, title) : caseFilePath(base, title)
+            let filePath: string | null
+            try {
+              filePath =
+                store instanceof ProjectStore ? store.newProjectFilePath(base, title) : caseFilePath(base, title)
+            } catch (e) {
+              // Inside another board's folder: deleting or moving that board would take this one along.
+              if (!(e instanceof NestedBoardError)) throw e
+              refuseFolder(`${e.message} Board not created.`)
+              return
+            }
             if (!filePath) {
               new Notice(
                 `${base ? `${base}/` : ''}${projectFileName(title)} already exists — pick another name or folder.`
@@ -378,38 +405,140 @@ export class ProjectModal extends Modal {
               titleInput.focus()
               return
             }
+            this.project.title = title
             this.project.filePath = filePath
             await this.plugin.store.ensureFolder(filePath.slice(0, filePath.lastIndexOf('/')))
-          } else if (title !== this.originalTitle) {
-            // Title set before the rename so any re-render mid-move already
-            // shows it. v3: the project folder and file carry the new name;
-            // refusal (target folder occupied) keeps the modal open.
-            this.project.title = title
-            if (!(await this.plugin.renameProjectFiles(this.project, title))) {
-              this.project.title = this.originalTitle
+            await this.plugin.store.saveProject(this.project)
+            await this.onSave(this.project)
+            this.close()
+            return
+          }
+
+          const live = this.live
+          if (!live) return
+          const renaming = title !== this.originalTitle
+          const moving = base !== this.originalFolder
+          // A rename runs on disk before the move, so a move that would then be
+          // refused is checked first: otherwise the folder was renamed and the
+          // title never saved. Only a v3 board's rename carries the new name.
+          const store = this.plugin.store
+          if (renaming && moving && isProjectFolderLayout(live.filePath) && store instanceof ProjectStore) {
+            let free: string | null
+            try {
+              free = store.newProjectFilePath(base, title)
+            } catch (e) {
+              if (!(e instanceof NestedBoardError)) throw e
+              refuseFolder(`${e.message} Board not renamed or moved.`)
+              return
+            }
+            if (!free) {
+              refuseFolder(
+                `${base ? `${base}/` : ''}${projectFileName(title)} already exists — board not renamed or moved.`
+              )
+              return
+            }
+          }
+          const moves = await this.confirmStatusMoves(live)
+          if (!moves) return
+
+          // Title set before the rename so any re-render mid-move already
+          // shows it. v3: the board folder and file carry the new name;
+          // refusal (target folder occupied) keeps the modal open.
+          if (renaming) {
+            live.title = title
+            if (!(await this.plugin.renameProjectFiles(live, title))) {
+              live.title = this.originalTitle
               titleInput.addClass('pm-input-error')
               titleInput.focus()
               return
             }
           }
-          this.project.title = title
-
-          // Folder change on an existing board is a move, and it runs AFTER the
-          // rename: the move derives its target name from the file as it stands
-          // on disk, so renaming first means one board arrives with one name.
-          if (!this.isNew && base !== this.originalFolder) {
-            if (!(await this.plugin.moveProjectToFolder(this.project, base))) {
-              folderInput.addClass('pm-input-error')
-              folderInput.focus()
-              return
-            }
+          // Folder change is a move, and it runs AFTER the rename: the move
+          // derives its target name from the file as it stands on disk, so
+          // renaming first means one board arrives with one name.
+          if (moving && !(await this.plugin.moveProjectToFolder(live, base))) {
+            // The rename already happened on disk; save the title it gave.
+            if (renaming) await this.plugin.store.saveProject(live)
+            folderInput.addClass('pm-input-error')
+            folderInput.focus()
+            return
           }
 
-          await this.plugin.store.saveProject(this.project)
-          await this.onSave(this.project)
+          // Only now, with the rename and move through, do the draft's board
+          // fields reach the board. Its cases, key counter, saved views and
+          // report baseline are never copied: the draft's are stale by now.
+          const draft = this.project
+          Object.assign(live, {
+            icon: draft.icon,
+            color: draft.color,
+            description: draft.description,
+            keyPrefix: draft.keyPrefix,
+            teamMembers: draft.teamMembers,
+            customFields: draft.customFields
+          })
+          if (draft.config) live.config = draft.config
+          else delete live.config
+          await this.plugin.store.saveProject(live)
+          if (moves.size) {
+            await this.plugin.store.updateTasks(
+              live,
+              [...moves.keys()],
+              (task) => {
+                const status = moves.get(task.id)
+                return status ? { status } : null
+              },
+              { administrative: true }
+            )
+          }
+          await this.onSave(live)
           this.close()
         })
       )
+  }
+
+  /**
+   * Cases on this board whose status the edited list no longer has: an entry
+   * removed from the board's own list, or the list switched back to the
+   * global one. Each moves to the first status of the same kind in the new
+   * list, closing to closing, once the analyst confirms; a status with none
+   * of its kind left refuses the Save. Left alone, they sat in a stand-in
+   * column, and one the global list lacks counted as open: a closed case read
+   * as reopened. Returns case id → new status, empty for none, null to stop.
+   */
+  private async confirmStatusMoves(live: Project): Promise<Map<string, string> | null> {
+    // The lists as written, not configFor's: that one appends every status a
+    // case still uses, as a stand-in column, so it never shows one as gone.
+    const listed = (p: Project): StatusConfig[] =>
+      p.config?.statuses?.length ? p.config.statuses : this.plugin.settings.statuses
+    const before = listed(live)
+    const after = listed(this.project)
+    const kept = new Set(after.map((s) => s.id))
+    const moves = new Map<string, string>()
+    const counts = new Map<string, number>()
+    for (const { task } of flattenTasks(live.tasks)) {
+      if (kept.has(task.status)) continue
+      // A status the board did not list before this edit is not this Save's doing.
+      const gone = before.find((s) => s.id === task.status)
+      if (!gone) continue
+      const to = statusFallback(after, gone)
+      if (!to) {
+        new Notice(
+          `Cases on this board are in "${gone.label}", and the edited list has no ${gone.complete ? 'closing' : 'open'} status to move them to. Add one, or keep "${gone.label}".`
+        )
+        return null
+      }
+      moves.set(task.id, to.id)
+      const line = `"${gone.label}" to "${to.label}"`
+      counts.set(line, (counts.get(line) ?? 0) + 1)
+    }
+    if (!moves.size) return moves
+    const list = [...counts].map(([line, n]) => `${n} from ${line}`).join(', ')
+    const ok = await confirmDialog(
+      this.app,
+      `${moves.size} case${moves.size === 1 ? '' : 's'} on this board ${moves.size === 1 ? 'is' : 'are'} in a status the edited list no longer has. Saving moves them: ${list}. The change is written to each case's activity log.`,
+      'Save'
+    )
+    return ok ? moves : null
   }
 
   /** Set or clear one override; the config object is dropped entirely when its last field clears. */
