@@ -94,12 +94,11 @@ export function renderTable(ctx: TableContext): void {
     ctx.onSelectionChange()
   })
 
-  const socBoard = ctx.boardType !== 'plain'
   const cols: { key: SortKey | null; label: string; width?: string }[] = [
     { key: null, label: '', width: '32px' },
     { key: 'title', label: 'Task', width: 'auto' },
     { key: 'status', label: 'Status', width: '130px' },
-    ...(socBoard ? [{ key: 'severity' as SortKey, label: 'Severity', width: '110px' }] : []),
+    { key: 'severity', label: 'Severity', width: '110px' },
     { key: 'assignees', label: 'Assignees', width: '140px' },
     { key: 'due', label: 'Due', width: '110px' },
     { key: 'progress', label: 'Progress', width: '120px' },
@@ -287,10 +286,9 @@ function renderWindowRows(ctx: TableContext): void {
   if (!tbody) return
 
   const rows = state.visibleRows
-  // 10 fixed cells + custom fields + the Updated column.
-  // Must track the column list above: drop the Severity column and the spacer
-  // rows have to shrink with it, or a long board's virtual scroll misaligns.
-  const colCount = (ctx.boardType === 'plain' ? 10 : 11) + ctx.project.customFields.length
+  // 11 fixed cells + custom fields + the Updated column.
+  // Must track the column list above, or a long board's virtual scroll misaligns.
+  const colCount = 11 + ctx.project.customFields.length
   const { start, end } = computeWindow(state)
   state.windowStart = start
   state.windowEnd = end

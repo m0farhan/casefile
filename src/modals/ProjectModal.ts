@@ -153,7 +153,7 @@ export class ProjectModal extends Modal {
 
     // ── Board type ────────────────────────────────────────────────────────────
     // Only on create. Changing a live board's type is a real decision with real
-    // consequences (a case board flipped to plain hides recorded severities), so
+    // consequences (a case board flipped to plain hides recorded verdicts), so
     // it belongs in settings with an explanation, not behind an idle dropdown here.
     if (this.isNew) {
       const typeSection = el.createDiv('pm-project-modal-section')
@@ -166,7 +166,7 @@ export class ProjectModal extends Modal {
       const describe = () => {
         typeHint.setText(
           typeSelect.value === 'plain'
-            ? 'No severity, response clocks, verdicts, indicators or alert intake — just columns and cards. Use this for goals, projects and anything that is not a case queue.'
+            ? 'Columns, cards and severity — no response clocks, verdicts, indicators or alert intake. Use this for goals, projects and anything that is not a case queue.'
             : 'Severity, response clocks, verdicts, indicators, the incident timeline and alert intake.'
         )
       }

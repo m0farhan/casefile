@@ -78,8 +78,10 @@ const REPEAT_OPTIONS: SelectItem[] = [
 export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFieldsContext): void {
   const { task, project, plugin, rerender, shownExtras } = ctx
   const { statuses, issueTypes, severities, verdicts, boardType } = plugin.store.configFor(project)
-  // A plain board records no severity and no verdict; the values stay on any
-  // note that already has them and return if the board is switched back.
+  // A plain board records no verdict and runs no clocks; a verdict stays on any
+  // note that already has one and returns if the board is switched back.
+  // Severity shows on every board: it is the one urgency dial, and a goals or
+  // project board needs a way to say which card matters most.
   const socBoard = boardType !== 'plain'
   // Two columns, filled in order: every property takes the next free cell, so a
   // property that does not apply (no parent, no severity, no verdict) leaves no
@@ -175,29 +177,27 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     },
     'circle-dot'
   )
-  if (socBoard) {
-    renderPropRow(
-      grid,
-      'Severity',
-      () => {
-        const cell = createDiv('pm-prop-value')
-        renderSelectControl({
-          container: cell,
-          value: task.severity,
-          options: [
-            { id: '', label: 'None' },
-            ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
-          ],
-          onChange: (id) => {
-            task.severity = id
-            rerender()
-          }
-        })
-        return cell
-      },
-      'shield-alert'
-    )
-  }
+  renderPropRow(
+    grid,
+    'Severity',
+    () => {
+      const cell = createDiv('pm-prop-value')
+      renderSelectControl({
+        container: cell,
+        value: task.severity,
+        options: [
+          { id: '', label: 'None' },
+          ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
+        ],
+        onChange: (id) => {
+          task.severity = id
+          rerender()
+        }
+      })
+      return cell
+    },
+    'shield-alert'
+  )
 
   // Verdict — incidents only, and only on a case board; the spacer keeps the
   // two-column grid aligned

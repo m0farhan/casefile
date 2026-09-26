@@ -309,15 +309,14 @@ export class TaskDetailView extends ItemView {
       config.issueTypes.find((t) => t.id === task.issueType)
     )
     if (task.key) renderKeyChip(header, task.key, { copy: true })
-    // Severity shows on any task type of a CASE board; the SLA chip stays
-    // incident-only (slaState also gates on issueType, so that is belt and braces).
+    // Severity shows on any task type of any board; the SLA chip stays
+    // incident-only on a case board (slaState also gates on issueType, so that
+    // is belt and braces).
     const socBoard = config.boardType !== 'plain'
-    if (socBoard) {
-      renderSeverityBadge(
-        header,
-        config.severities.find((s) => s.id === task.severity)
-      )
-    }
+    renderSeverityBadge(
+      header,
+      config.severities.find((s) => s.id === task.severity)
+    )
     if (socBoard && task.issueType === 'incident') {
       // Registered chips unregister themselves: the shared 30s tick drops any
       // chip whose element left the DOM, and both onClose and every render()

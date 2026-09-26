@@ -125,25 +125,24 @@ export class KanbanCard {
       { alert: { tags: task.tags, categories: socConfig?.alertCategories ?? DEFAULT_ALERT_CATEGORIES } }
     )
     if (task.key) renderKeyChip(chips, task.key, { plain: true })
-    // A plain board has no severity and no clocks. The values stay on the note;
-    // only the chips go.
+    // Severity shows on every board — it is the one urgency dial, and a plain
+    // board needs it as much as a case queue. A plain board runs no clocks and
+    // keeps no indicators; those values stay on the note and only the chips go.
     const socBoard = props.boardType !== 'plain'
-    if (socBoard) {
-      const sev = (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
-      // Severity rides the card's left edge as a spine, so a column answers
-      // "how bad is any of this" before a single title is read. The word still
-      // renders beside the clock — a color on its own is not a label, and the
-      // spine is redundancy for the eye, not the only carrier of the fact.
-      if (sev) {
-        card.addClass('pm-kanban-card--sev')
-        card.style.setProperty('--pm-sev', sev.color)
-      }
-      renderSeverityBadge(chips, sev, 'text')
-      // SLA chip stays incident-only (slaState also gates on issueType, so this
-      // is belt and braces).
-      if (task.issueType === 'incident') {
-        renderSlaChip(chips, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
-      }
+    const sev = (socConfig?.severities ?? DEFAULT_SEVERITIES).find((s) => s.id === task.severity)
+    // Severity rides the card's left edge as a spine, so a column answers
+    // "how bad is any of this" before a single title is read. The word still
+    // renders beside the clock — a color on its own is not a label, and the
+    // spine is redundancy for the eye, not the only carrier of the fact.
+    if (sev) {
+      card.addClass('pm-kanban-card--sev')
+      card.style.setProperty('--pm-sev', sev.color)
+    }
+    renderSeverityBadge(chips, sev, 'text')
+    // SLA chip stays incident-only (slaState also gates on issueType, so this
+    // is belt and braces).
+    if (socBoard && task.issueType === 'incident') {
+      renderSlaChip(chips, task, socConfig?.slaPolicies ?? DEFAULT_SLA_POLICIES)
     }
     if (socBoard && task.iocs.length) {
       const iocChip = chips.createSpan({ cls: 'pm-ioc-count' })
