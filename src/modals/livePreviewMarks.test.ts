@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyLine, computeInlineMarks, fenceMap } from './livePreviewMarks'
+import { blockGaps, classifyLine, computeInlineMarks, fenceMap, listDepths } from './livePreviewMarks'
 
 describe('computeInlineMarks', () => {
   it('marks **bold** with both marker runs hidden', () => {
@@ -187,22 +187,32 @@ describe('classifyLine', () => {
   })
 
   it('classifies tasks before bullets, with state offset and checked flag', () => {
+    // The marker covers the space after it, so the editor's text starts
+    // where the rendered item's text does.
     expect(classifyLine('- [ ] triage')).toEqual({
       kind: 'task',
       indent: 0,
-      markerLen: 5,
+      markerLen: 6,
       stateOffset: 3,
       checked: false
     })
     expect(classifyLine('  - [x] contained')).toEqual({
       kind: 'task',
       indent: 2,
-      markerLen: 5,
+      markerLen: 6,
       stateOffset: 5,
       checked: true
     })
     expect(classifyLine('- [X] upper')).toMatchObject({ kind: 'task', checked: true })
-    expect(classifyLine('- [x]')).toMatchObject({ kind: 'task', checked: true })
+    expect(classifyLine('- [x]')).toMatchObject({ kind: 'task', markerLen: 5, checked: true })
+  })
+
+  it('reads any state character as a checkbox, like the rendered preview', () => {
+    // The preview draws a checkbox for "[-]" too; the editor used to show it
+    // as a bullet followed by literal "[-]".
+    expect(classifyLine('- [-] deferred')).toMatchObject({ kind: 'task', checked: false })
+    expect(classifyLine('- [/] half')).toMatchObject({ kind: 'task', checked: false })
+    expect(classifyLine('- [x](link)')).toEqual({ kind: 'bullet', indent: 0 })
   })
 
   it('classifies bullet items for -, * and + with indent', () => {
@@ -221,5 +231,64 @@ describe('classifyLine', () => {
     expect(classifyLine('---')).toBeNull()
     expect(classifyLine('a - b')).toBeNull()
     expect(classifyLine('')).toBeNull()
+  })
+})
+
+describe('listDepths', () => {
+  it('nests an item under the item whose content column it reaches', () => {
+    expect(listDepths('- a\n  - b\n    - c\n- d')).toEqual([0, 1, 2, 0])
+  })
+
+  it('counts a tab as four columns and follows an ordered parent', () => {
+    expect(listDepths('- a\n\t- b')).toEqual([0, 1])
+    expect(listDepths('1. a\n   - b\n  - c')).toEqual([0, 1, 0])
+  })
+
+  it('keeps a one-space shift at the same level', () => {
+    expect(listDepths('- a\n - b')).toEqual([0, 0])
+  })
+
+  it('keeps the list open over blank lines and lazy text, and closes it on a new block', () => {
+    expect(listDepths('- a\n\n  - b')).toEqual([0, -1, 1])
+    expect(listDepths('- a\nmore\n  - b')).toEqual([0, -1, 1])
+    expect(listDepths('- a\n\ntext\n  - b')).toEqual([0, -1, -1, 0])
+    expect(listDepths('- a\n### H\n  - b')).toEqual([0, -1, 0])
+  })
+
+  it('ignores list-looking lines inside a fence', () => {
+    expect(listDepths('```\n- a\n```\n- b')).toEqual([-1, -1, -1, 0])
+  })
+})
+
+describe('blockGaps', () => {
+  it('reads the gaps around headings in both writing styles', () => {
+    // The LetsDefend note: no blank line under a heading, one above.
+    expect(blockGaps('### Alert:\n- a\n- b\n\n### Findings\n- c')).toEqual({ gaps: [0, 0, 1, 0], trail: 0 })
+    // The incident templates: two blank lines under Summary.
+    expect(blockGaps('## Summary\n\n\n## Checklist\n- [ ] x').gaps).toEqual([0, 2, 0])
+  })
+
+  it('gives a list straight after a text line no gap, and one after a blank line', () => {
+    expect(blockGaps('Steps:\n1. pull\n2. check').gaps).toEqual([0, 0])
+    expect(blockGaps('Steps:\n\n- pull').gaps).toEqual([0, 1])
+  })
+
+  it('keeps a paragraph whole: soft breaks, setext underlines, ordered items not at 1', () => {
+    expect(blockGaps('one\ntwo\n---\nthree\n2. not a list').gaps).toEqual([0])
+    expect(blockGaps('a\n\nb').gaps).toEqual([0, 1])
+  })
+
+  it('keeps one list over loose items, nesting and lazy text, and splits on a new marker', () => {
+    expect(blockGaps('- a\n\n- b\n  - c\n\n  more\nlazy').gaps).toEqual([0])
+    expect(blockGaps('- a\n* b').gaps).toEqual([0, 0])
+    expect(blockGaps('- a\n\ntext').gaps).toEqual([0, 1])
+  })
+
+  it('treats fences, quotes and rules as their own blocks and skips inside fences', () => {
+    expect(blockGaps('text\n```\n# x\n\n- y\n```\n> q\nlazy\n\n---').gaps).toEqual([0, 0, 0, 1])
+  })
+
+  it('counts leading and trailing blank lines, whitespace-only included', () => {
+    expect(blockGaps('\n \ntext\n\n')).toEqual({ gaps: [2], trail: 2 })
   })
 })
