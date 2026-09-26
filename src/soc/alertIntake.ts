@@ -1,5 +1,6 @@
 import type { Ioc, SeverityConfig } from '../types'
 import { extractIocsFromText } from './ioc'
+import { fenceVerbatim } from './safeRender'
 import { TASK_SLUG_MAX_LENGTH } from '../store/YamlSerializer'
 
 export interface ParsedAlert {
@@ -141,8 +142,14 @@ export function parseAlertPaste(text: string, cfg: { severities: SeverityConfig[
   }
 }
 
-/** A `<` that begins something a renderer would treat as markup. */
-const LOOKS_LIKE_MARKUP = /<[a-z!/]/i
+/**
+ * Anything a renderer would bring to life: a tag, a markdown image or embed
+ * (`![](…)`, `![x][r]`, `![[…]]`), a code-fence opener — which any plugin can
+ * claim for its own processor, Dataview's `dataviewjs` running JavaScript —
+ * or Dataview's inline `$=`. Fenced on every fence rather than a list of
+ * processors, because the list is whatever plugins the vault has.
+ */
+const LOOKS_LIKE_MARKUP = /<[a-z!/]|!\[|^[ \t]{0,3}(?:`{3,}|~{3,})|`\s*\$=/im
 
 /**
  * A pasted alert becomes the case description verbatim, and the description
@@ -151,20 +158,17 @@ const LOOKS_LIKE_MARKUP = /<[a-z!/]/i
  * attacker-written markup sitting in a file the analyst will open.
  *
  * Opened inside the plugin, `scrubRemoteEmbeds` guards the render. Opened as
- * an ordinary note, nothing guards it at all: an `<img>`, a `background=` or a
- * `style="background-image:url(…)"` fetches on sight, and that request tells
- * the sender the mail reached an analyst, when, and from which address.
+ * an ordinary note, nothing guards it at all: an `<img>`, a `![](…)`, a
+ * `background=` or a `style="background-image:url(…)"` fetches on sight, and
+ * that request tells the sender the mail reached an analyst, when, and from
+ * which address. A quoted `dataviewjs` block would run.
  *
- * So a paste carrying markup is fenced at the point it is written. Fencing is
- * not sanitising: every byte is kept, verbatim, and a code block renders none
- * of it anywhere — plugin, reading view, exported file or another vault.
- * Alerts without markup are left as prose, because the field blocks analysts
- * paste use markdown emphasis that is worth rendering.
+ * So a paste carrying any of that is fenced at the point it is written.
+ * Fencing is not sanitising: every byte is kept, verbatim, and a code block
+ * renders none of it anywhere — plugin, reading view, exported file or another
+ * vault. Alerts without it are left as prose, because the field blocks
+ * analysts paste use markdown emphasis that is worth rendering.
  */
 export function quarantineMarkup(text: string): string {
-  if (!LOOKS_LIKE_MARKUP.test(text)) return text
-  let longest = 0
-  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
-  const fence = '`'.repeat(Math.max(3, longest + 1))
-  return `${fence}\n${text}\n${fence}`
+  return LOOKS_LIKE_MARKUP.test(text) ? fenceVerbatim(text) : text
 }

@@ -219,6 +219,32 @@ describe('a pasted alert that quotes a message', () => {
     expect(out.startsWith('````')).toBe(true)
   })
 
+  it.each([
+    ['a markdown image', 'Rule : Reported phish\nBody : ![](https://evil.example/beacon.png?id=42)'],
+    ['a reference-style image', 'Rule : Reported phish\n![logo][r]\n\n[r]: https://evil.example/r.png'],
+    ['an embed', 'Rule : Reported phish\nBody : ![[Secret note]]'],
+    ['a dataviewjs block', 'Rule : Reported phish\n```dataviewjs\ndv.el("b", "x")\n```'],
+    ['a tilde fence', 'Rule : Reported phish\n~~~\ncode\n~~~'],
+    ['an inline Dataview query', 'Rule : Reported phish\nBody : `$= dv.el("b", "x")`']
+  ])('fences a paste holding %s', (_name, paste) => {
+    const out = parseAlertPaste(paste, CFG).description
+    const fence = out.slice(0, out.indexOf('\n'))
+    expect(fence).toMatch(/^`{3,}$/)
+    expect(out).toBe(`${fence}\n${paste}\n${fence}`)
+  })
+
+  it('fences a code block inside the paste with a longer fence it cannot close', () => {
+    const out = parseAlertPaste('Rule : x\n```dataviewjs\ncode\n```', CFG).description
+    expect(out.startsWith('````\n')).toBe(true)
+    expect(out.endsWith('\n````')).toBe(true)
+  })
+
+  it('leaves a dollar sign that is not a Dataview query as prose', () => {
+    expect(parseAlertPaste('Rule : Invoice fraud\nCost : $=5', CFG).description).toBe(
+      'Rule : Invoice fraud\nCost : $=5'
+    )
+  })
+
   it('leaves an ordinary alert as prose, so its emphasis still renders', () => {
     const paste = ['Rule : SOC138 - Detected Suspicious Xls File', 'Severity : Medium'].join('\n')
     const out = parseAlertPaste(paste, CFG).description
