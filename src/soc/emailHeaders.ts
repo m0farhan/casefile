@@ -228,13 +228,30 @@ function domainOf(address: string): string {
   return domain.slice(0, end)
 }
 
+/**
+ * The from-clause as the receiving MTA wrote it: the name after `from` and
+ * the comment right after that, which is where the MTA records the address it
+ * saw. Neither half is labelled. Postfix, Sendmail and Gmail put the name the
+ * sender gave first; Exim and qmail put the address or reverse name first and
+ * the sender's HELO in the comment — a label right for one is false for the
+ * other. The comment may hold one nested comment, Sendmail's "(may be forged)".
+ */
+const FROM_CLAUSE = /\bfrom\s+([^\s;()]+)(\s*\((?:[^()\\]|\\.|\((?:[^()\\]|\\.)*\))*\))?/i
+
 function parseHop(value: string, n: number): Hop {
-  const bracketed = /\[([0-9a-f.:]+)\]/i.exec(value)
-  const fromName = /\bfrom\s+([^\s;()]+)/i.exec(value)
-  const by = /\bby\s+([^\s;()]+)/i.exec(value)
-  const via = /\bwith\s+([^\s;()]+)/i.exec(value)
-  const id = /\bid\s+([^\s;()]+)/i.exec(value)
-  const forWhom = /\bfor\s+<?([^\s;()<>]+)>?/i.exec(value)
+  // The clause words are read with comments removed. Comments are free text:
+  // Postfix writes "(using TLSv1.3 with cipher …)" before `by`, which read as
+  // the protocol "cipher", and its local pickup writes "(Postfix, from userid
+  // 1000)", which read as a hop from "userid".
+  const bare = stripComments(value)
+  // ponytail: a comment holding `from <word>` ahead of the real from-clause is
+  // still read as the clause; finding the one outside comments needs a
+  // position-keeping comment scan, worth it if a real MTA writes that.
+  const fromClause = /\bfrom\s/i.test(bare) ? FROM_CLAUSE.exec(value) : null
+  const by = /\bby\s+([^\s;()]+)/i.exec(bare)
+  const via = /\bwith\s+([^\s;()]+)/i.exec(bare)
+  const id = /\bid\s+([^\s;()]+)/i.exec(bare)
+  const forWhom = /\bfor\s+<?([^\s;()<>]+)>?/i.exec(bare)
   // The date is whatever follows the LAST semicolon: ids and `for` clauses can
   // carry semicolons of their own, and the timestamp is always the tail. A
   // trailing comment such as "(UTC)" is cut by index — from the first `(`
@@ -245,7 +262,7 @@ function parseHop(value: string, n: number): Hop {
   const ms = value.includes(';') ? Date.parse(tail) : Number.NaN
   return {
     n,
-    from: [fromName?.[1], bracketed ? `[${bracketed[1]}]` : ''].filter(Boolean).join(' ') || 'not recorded',
+    from: fromClause ? fromClause[1] + (fromClause[2] ?? '') : 'not recorded',
     by: by?.[1] ?? 'not recorded',
     via: via?.[1] ?? 'not recorded',
     id: id?.[1] ?? '',

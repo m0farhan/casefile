@@ -354,3 +354,70 @@ describe('hostile header sizes stay linear', () => {
     expect(differ).toEqual([])
   })
 })
+
+describe('a Received hop, read as the MTA wrote it', () => {
+  const hop = (received: string) => analyseHeaders(`Received: ${received}\nFrom: a@b.test`).hops[0]
+
+  it('keeps the address Postfix saw beside a HELO literal, and the protocol outside the TLS comment', () => {
+    const h = hop(
+      'from [192.168.1.20] (unknown [203.0.113.9]) (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 ' +
+        '(256/256 bits) key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256) ' +
+        '(No client certificate requested) by mx.example.com (Postfix) with ESMTPS id 4ABC123 ' +
+        'for <user@example.com>; Mon, 1 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('[192.168.1.20] (unknown [203.0.113.9])')
+    expect(h.via).toBe('ESMTPS')
+    expect(h.by).toBe('mx.example.com')
+    expect(h.id).toBe('4ABC123')
+    expect(h.forWhom).toBe('user@example.com')
+    expect(h.at).toBe('2024-01-01T00:00:00.000Z')
+  })
+
+  it('keeps the public address Gmail recorded for a submission from a LAN', () => {
+    const h = hop(
+      'from [192.168.1.100] (host86-1-2-3.range86-1.btcentralplus.com. [86.1.2.3]) by smtp.gmail.com ' +
+        'with ESMTPSA id abc123 for <x@gmail.test> (version=TLS1_3 cipher=TLS_AES_256_GCM_SHA384 bits=256/256); ' +
+        'Mon, 01 Jan 2024 00:00:00 -0800 (PST)'
+    )
+    expect(h.from).toContain('86.1.2.3')
+    expect(h.via).toBe('ESMTPSA')
+    expect(h.at).toBe('2024-01-01T08:00:00.000Z')
+  })
+
+  it('keeps Exim’s order, the address it saw first and the HELO in the comment, unlabelled', () => {
+    const h = hop(
+      'from [203.0.113.8] (helo=[192.168.1.20]) by mx.example.com with esmtpsa (TLS1.3) tls ' +
+        'TLS_AES_256_GCM_SHA384 (Exim 4.96) (envelope-from <a@b.test>) id 1abc-000 for c@d.test; ' +
+        'Mon, 01 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('[203.0.113.8] (helo=[192.168.1.20])')
+    expect(h.via).toBe('esmtpsa')
+    expect(h.id).toBe('1abc-000')
+  })
+
+  it('reads an ordinary Postfix TLS hop as ESMTPS, not "cipher"', () => {
+    const h = hop(
+      'from mail.sender.test (mail.sender.test [198.51.100.5]) (using TLSv1.3 with cipher ' +
+        'TLS_AES_256_GCM_SHA384 (256/256 bits)) by mx.corp.test (Postfix) with ESMTPS id 9F2; ' +
+        'Mon, 1 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('mail.sender.test (mail.sender.test [198.51.100.5])')
+    expect(h.via).toBe('ESMTPS')
+  })
+
+  it('keeps the address in a Sendmail comment that nests "(may be forged)"', () => {
+    const h = hop(
+      'from smtp.sender.test (smtp.sender.test [192.0.2.1] (may be forged)) by mx.corp.test ' +
+        '(8.15.2/8.15.2) with ESMTP id 3ABC; Mon, 1 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('smtp.sender.test (smtp.sender.test [192.0.2.1] (may be forged))')
+    expect(h.via).toBe('ESMTP')
+  })
+
+  it('does not read a local pickup’s "(Postfix, from userid 1000)" as a hop from "userid"', () => {
+    const h = hop('by web1.corp.test (Postfix, from userid 1000) id 4XYZ; Mon, 1 Jan 2024 00:00:00 +0000')
+    expect(h.from).toBe('not recorded')
+    expect(h.by).toBe('web1.corp.test')
+    expect(h.id).toBe('4XYZ')
+  })
+})
