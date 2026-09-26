@@ -166,7 +166,9 @@ describe('trust attribution on authentication results', () => {
     const a = analyseHeaders(
       'ARC-Authentication-Results: i=1; relay.test; dkim=pass header.d=corp.test\nFrom: a@corp.test'
     )
-    expect(a.auth[0].assertedBy).toContain('ARC — relayed claim')
+    // Exactly: the host follows the ARC instance, and "i=1" was once printed
+    // as the host while a toContain check passed.
+    expect(a.auth[0].assertedBy).toBe('relay.test (ARC — relayed claim)')
   })
 
   it('says a Received-SPF result has no asserting host rather than implying one', () => {
@@ -316,7 +318,8 @@ describe('hostile header sizes stay linear', () => {
     ['a domain of dots', 'From: <x@' + '.'.repeat(100_000) + 'a>'],
     ['a long bare display name', 'From: ' + 'a'.repeat(100_000) + ' <x@y.test>'],
     ['a long quoted display name', 'From: "' + 'a'.repeat(100_000) + '" <x@y.test>'],
-    ['a Received tail of open parens', 'Received: from a.test by b.test; ' + '('.repeat(100_000)]
+    ['a Received tail of open parens', 'Received: from a.test by b.test; ' + '('.repeat(100_000)],
+    ['a result comment of escaped parens', 'Authentication-Results: mx.corp.test; spf=pass (' + '\\('.repeat(80_000)]
   ])('%s', (_, raw) => {
     const started = performance.now()
     analyseHeaders(raw)
@@ -419,5 +422,54 @@ describe('a Received hop, read as the MTA wrote it', () => {
     expect(h.from).toBe('not recorded')
     expect(h.by).toBe('web1.corp.test')
     expect(h.id).toBe('4XYZ')
+  })
+})
+
+describe('who asserted an authentication result', () => {
+  const said = (header: string) =>
+    analyseHeaders(`${header}\nFrom: a@contoso.test`).auth.map((r) => `${r.mechanism}=${r.result} by ${r.assertedBy}`)
+
+  it('says Microsoft 365’s results name no host, rather than naming "spf=pass" as one', () => {
+    const header =
+      'Authentication-Results: spf=pass (sender IP is 40.107.1.1) smtp.mailfrom=contoso.test; ' +
+      'dkim=pass (signature was verified) header.d=contoso.test;dmarc=pass action=none ' +
+      'header.from=contoso.test;compauth=pass reason=100'
+    expect(said(header)).toEqual([
+      'spf=pass by no asserting host stated',
+      'dkim=pass by no asserting host stated',
+      'dmarc=pass by no asserting host stated',
+      'compauth=pass by no asserting host stated'
+    ])
+    // The comment stays in the detail: it is where Microsoft states the sending IP.
+    expect(analyseHeaders(`${header}\nFrom: a@contoso.test`).auth[0].detail).toBe(
+      '(sender IP is 40.107.1.1) smtp.mailfrom=contoso.test'
+    )
+  })
+
+  it('reads the host after an ARC instance', () => {
+    expect(
+      said(
+        'ARC-Authentication-Results: i=1; mx.microsoft.com 1; spf=pass smtp.mailfrom=contoso.test; ' +
+          'dmarc=pass header.from=contoso.test'
+      )
+    ).toEqual([
+      'spf=pass by mx.microsoft.com (ARC — relayed claim)',
+      'dmarc=pass by mx.microsoft.com (ARC — relayed claim)'
+    ])
+  })
+
+  it('does not split a result at a semicolon in a comment or a quoted address', () => {
+    // Receivers copy the envelope sender into both, so the sender writes them.
+    expect(
+      said(
+        'Authentication-Results: mx.corp.test; spf=fail (domain of x@evil.test; dkim=pass) smtp.mailfrom=x@evil.test'
+      )
+    ).toEqual(['spf=fail by mx.corp.test'])
+    expect(
+      said(
+        'Authentication-Results: mx.corp.test; spf=fail (domain of "x;dkim=pass"@evil.test does not designate ' +
+          '192.0.2.1 as permitted sender) smtp.mailfrom="x;dkim=pass"@evil.test'
+      )
+    ).toEqual(['spf=fail by mx.corp.test'])
   })
 })

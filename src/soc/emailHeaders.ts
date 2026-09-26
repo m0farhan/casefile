@@ -272,17 +272,59 @@ function parseHop(value: string, n: number): Hop {
   }
 }
 
-function parseAuth(value: string, assertedBy = ''): AuthResult[] {
-  const segments = value.split(';')
-  const servid = assertedBy || segments[0].trim().split(/\s+/)[0] || 'not stated'
+/**
+ * An Authentication-Results value cut at its `;` — only those outside comments
+ * and quoted strings. Receivers copy the envelope sender into both, so a
+ * `"x;dkim=pass"@evil.test` split on every `;` gave a DKIM pass credited to
+ * the receiving host. `bare` has comment text blanked to spaces, the same
+ * length as `raw`, for matching; `raw` keeps "(sender IP is …)" for display.
+ * One pass, so a value of 160 KB of `\(` costs what its length costs.
+ */
+function authSegments(value: string): { raw: string; bare: string }[] {
+  const chars = value.split('')
+  const cuts = [-1]
+  let depth = 0
+  let quoted = false
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]
+    if (depth) chars[i] = ' '
+    if (c === '\\') {
+      if (depth && i + 1 < chars.length) chars[i + 1] = ' '
+      i++
+    } else if (quoted) {
+      quoted = c !== '"'
+    } else if (c === '(') {
+      depth++
+      chars[i] = ' '
+    } else if (c === ')') {
+      if (depth) depth--
+    } else if (!depth && c === '"') {
+      quoted = true
+    } else if (!depth && c === ';') {
+      cuts.push(i)
+    }
+  }
+  cuts.push(value.length)
+  const bare = chars.join('')
+  return cuts.slice(1).map((cut, k) => ({ raw: value.slice(cuts[k] + 1, cut), bare: bare.slice(cuts[k] + 1, cut) }))
+}
+
+function parseAuth(value: string, arc = false): AuthResult[] {
+  const segments = authSegments(value)
+  // ARC (RFC 8617) puts the instance, `i=1;`, ahead of the host.
+  if (arc && /^\s*i\s*=\s*\d+\s*$/i.test(segments[0].bare)) segments.shift()
+  // Microsoft 365 writes no host at all: the value opens with a result, and
+  // its first word, "spf=pass", was printed as the host that asserted it.
+  const head = segments[0]?.bare.trim() ?? ''
+  const servid = !head || /^[^\s=]+\s*=/.test(head) ? 'no asserting host stated' : head.split(/\s+/)[0]
   const out: AuthResult[] = []
-  for (const part of segments) {
-    const hit = /\b(spf|dkim|dmarc|arc|compauth)=(\w+)/i.exec(part)
+  for (const segment of segments) {
+    const hit = /^\s*(spf|dkim|dmarc|arc|compauth)\s*=\s*(\w+)/i.exec(segment.bare)
     if (!hit) continue
     out.push({
       mechanism: hit[1].toLowerCase(),
       result: hit[2].toLowerCase(),
-      detail: part.slice(hit.index + hit[0].length).trim(),
+      detail: segment.raw.slice(hit[0].length).trim(),
       assertedBy: servid
     })
   }
@@ -342,7 +384,7 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   const auth = [
     ...all('authentication-results').flatMap((v) => parseAuth(v)),
     ...all('arc-authentication-results').flatMap((v) =>
-      parseAuth(v).map((r) => ({ ...r, assertedBy: `${r.assertedBy} (ARC — relayed claim)` }))
+      parseAuth(v, true).map((r) => ({ ...r, assertedBy: `${r.assertedBy} (ARC — relayed claim)` }))
     )
   ]
   const receivedSpf = first('received-spf')
