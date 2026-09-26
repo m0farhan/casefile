@@ -11,6 +11,9 @@ interface FileContent {
   content: string
 }
 
+type VaultEvent = 'create' | 'modify' | 'delete' | 'rename'
+type VaultListener = (file: TAbstractFile, oldPath?: string) => void
+
 export class FakeVault {
   private files = new Map<string, FileContent>()
   private folders = new Map<string, TFolder>()
@@ -18,6 +21,23 @@ export class FakeVault {
   modifyCount = new Map<string, number>()
   createCount = new Map<string, number>()
   trashCount = new Map<string, number>()
+
+  /**
+   * Listeners for the vault events Obsidian fires, fired synchronously once
+   * the change is made, as Obsidian does. A folder rename fires for the folder
+   * and then for everything inside it; a folder trash fires for each item.
+   */
+  private listeners: { name: VaultEvent; fn: VaultListener }[] = []
+
+  on(name: VaultEvent, fn: VaultListener): { name: VaultEvent; fn: VaultListener } {
+    const ref = { name, fn }
+    this.listeners.push(ref)
+    return ref
+  }
+
+  private emit(name: VaultEvent, file: TAbstractFile, oldPath?: string): void {
+    for (const l of this.listeners.slice()) if (l.name === name) l.fn(file, oldPath)
+  }
 
   constructor() {
     const root = makeFolder('', null)
@@ -46,6 +66,7 @@ export class FakeVault {
     if (!entry) throw new Error(`modify: ${file.path} does not exist`)
     entry.content = content
     bump(this.modifyCount, file.path)
+    this.emit('modify', entry.file)
   }
 
   async process(file: TFile, fn: (data: string) => string): Promise<string> {
@@ -54,6 +75,7 @@ export class FakeVault {
     const next = fn(entry.content)
     entry.content = next
     bump(this.modifyCount, file.path)
+    this.emit('modify', entry.file)
     return next
   }
 
@@ -65,6 +87,7 @@ export class FakeVault {
     this.files.set(n, { file, content })
     parent.children.push(file)
     bump(this.createCount, n)
+    this.emit('create', file)
     return file
   }
 
@@ -76,6 +99,7 @@ export class FakeVault {
     this.files.set(n, { file, content: '' })
     parent.children.push(file)
     bump(this.createCount, n)
+    this.emit('create', file)
     return file
   }
 
@@ -86,6 +110,7 @@ export class FakeVault {
     const folder = makeFolder(n, parent)
     this.folders.set(n, folder)
     parent.children.push(folder)
+    this.emit('create', folder)
   }
 
   async rename(file: TAbstractFile, newPath: string): Promise<void> {
@@ -98,9 +123,11 @@ export class FakeVault {
       for (const f of folders) this.folders.delete(f.path)
       for (const e of entries) this.files.delete(e.file.path)
       detachFromParent(file)
+      const moved: [TAbstractFile, string][] = []
       for (const f of folders) {
         const np = to + f.path.slice(from.length)
         const parent = this.ensureFolderForPath(np)
+        moved.push([f, f.path])
         f.path = np
         f.name = np.slice(np.lastIndexOf('/') + 1)
         f.parent = parent
@@ -110,10 +137,12 @@ export class FakeVault {
       for (const e of entries) {
         const np = to + e.file.path.slice(from.length)
         const parent = this.ensureFolderForPath(np)
+        moved.push([e.file, e.file.path])
         relocateFile(e.file, np, parent)
         this.files.set(np, e)
         parent.children.push(e.file)
       }
+      for (const [f, old] of moved) this.emit('rename', f, old)
       return
     }
     const entry = this.files.get(from)
@@ -124,6 +153,7 @@ export class FakeVault {
     relocateFile(entry.file, to, parent)
     this.files.set(to, entry)
     parent.children.push(entry.file)
+    this.emit('rename', entry.file, from)
   }
 
   async trashFile(file: TAbstractFile): Promise<void> {
@@ -132,6 +162,7 @@ export class FakeVault {
       this.folders.delete(file.path)
       detachFromParent(file)
       bump(this.trashCount, file.path)
+      this.emit('delete', file)
       return
     }
     const entry = this.files.get(file.path)
@@ -139,6 +170,7 @@ export class FakeVault {
     this.files.delete(file.path)
     detachFromParent(entry.file)
     bump(this.trashCount, file.path)
+    this.emit('delete', entry.file)
   }
 
   resetCounts(): void {
