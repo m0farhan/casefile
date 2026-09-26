@@ -96,18 +96,24 @@ export function decodeBase64(input: string): Decoding[] {
 
 /**
  * Percent-escapes, decoded until the text stops changing (wrapped links nest
- * them several deep). `+` is deliberately left alone: it only means a space in
- * a form-encoded query, and rewriting it inside a path corrupts the value.
+ * them several deep). Each run of escapes decodes on its own, so one stray `%`
+ * or a `%TEMP%` in a command line no longer stops every other escape in the
+ * selection from decoding. A run that is not valid UTF-8 (the overlong
+ * `%c0%af` of an IIS traversal) keeps its bytes as written, never a guessed
+ * character; only its ASCII escapes, which are valid on their own, decode.
+ * `+` is deliberately left alone: it only means a space in a form-encoded
+ * query, and rewriting it inside a path corrupts the value.
  */
 export function decodePercentEscapes(input: string, max = 5): string {
   let text = input
   for (let i = 0; i < max; i++) {
-    let next: string
-    try {
-      next = decodeURIComponent(text)
-    } catch {
-      return text
-    }
+    const next = text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+      try {
+        return decodeURIComponent(run)
+      } catch {
+        return run.replace(/%[0-7][0-9a-f]/gi, (e) => decodeURIComponent(e))
+      }
+    })
     if (next === text) return text
     text = next
   }
@@ -130,6 +136,21 @@ export interface TimeReading {
 }
 
 const MS_1601_TO_1970 = 11_644_473_600_000
+
+const LOCAL = 'as written (no zone — read as this machine’s local time)'
+
+/**
+ * ISO 8601 as logs write it: a T or a space between date and time, optional
+ * seconds and fraction, and an optional zone (Z, UTC, GMT or an offset).
+ */
+const ISO_STAMP = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?)(\.\d+)?\s?(Z|UTC|GMT|[+-]\d{2}:?\d{2})?)?$/i
+
+/** A month by its name or its abbreviation. Not a prefix: V8 reads 'Decode 2019 12' as 12 December. */
+const MONTH_NAME =
+  /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i
+
+/** A zone the parser reads, at the end of a written date, with an optional '(PDT)' comment after it. */
+const STATED_ZONE = /(?:\dZ|[+-]\d{2}:?\d{2}|\b(?:UTC?|GMT|Z|[ECMP][SD]T))(?:\s*\([^)]*\))?$/i
 
 /**
  * Every reading the value could plausibly be, each labelled with its epoch.
@@ -158,13 +179,28 @@ export function readTimestamp(input: string): TimeReading[] {
     }
     return out
   }
-  const ms = Date.parse(raw)
-  if (Number.isNaN(ms)) return out
-  const zoned = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(raw)
-  out.push({
-    assumption: zoned ? 'as written (zone stated)' : 'as written (no zone — read as this machine’s local time)',
-    iso: new Date(ms).toISOString()
-  })
+  // ponytail: a written time is short, so a long selection is not one, and the
+  // patterns below never run over a large one.
+  if (raw.length > 80) return out
+  const iso = ISO_STAMP.exec(raw)
+  if (iso) {
+    const [, date, time, frac, zone] = iso
+    const offset = !zone ? '' : /^[+-]/.test(zone) ? `${zone.slice(0, 3)}:${zone.slice(-2)}` : 'Z'
+    // Rebuilt in the one form ECMAScript defines, so every platform reads it
+    // alike: a date alone is UTC midnight, and a time with no zone is local.
+    const strict = time ? `${date}T${time}${frac ? frac.slice(0, 4).padEnd(4, '0') : ''}${offset}` : date
+    add(!time ? 'date only (read as UTC midnight)' : zone ? 'as written (zone stated)' : LOCAL, Date.parse(strict))
+    return out
+  }
+  // Anything else goes to the legacy parser only when a month name, a year and
+  // a day are all written. Given anything, it reads the syslog stamp
+  // 'Sep 26 14:03:11' as 2001 and 'Server 2019' as 1 January: dates nobody
+  // wrote. An all-numeric 09/10/2026 is refused too; which order it means is
+  // not in the text.
+  // ponytail: the legacy parse is implementation-defined, so iOS may read or
+  // refuse a form V8 reads differently; every form it gets states its own year.
+  if (!MONTH_NAME.test(raw) || !/\b\d{4}\b/.test(raw) || !/\b\d{1,2}\b/.test(raw)) return out
+  add(STATED_ZONE.test(raw) ? 'as written (zone stated)' : LOCAL, Date.parse(raw))
   return out
 }
 
@@ -177,32 +213,61 @@ function plausibleIso(ms: number): string | null {
   return d.toISOString()
 }
 
-/** Defang every line of the selection that carries an indicator; leave prose alone. */
-export function defangSelection(text: string): string {
-  return text
-    .split('\n')
-    .map((line) => {
-      const value = line.trim()
-      if (!value || !hasIocShape(value)) return line
-      // A function replacement, not a string one: String.replace expands `$&`,
-      // `$\``, `$'` and `$1` INSIDE the replacement, so a URL carrying any of
-      // them came back corrupted — and a corrupted indicator is worse than an
-      // undefanged one, because it looks like a real value.
-      return line.replace(value, () => defangIoc(value, detectIocType(value)))
-    })
-    .join('\n')
+/**
+ * A list marker and a short label ('- ', '2. ', 'url: ') in front of a value,
+ * kept as written. The label needs whitespace after its colon, so a scheme
+ * (javascript:x) or a drive (C:\x) is never taken for one.
+ */
+const LINE_PREFIX = /^\s*(?:(?:[-*+]|\d{1,3}[.)])\s+)?(?:[\w.-][\w .-]{0,29}:\s+)?/
+
+/**
+ * Is this an indicator defangIoc has work on: an indicator shape, a UNC path,
+ * or a value with a scheme of two or more letters (one letter is a drive).
+ */
+function carriesIndicator(value: string): boolean {
+  return hasIocShape(value) || /^\\\\[^\s\\]/.test(value) || /^[a-z][a-z0-9+.-]+:\S/i.test(value)
 }
 
-/** Refang every line of the selection. */
-export function refangSelection(text: string): string {
-  return text
+/** The defanged selection, and the values that changed. */
+function defangLines(text: string): { out: string; changed: string[] } {
+  const changed: string[] = []
+  const out = text
     .split('\n')
     .map((line) => {
-      const value = line.trim()
-      if (!value) return line
-      return line.replace(value, () => refangIoc(value))
+      const prefix = LINE_PREFIX.exec(line)?.[0] ?? ''
+      const rest = line.slice(prefix.length)
+      const value = rest.trimEnd()
+      if (!value || !carriesIndicator(value)) return line
+      const shown = defangIoc(value, detectIocType(value))
+      if (shown === value) return line
+      changed.push(value)
+      // Spliced at the prefix, not found with line.replace, which hit the first
+      // copy (a label spelled like the value) and expanded `$&` in a URL.
+      return prefix + shown + rest.slice(value.length)
     })
     .join('\n')
+  return { out, changed }
+}
+
+/**
+ * Defang every line of the selection that carries an indicator, after any list
+ * marker or label; leave prose alone.
+ */
+export function defangSelection(text: string): string {
+  return defangLines(text).out
+}
+
+/**
+ * Refang every token of the selection. Per token rather than per line: the
+ * hxxp and [\\] steps are anchored to the start of a value, so a bullet or a
+ * label in front of one left '- hxxp://a[.]example/x' half refanged under a
+ * 'refanged' title. The second pass catches a scheme behind an opening bracket
+ * or quote, as in '(hxxp://…)'.
+ */
+export function refangSelection(text: string): string {
+  return text
+    .replace(/\S+/g, (t) => refangIoc(t))
+    .replace(/\bhxxp(?=s?:\/\/)/gi, (h) => (h === 'HXXP' ? 'HTTP' : 'http'))
 }
 
 /**
@@ -241,10 +306,17 @@ const TOOLS: Tool[] = [
     id: 'defang',
     name: 'Defang indicators',
     run: (s) => {
-      const out = defangSelection(s)
+      const { out, changed } = defangLines(s)
       if (out === s) return null
-      const type = detectIocType(s.trim())
-      return { title: `defanged (${IOC_TYPE_LABELS[type].toLowerCase()})`, body: out }
+      // The kind is named only for one value whose shape says what it is. A
+      // list is several kinds, and a UNC path or a bare scheme is not a
+      // domain just because detectIocType falls through to it.
+      const [one] = changed
+      const kind =
+        changed.length === 1 && hasIocShape(one) && !one.startsWith('\\\\')
+          ? ` (${IOC_TYPE_LABELS[detectIocType(one)].toLowerCase()})`
+          : ''
+      return { title: `defanged${kind}`, body: out }
     }
   },
   {
@@ -272,7 +344,14 @@ const TOOLS: Tool[] = [
     name: 'Decode percent-escapes',
     run: (s) => {
       const out = decodePercentEscapes(s)
-      return out === s ? null : { title: 'percent-escapes decoded', body: out }
+      if (out === s) return null
+      // An escape still in the output was left as written (not valid UTF-8,
+      // or nested deeper than the decoder goes), so the title says partly.
+      const partly = /%[0-9a-f]{2}/i.test(out)
+      return {
+        title: partly ? 'percent-escapes partly decoded (some left as written)' : 'percent-escapes decoded',
+        body: out
+      }
     }
   },
   {
