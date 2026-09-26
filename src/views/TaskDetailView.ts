@@ -13,6 +13,7 @@ import { renderSubtasksPanel } from '../modals/SubtasksPanel'
 import { renderLinksPanel } from '../modals/LinksPanel'
 import { renderAttachmentsSection } from '../modals/AttachmentsSection'
 import { findTaskById } from '../store/TaskIndex'
+import { flattenTasks } from '../store/TaskTreeOps'
 import { openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
@@ -121,12 +122,11 @@ export class TaskDetailView extends ItemView {
   private task: Task | null = null
   /** Last title actually persisted; debounced saves always send this, never the in-flight edit. */
   private persistedTitle = ''
-  /** Status before the in-flight edit — lets the rerender hook detect a change and run the verdict guard. */
+  /** Last status that passed the verdict guard; persist() always sends this, never a pick still waiting on the prompt. */
   private lastStatus = ''
   private descEditor: DescriptionEditorHandle | null = null
   private commentsSection: CommentsSectionHandle | null = null
   private saveTimer: number | null = null
-  private dirty = false
   private shownExtras = new Set<string>()
   /** Half-typed comment, hoisted across rerenders (the composer's DOM dies on every render). */
   private commentDraft = ''
@@ -197,7 +197,6 @@ export class TaskDetailView extends ItemView {
     this.removedSubtaskIds = []
     this.persistedTitle = this.task.title
     this.lastStatus = this.task.status
-    this.dirty = false
     // Per-task UI state: a draft or expanded timeline for task A must not leak into task B.
     this.commentDraft = ''
     this.commentHadFocus = false
@@ -225,7 +224,6 @@ export class TaskDetailView extends ItemView {
   }
 
   private scheduleSave(): void {
-    this.dirty = true
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer)
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null
@@ -233,31 +231,41 @@ export class TaskDetailView extends ItemView {
     }, 800)
   }
 
+  /** Saves whatever the clone holds that disk does not, scheduled or not:
+   * some edits reach the clone with no save scheduled (a field committed on
+   * 'change' after the debounce already ran), and persist() is a no-op when
+   * nothing differs. */
   private async flushPendingSave(): Promise<void> {
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer)
       this.saveTimer = null
     }
-    if (this.dirty) await this.persist()
+    await this.persist()
   }
 
   /** Debounce-path save: everything except the in-flight title edit. */
   private async persist(): Promise<void> {
     if (!this.project || !this.task || !this.snapshot) return
-    this.dirty = false
     // Diff against the pristine snapshot and send only what this panel
     // changed — the whole stale clone as a patch reverted concurrent edits
     // made elsewhere (drag a card to Done, type here → status undone on disk).
-    const patch = diffTaskPatch(this.snapshot, { ...this.task, title: this.persistedTitle })
+    // Title and status are the persisted ones: a title in flight saves on
+    // blur, and a close still waiting on the verdict prompt is not a close.
+    const task = this.task
+    const saved = () => ({ ...task, title: this.persistedTitle, status: this.lastStatus })
+    const patch = diffTaskPatch(this.snapshot, saved())
     const removed = this.removedSubtaskIds
     if (!Object.keys(patch).length && !removed.length) return
+    // subtaskBase makes the subtask merge three-way, so this panel's stale
+    // copy of a subtask never undoes a change made to it on the board.
+    const opts = { removedSubtaskIds: removed, subtaskBase: this.snapshot.subtasks }
     try {
-      await this.plugin.store.updateTask(
-        this.project,
-        this.task.id,
-        patch,
-        removed.length ? { removedSubtaskIds: removed } : undefined
-      )
+      // The store gets its own copy. Handed the panel's arrays, the live task
+      // shared them, and the next edit here changed the live task before the
+      // store could compare old with new: a second subtask tick never reached
+      // disk, an indicator removal was never logged. structuredClone, not
+      // JSON: a field cleared to undefined must stay in the patch.
+      await this.plugin.store.updateTask(this.project, this.task.id, structuredClone(patch), opts)
       this.removedSubtaskIds = []
       // Store-side stamps (activity entries, lifecycle timestamps, completion)
       // land on the LIVE task, not this editor clone. Sync them back, or the
@@ -268,9 +276,20 @@ export class TaskDetailView extends ItemView {
         this.task.respondedAt = live.respondedAt
         this.task.resolvedAt = live.resolvedAt
         this.task.completed = live.completed
+        // A subtask added here gets its key and note from the store, on the
+        // store's copy. Copied onto the panel's own subtask objects in place,
+        // since the subtask rows hold those objects.
+        const byId = new Map(flattenTasks(live.subtasks).map((f) => [f.task.id, f.task]))
+        for (const { task: sub } of flattenTasks(this.task.subtasks)) {
+          const stored = byId.get(sub.id)
+          if (stored) {
+            sub.key = stored.key
+            sub.filePath = stored.filePath
+          }
+        }
       }
       // Snapshot follows the save: the next diff is relative to what's on disk.
-      this.snapshot = JSON.parse(JSON.stringify({ ...this.task, title: this.persistedTitle })) as Task
+      this.snapshot = JSON.parse(JSON.stringify(saved())) as Task
       // The store marks this write as a self-write, so open boards deliberately
       // skip their file-watcher reload — but that skip assumes the SAVING view
       // refreshes itself. The panel is a different view: poke the boards.
@@ -409,6 +428,8 @@ export class TaskDetailView extends ItemView {
         this.scheduleSave()
         this.render()
       },
+      // The multi-selects pick outside this panel's DOM, so the body listeners below never hear them.
+      onChange: () => this.scheduleSave(),
       shownExtras: this.shownExtras
     })
 
@@ -492,8 +513,11 @@ export class TaskDetailView extends ItemView {
     // Any input inside the body (subtask titles, time logs) marks the clone
     // dirty; the field controls above already do it via rerender(), and the
     // description editor via its onChange. Event delegation keeps this one
-    // listener instead of N hooks.
+    // listener instead of N hooks. 'change' too: time logs, the estimate and
+    // the custom fields write the clone only on change, which can come after
+    // the debounce for their typing has already saved.
     body.addEventListener('input', () => this.scheduleSave())
+    body.addEventListener('change', () => this.scheduleSave())
 
     // Restore the pre-rebuild snapshot (scroll always; focus only where it was).
     contentEl.scrollTop = scrollTop
