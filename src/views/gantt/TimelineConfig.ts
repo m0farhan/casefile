@@ -46,24 +46,37 @@ export function buildTimelineConfig(tasks: Task[], granularity: GanttGranularity
   const allTasks = flattenTasks(tasks).map((f) => f.task)
   const now = today()
   const dates: Temporal.PlainDate[] = [now]
-
-  // Only dates this close to today widen the range. The reach leaves room for
-  // the 7 + 14 days of padding and the month snap (up to 30 days) below, so the
-  // span stays within MAX_DAYS. Rows with a date the range misses say so in text.
-  const reach = Math.floor((MAX_DAYS[granularity] - 51) / 2)
-  const earliest = now.subtract({ days: reach })
-  const latest = now.add({ days: reach })
-  const inReach = (d: Temporal.PlainDate): boolean =>
-    Temporal.PlainDate.compare(d, earliest) >= 0 && Temporal.PlainDate.compare(d, latest) <= 0
-
   for (const t of allTasks) {
     for (const d of [parsePlainDate(t.start), parsePlainDate(t.due)]) {
-      if (d && inReach(d)) dates.push(d)
+      if (d) dates.push(d)
     }
   }
+  const earliestOf = (ds: Temporal.PlainDate[]) =>
+    ds.reduce((min, d) => (Temporal.PlainDate.compare(d, min) < 0 ? d : min), ds[0])
+  const latestOf = (ds: Temporal.PlainDate[]) =>
+    ds.reduce((max, d) => (Temporal.PlainDate.compare(d, max) > 0 ? d : max), ds[0])
 
-  let startDate = dates.reduce((min, d) => (Temporal.PlainDate.compare(d, min) < 0 ? d : min), dates[0])
-  let endDate = dates.reduce((max, d) => (Temporal.PlainDate.compare(d, max) > 0 ? d : max), dates[0])
+  // Room for the 7 + 14 days of padding and the month snap (up to 30 days) below.
+  const edges = 51
+  let startDate = earliestOf(dates)
+  let endDate = latestOf(dates)
+  // A board whose dates and today all fit keeps every one, however far from
+  // today they sit. Only a span too wide for MAX_DAYS (a mistyped year, most
+  // often) falls back to the dates this close to today; rows with a date the
+  // range misses say so in text.
+  // ponytail: the fallback centres on today, so a board with more than MAX_DAYS
+  // of real dates loses its oldest (or latest) bars. Pick the densest window
+  // instead if such boards turn up.
+  if (endDate.since(startDate, { largestUnit: 'days' }).days + edges > MAX_DAYS[granularity]) {
+    const reach = Math.floor((MAX_DAYS[granularity] - edges) / 2)
+    const earliest = now.subtract({ days: reach })
+    const latest = now.add({ days: reach })
+    const inReach = dates.filter(
+      (d) => Temporal.PlainDate.compare(d, earliest) >= 0 && Temporal.PlainDate.compare(d, latest) <= 0
+    )
+    startDate = earliestOf(inReach)
+    endDate = latestOf(inReach)
+  }
 
   // Add padding
   startDate = startDate.subtract({ days: 7 })
