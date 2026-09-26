@@ -489,6 +489,12 @@
 .pm-kanban-card > .pm-kanban-progress:focus-visible::-webkit-slider-thumb {
   opacity: 1;
 }
+/* No hover on a touch screen, so the thumb shows all the time. */
+@media (hover: none) {
+  .pm-kanban-card > .pm-kanban-progress::-webkit-slider-thumb {
+    opacity: 1;
+  }
+}
 .pm-kanban-card > .pm-kanban-progress:focus-visible {
   box-shadow: var(--gs-focus-ring);
 }
