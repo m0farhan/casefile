@@ -178,14 +178,9 @@
   border-top: none;
   position: relative;
 }
+/* Box, type and block spacing live in task-editor.css, shared with the editor. */
 .pm-modal-desc-preview {
-  padding: 6px 8px;
   background: transparent;
-  border-radius: var(--radius-s);
-  border: 1px solid transparent;
-  font-size: 13px;
-  line-height: 1.6;
-  min-height: 32px;
   cursor: text;
   user-select: text;
   /* Long unbroken tokens (report URLs, hashes) must wrap inside the box */
@@ -194,12 +189,6 @@
 .pm-modal-desc-preview:hover {
   background: var(--background-modifier-hover);
   border-color: var(--background-modifier-border);
-}
-.pm-modal-desc-preview p {
-  margin: 0 0 0.5em;
-}
-.pm-modal-desc-preview p:last-child {
-  margin-bottom: 0;
 }
 .pm-modal-desc-preview a {
   color: var(--interactive-accent-hover);

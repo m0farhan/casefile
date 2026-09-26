@@ -38,8 +38,9 @@ function serializeProjectConfig(config: ProjectConfig | undefined): Record<strin
  * render, which is how `Invoice ]] ![[private-note]] <img src=http://beacon>`
  * turns a board index into an embed and a beacon that fires when the note is
  * opened. Square brackets are display-only here, so replacing them costs the
- * alias nothing and closes the whole class at the one place every title is
- * written.
+ * alias nothing and closes the class for every link this serializer writes
+ * into a board or case note. Titles written elsewhere as text (the case report
+ * and the shift handover) are escaped there, with inertLine.
  */
 function linkAlias(title: string): string {
   return title.replace(/[[\]]/g, ' ').replace(/[\r\n]+/g, ' ')

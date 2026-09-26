@@ -15,6 +15,7 @@ import { Component, MarkdownRenderer, Menu, Notice, type App } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { IconButton } from '../ui/primitives/IconButton'
+import { safeAsync } from '../utils'
 import { toggleRenderedCheckbox } from './checkboxToggle'
 import { toggleInlineMarker } from './inlineFormat'
 import { blockGaps, classifyLine, computeInlineMarks, fenceMap, listDepths } from './livePreviewMarks'
@@ -26,8 +27,13 @@ export interface DescriptionEditorContext {
   project: Project
   /** Mutated in place (task.description) exactly like the modal's deep clone was. */
   task: Task
-  /** Called before following an internal link (the modal closes itself here; a leaf view does nothing). */
-  onNavigateAway?: () => void
+  /**
+   * Called before following an internal link (the modal closes itself here; a
+   * leaf view passes nothing). The link opens once the answer settles, and not
+   * at all when it is false, so a host can ask before leaving without the note
+   * opening behind its prompt.
+   */
+  onNavigateAway?: (() => void) | (() => Promise<boolean>)
   /** Called on every doc change (the detail panel schedules its autosave here). */
   onChange?: () => void
 }
@@ -416,6 +422,8 @@ export function renderDescriptionEditor(
 
   const toggleCheckbox = (index: number) => {
     task.description = toggleRenderedCheckbox(task.description, index)
+    // A tick is an edit like a keystroke: the side panel's autosave hears it.
+    ctx.onChange?.()
     void renderPreview()
   }
 
@@ -520,6 +528,11 @@ export function renderDescriptionEditor(
 
   editBtn.onClick(() => showEdit(task.description.length))
 
+  const followLink = safeAsync(async (href: string) => {
+    if ((await ctx.onNavigateAway?.()) === false) return
+    await app.workspace.openLinkText(href, sourcePath)
+  })
+
   // With app and sourcePath the guard also stops evidence Obsidian cannot
   // display itself (a dropped .html or .lnk) from reaching the system's
   // default app; it copies the path instead (a124).
@@ -536,8 +549,7 @@ export function renderDescriptionEditor(
         e.preventDefault()
         e.stopPropagation()
         const href = link.getAttribute('data-href') || link.getAttribute('href') || ''
-        ctx.onNavigateAway?.()
-        void app.workspace.openLinkText(href, sourcePath)
+        followLink(href)
         return
       }
       // External links never open from here — the capture-phase handler

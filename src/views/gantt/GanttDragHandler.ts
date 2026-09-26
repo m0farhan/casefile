@@ -15,6 +15,48 @@ function requireCase(project: Project, taskId: string): void {
   if (!findTaskById(project, taskId)) throw new Error('The case is no longer on this board.')
 }
 
+/**
+ * Pushes the undo entry for a bar's saved dates, then lets auto-scheduling
+ * move whatever depends on it. Undo puts back this bar's dates only. The
+ * plugin announces an undo or redo from the entry's label, and that is the one
+ * message, so when scheduling moved tasks the label says how many.
+ */
+async function recordDateChange(
+  plugin: PMPlugin,
+  project: Project,
+  task: Task,
+  before: Pick<Task, 'start' | 'due'>,
+  patch: Partial<Task>,
+  onRefresh: () => Promise<void>
+): Promise<void> {
+  const taskId = task.id
+  const redoPatch: Partial<Task> = { ...patch }
+  const entry = {
+    label: `dates of "${task.title}" on ${project.title}`,
+    undo: async () => {
+      requireCase(project, taskId)
+      await plugin.store.updateTask(project, taskId, { ...before })
+      await onRefresh()
+    },
+    redo: async () => {
+      requireCase(project, taskId)
+      await plugin.store.updateTask(project, taskId, redoPatch)
+      await plugin.store.scheduleAfterChange(project, taskId)
+      await onRefresh()
+    }
+  }
+  // Pushed before scheduling runs, so a failed schedule still leaves the
+  // saved drag undoable; the count is added once it is known.
+  plugin.pushUndo(entry)
+  const moved = await plugin.store.scheduleAfterChange(project, taskId)
+  if (moved > 0) {
+    const tasks =
+      moved === 1 ? '1 task after the drag; check its dates' : `${moved} tasks after the drag; check their dates`
+    entry.label += ` (auto-scheduling moved ${tasks})`
+  }
+  await onRefresh()
+}
+
 export interface DragState {
   isDragging: boolean
   dragSide: 'left' | 'right' | 'move' | null
@@ -131,26 +173,7 @@ export function attachDragHandle(
         console.error('GanttDragHandler: save failed', err)
         return
       }
-      const redoPatch: Partial<Task> = { ...patch }
-      plugin.pushUndo({
-        label: `dates of "${task.title}" on ${project.title}`,
-        undo: async () => {
-          requireCase(project, taskId)
-          await plugin.store.updateTask(project, taskId, { start: oldStart, due: oldDue })
-          if (plugin.store.configFor(project).autoSchedule) {
-            new Notice('Dates reverted. Dependent task dates may need adjustment.')
-          }
-          await onRefresh()
-        },
-        redo: async () => {
-          requireCase(project, taskId)
-          await plugin.store.updateTask(project, taskId, redoPatch)
-          await plugin.store.scheduleAfterChange(project, taskId)
-          await onRefresh()
-        }
-      })
-      await plugin.store.scheduleAfterChange(project, drag.dragTask.id)
-      await onRefresh()
+      await recordDateChange(plugin, project, task, { start: oldStart, due: oldDue }, patch, onRefresh)
     })
 
     activeDocument.addEventListener('mousemove', onMove)
@@ -245,26 +268,7 @@ export function attachBarMove(
         console.error('GanttDragHandler: move save failed', err)
         return
       }
-      const redoPatch: Partial<Task> = { ...patch }
-      plugin.pushUndo({
-        label: `dates of "${task.title}" on ${project.title}`,
-        undo: async () => {
-          requireCase(project, taskId)
-          await plugin.store.updateTask(project, taskId, { start: oldStart, due: oldDue })
-          if (plugin.store.configFor(project).autoSchedule) {
-            new Notice('Dates reverted. Dependent task dates may need adjustment.')
-          }
-          await onRefresh()
-        },
-        redo: async () => {
-          requireCase(project, taskId)
-          await plugin.store.updateTask(project, taskId, redoPatch)
-          await plugin.store.scheduleAfterChange(project, taskId)
-          await onRefresh()
-        }
-      })
-      await plugin.store.scheduleAfterChange(project, drag.dragTask.id)
-      await onRefresh()
+      await recordDateChange(plugin, project, task, { start: oldStart, due: oldDue }, patch, onRefresh)
     })
 
     rect.classList.add('pm-gantt-bar-grabbing')
