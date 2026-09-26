@@ -33,6 +33,8 @@ export class AlertIntakeModal extends Modal {
   private severitySelect!: HTMLSelectElement
   /** Derived from the title, never stored until Create — see renderCategory. */
   private category = ''
+  /** The analyst turned the suggestion down; typing in the title does not bring it back. */
+  private categoryDismissed = false
   private categoryEl!: HTMLElement
   private occurredEl!: HTMLElement
   private detectedEl!: HTMLElement
@@ -70,7 +72,9 @@ export class AlertIntakeModal extends Modal {
       return
     }
 
-    contentEl.createEl('h2', { text: 'New case from pasted alert' })
+    // Named, because the palette command falls back to the first open board
+    // when none has focus, and the case is filed wherever this says.
+    contentEl.createEl('h2', { text: `New case on ${this.project.title}` })
 
     const paste = contentEl.createEl('textarea', {
       cls: 'pm-alert-paste',
@@ -92,6 +96,7 @@ export class AlertIntakeModal extends Modal {
     this.titleInput = row('Title').createEl('input', { type: 'text', cls: 'pm-prop-text' })
     this.titleInput.addEventListener('input', () => {
       this.createBtn.setDisabled(!this.titleInput.value.trim())
+      if (!this.categoryDismissed) this.renderCategory()
     })
 
     this.severitySelect = row('Severity').createEl('select', { cls: 'pm-prop-select' })
@@ -128,6 +133,7 @@ export class AlertIntakeModal extends Modal {
   private renderPreviewValues(): void {
     this.titleInput.value = this.parsed.title
     this.severitySelect.value = this.parsed.severityId
+    this.categoryDismissed = false
     this.renderCategory()
     this.renderStamp('occurredAt', this.parsed.occurredAt)
     this.renderStamp('detectedAt', this.parsed.detectedAt)
@@ -183,10 +189,12 @@ export class AlertIntakeModal extends Modal {
    * that matched, so the analyst can see why. It is a suggestion until Create:
    * confirming writes it as an ordinary tag on the case, which is what the card
    * glyph reads. Nothing is written if they clear it, and a title that names no
-   * category says so rather than picking one.
+   * category says so rather than picking one. Re-derived as the title is
+   * edited, from the title as it now reads: a match against words no longer
+   * in it would be a claim about text that is not there.
    */
   private renderCategory(): void {
-    const hit = suggestCategory(this.titleInput.value || this.parsed.title, this.plugin.settings.alertCategories)
+    const hit = suggestCategory(this.titleInput.value, this.plugin.settings.alertCategories)
     this.category = hit?.id ?? ''
     this.categoryEl.empty()
     if (!hit) {
@@ -198,6 +206,7 @@ export class AlertIntakeModal extends Modal {
       .setIcon('x')
       .setTooltip('Do not tag this case')
       .onClick(() => {
+        this.categoryDismissed = true
         this.category = ''
         this.categoryEl.empty()
         this.categoryEl.createSpan({ cls: 'pm-alert-empty', text: 'Not recorded' })
