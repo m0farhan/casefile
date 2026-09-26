@@ -62,6 +62,18 @@ export function inertLine(s: string): string {
 }
 
 /**
+ * Dataview runs a code span whose trimmed text starts with `=` (a query) or
+ * `$=` (JavaScript), and an indicator value is whatever was typed or pasted.
+ * The leading `=` is shown in visibleName's `<U+003D>` form: still visible,
+ * no invisible character added, and no longer a query prefix.
+ * ponytail: belongs in quoteUntrusted (emailHeaders.ts), where the header,
+ * phish and handover spans would get it too; this is a no-op once it is there.
+ */
+function noQueryPrefix(value: string): string {
+  return value.replace(/^(\s*\$?)=/, '$1<U+003D>')
+}
+
+/**
  * Why an incident whose severity has a target shows no clock. "No target
  * set." would be false here: the target exists, a stamp the clock needs does
  * not, or cannot be read.
@@ -72,7 +84,9 @@ function noClockLine(task: Task): string {
   if (Number.isNaN(Date.parse(iso))) {
     return `Target set — no clock: the ${from === 'detected' ? 'detection' : 'creation'} time is not a readable date.`
   }
-  return 'Target set — not computable: the resolved time is not a readable date.'
+  return Number.isNaN(Date.parse(task.resolvedAt))
+    ? 'Target set — not computable: the resolved time is not a readable date.'
+    : "Target set — not computable: the resolved time is before the clock's anchor."
 }
 
 /**
@@ -134,6 +148,10 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
     const responded = task.respondedAt ? Date.parse(task.respondedAt) : NaN
     if (task.respondedAt && Number.isNaN(responded)) {
       lines.push('- Response: not computable — the responded time is not a readable date')
+    } else if (responded < anchor) {
+      // A stamp before the anchor would print a margin larger than the target
+      // itself, as met. The lifecycle panel hides such a duration; so does this.
+      lines.push("- Response: not computable — the responded time is before the clock's anchor")
     } else if (!Number.isNaN(responded)) {
       const margin = anchor + policy.responseMins * 60_000 - responded
       lines.push(
@@ -155,7 +173,9 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
       // Resolved without a response timestamp — the response phase is honestly unknown.
       lines.push('- Response: response time not recorded')
     }
-    if (state.phase === 'resolution' && state.done) {
+    if (state.phase === 'resolution' && state.done && Date.parse(task.resolvedAt) < anchor) {
+      lines.push("- Resolution: not computable — the resolved time is before the clock's anchor")
+    } else if (state.phase === 'resolution' && state.done) {
       lines.push(
         `- Resolution: ${
           state.breached
@@ -186,7 +206,7 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
       const asset = assetRule(ioc.value, ctx.ownedAssets) ? OWN_ASSET_SUFFIX : ''
       // In a code span, or a defanged UNC path loses a backslash and `__x__`
       // turns bold: the reader would see an indicator that is not the recorded one.
-      const value = cell(quoteUntrusted(defangIoc(ioc.value, ioc.type))) + asset
+      const value = cell(quoteUntrusted(noQueryPrefix(defangIoc(ioc.value, ioc.type)))) + asset
       lines.push(`| ${ioc.type} | ${value} | ${cell(inertLine(ioc.note ?? ''))} |`)
     }
   }

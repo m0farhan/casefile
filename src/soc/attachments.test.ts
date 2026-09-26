@@ -47,6 +47,19 @@ describe('extractAttachmentRefs', () => {
       'shot.png'
     ])
   })
+
+  it('keeps an alt text holding "!"', () => {
+    expect(extractAttachmentRefs(['![Warning! phish lure](evidence/lure.png)'])).toEqual(['evidence/lure.png'])
+  })
+
+  it('scans a line of hostile image openers in linear time', () => {
+    // Each '![' used to run its alt to the line end: 100 KB took over 2 s, on every render.
+    for (const line of ['!['.repeat(50000), '![a'.repeat(50000), '![!'.repeat(50000), '![]('.repeat(50000)]) {
+      const start = performance.now()
+      expect(extractAttachmentRefs([line])).toEqual([])
+      expect(performance.now() - start).toBeLessThan(100)
+    }
+  })
 })
 
 describe('refExtension', () => {

@@ -258,6 +258,11 @@ describe('a pasted alert that quotes a message', () => {
     ['an embed', 'Rule : Reported phish\nBody : ![[Secret note]]'],
     ['a dataviewjs block', 'Rule : Reported phish\n```dataviewjs\ndv.el("b", "x")\n```'],
     ['a tilde fence', 'Rule : Reported phish\n~~~\ncode\n~~~'],
+    // A quote, a callout or a list item holds a live fence too.
+    ['a fence in a quote', 'Rule : Reported phish\n> ```dataviewjs\n> dv.el("b", "x")\n> ```'],
+    ['a fence in a nested quote', 'Rule : Reported phish\n> > ~~~dataviewjs\n> > dv.el("b", "x")\n> > ~~~'],
+    ['a fence in a callout', 'Rule : Reported phish\n> [!note]\n> ```dataviewjs\n> dv.el("b", "x")\n> ```'],
+    ['a fence in a list item', 'Rule : Reported phish\n1. x\n\n    ```dataviewjs\n    dv.el("b", "x")\n    ```'],
     ['an inline Dataview query', 'Rule : Reported phish\nBody : `$= dv.el("b", "x")`']
   ])('fences a paste holding %s', (_name, paste) => {
     const out = parseAlertPaste(paste, CFG).description

@@ -57,7 +57,12 @@ export function refExtension(ref: string): string {
 }
 
 // Wikilink alternative first so ![[embed]] never parses as a markdown image.
-const REF_PATTERN = /!?\[\[([^[\]\n]+)\]\]|!\[[^\]\n]*\]\(([^()\n]+)\)/g
+// The image alt stops at '[' as well as ']': every attempt starts at a '[',
+// so the next one ends it and the scans stay disjoint. With only ']' a line of
+// hostile '![' ran each attempt to the line end — 100 KB froze every render.
+// ponytail: alt text holding brackets (`![a [b] c](x.png)`) is not collected;
+// a small linear bracket-depth scan if that ever turns up in real evidence.
+const REF_PATTERN = /!?\[\[([^[\]\n]+)\]\]|!\[[^[\]\n]*\]\(([^()\n]+)\)/g
 
 /**
  * Extract attachment refs from markdown: ![[name.png]], [[file.pdf]] and

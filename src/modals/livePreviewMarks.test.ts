@@ -145,6 +145,18 @@ describe('computeInlineMarks', () => {
   it('returns nothing for a plain line', () => {
     expect(computeInlineMarks('just words')).toEqual([])
   })
+
+  it('scans one long pasted line in linear time', () => {
+    // Every opener without a closer used to rescan the rest of the line, and
+    // every run re-checked every code span: 100 KB took 15 s per rebuild.
+    for (const line of ['(_a'.repeat(33333), '*a '.repeat(20000), '`a`*'.repeat(15000)]) {
+      const start = performance.now()
+      computeInlineMarks(line)
+      expect(performance.now() - start).toBeLessThan(100)
+    }
+    // A failed opener of one length still lets a later pair of another close.
+    expect(computeInlineMarks('*a **b** c').map((m) => [m.cls, m.from, m.to])).toEqual([['strong', 3, 8]])
+  })
 })
 
 describe('fenceMap', () => {
