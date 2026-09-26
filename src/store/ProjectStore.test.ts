@@ -2026,3 +2026,67 @@ describe('ProjectStore board note frontmatter the analyst added', () => {
     expect(fm).not.toHaveProperty('reportsSince')
   })
 })
+
+describe('ProjectStore hand-edited frontmatter types', () => {
+  /** A board with the given hand-written case notes, loaded by a fresh store. */
+  async function boardWith(
+    notes: Record<string, string>
+  ): Promise<{ store: ProjectStore; vault: FakeVault; project: Project }> {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Hand', 'Projects')
+    const folder = project.filePath.replace(/[^/]+\.md$/, 'Tasks')
+    for (const [name, fm] of Object.entries(notes))
+      await vault.create(`${folder}/${name}.md`, `---\npm-task: true\n${fm}\n---\n`)
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const loaded = expectDefined(await store2.loadProject(vault.getAbstractFileByPath(project.filePath) as TFile))
+    return { store: store2, vault, project: loaded }
+  }
+
+  it('a numeric title loads as text and its board still saves', async () => {
+    const { store, project } = await boardWith({ '4625': 'id: "n1"\ntitle: 4625', Other: 'id: "o1"\ntitle: "Other"' })
+    expect(findTask(project.tasks, 'n1')?.title).toBe('4625')
+    await store.updateTask(project, 'n1', { status: 'in-progress' })
+    await store.updateTask(project, 'o1', { status: 'in-progress' })
+    expect(findTask(project.tasks, 'o1')?.status).toBe('in-progress')
+  })
+
+  it('two notes with no id both load, each with an id that is the same on every load', async () => {
+    const { project } = await boardWith({ A: 'title: "Case A"', B: 'title: "Case B"' })
+    const titles = project.tasks.map((t) => t.title).sort()
+    expect(titles).toEqual(['Case A', 'Case B'])
+    expect(project.tasks.map((t) => t.id).sort()).toEqual(['Projects/Hand/Tasks/A.md', 'Projects/Hand/Tasks/B.md'])
+  })
+
+  it('a scalar tags value is kept, and written back as a list', async () => {
+    const { store, vault, project } = await boardWith({ T: 'id: "t1"\ntitle: "T"\ntags: phishing, malware' })
+    const t = expectDefined(findTask(project.tasks, 't1'))
+    expect(t.tags).toEqual(['phishing', 'malware'])
+    await store.updateTask(project, 't1', { description: 'x' })
+    const fm = parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(expectDefined(t.filePath)) as TFile))
+    expect(fm.frontmatter?.tags).toEqual(['phishing', 'malware'])
+  })
+
+  it('numeric ids keep their parent and child', async () => {
+    const { project } = await boardWith({
+      Parent: 'id: 1\ntitle: "Parent"\nsubtaskIds: [2]',
+      Child: 'id: 2\ntitle: "Child"\nparentId: 1'
+    })
+    expect(project.tasks.map((t) => [t.id, t.subtasks.map((s) => s.id)])).toEqual([['1', ['2']]])
+  })
+
+  it('time logged as text is summed as a number, and unreadable hours are dropped', async () => {
+    const { project } = await boardWith({
+      L: 'id: "l1"\ntitle: "L"\ntimeLogs:\n  - hours: "1.5"\n  - hours: 2\n  - hours: "soon"'
+    })
+    expect(findTask(project.tasks, 'l1')?.timeLogs?.map((l) => l.hours)).toEqual([1.5, 2])
+  })
+
+  it('a board whose title is a number does not take every board off the list', async () => {
+    const { store, vault, app } = newStore()
+    for (const t of ['Alpha', 'Zeta', 'Numeric']) await store.createProject(t, 'Projects')
+    const f = vault.getAbstractFileByPath('Projects/Numeric/Numeric.md') as TFile
+    await vault.modify(f, (await vault.cachedRead(f)).replace('title: "Numeric"', 'title: 2026'))
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    expect((await store2.loadAllProjects('Projects')).map((p) => p.title)).toEqual(['2026', 'Alpha', 'Zeta'])
+  })
+})

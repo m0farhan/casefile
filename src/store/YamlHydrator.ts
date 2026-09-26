@@ -60,8 +60,9 @@ function hydrateLinks(raw: unknown): TaskLink[] {
     if (!entry || typeof entry !== 'object') continue
     const l = entry as Record<string, unknown>
     if (typeof l.type !== 'string' || !LINK_TYPES.has(l.type)) continue
-    if (typeof l.taskId !== 'string' || !l.taskId) continue
-    links.push({ type: l.type as TaskLink['type'], taskId: l.taskId })
+    const taskId = str(l.taskId, '')
+    if (!taskId) continue
+    links.push({ type: l.type as TaskLink['type'], taskId })
   }
   return links
 }
@@ -122,79 +123,123 @@ export function hydrateSavedViews(raw: unknown[]): SavedView[] {
     })
 }
 
-/** Map raw frontmatter fields to a Task, with optional overrides */
 /**
- * A frontmatter scalar as an ISO string. Obsidian's parseYaml is js-yaml
- * (YAML 1.1), so an unquoted `occurredAt: 2024-05-13 09:22:00` arrives as a
- * Date, and `20240513` as a number. Coerced rather than dropped: promoting a
- * key into KNOWN_TASK_FRONTMATTER_KEYS stops extras capturing it, so a
- * discarded value is DELETED from the analyst's note on the next save, and a
- * Date left in place reaches appendYaml's object branch and writes `key: {}`.
- * ponytail: the four lifecycle stamps below still use the plain `typeof`
- * fallback — same latent gap, no clock rides on them; widen to isoOr if a
- * hand-written detectedAt is ever seen.
+ * A known frontmatter field as text. The plugin's own writer quotes every
+ * string, but a hand-edited note does not: `title: 4625` (an event id) arrives
+ * as a number, and a YAML 1.1 parser reads an unquoted `2024-05-13 09:22:00`
+ * as a Date. A cast let those through, and a number title then threw inside
+ * every save of its board. Each is coerced to what the analyst wrote, never
+ * dropped: an owned key is not captured as an extra, so a discarded value
+ * would be deleted from the note on the next save, and a Date left in place
+ * would reach appendYaml's object branch and write `key: {}`.
  */
-function isoOr(v: unknown, fallback: string): string {
+function str(v: unknown, fallback: string): string {
   if (typeof v === 'string') return v
-  if (v instanceof Date) return v.toISOString()
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? fallback : v.toISOString()
+  if ((typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean') return String(v)
   return fallback
 }
 
+/** A date-only field (start, due, completed): a Date keeps its calendar day, never a time. */
+function day(v: unknown): string {
+  return v instanceof Date && !Number.isNaN(v.getTime()) ? v.toISOString().slice(0, 10) : str(v, '')
+}
+
+/**
+ * A list of text values (tags, assignees, ids). Number items keep their
+ * digits, anything that is not text is dropped, and a single scalar where a
+ * list belongs (`tags: phishing`) becomes a one-item list instead of being
+ * deleted on the next save. Scalar tags are split on commas, which is how
+ * Obsidian itself reads `tags: phishing, malware`.
+ */
+export function strList(v: unknown, splitCommas = false): string[] {
+  if (Array.isArray(v)) {
+    const out: string[] = []
+    for (const item of v) {
+      const s = typeof item === 'string' || typeof item === 'number' ? str(item, '') : ''
+      if (s) out.push(s)
+    }
+    return out
+  }
+  const s = str(v, '').trim()
+  if (!s) return []
+  return splitCommas
+    ? s
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : [s]
+}
+
+/** Time logs whose hours read as a number. A string '1.5' is kept as 1.5; an entry without readable hours is dropped, since adding it would concatenate text into the total. */
+function hydrateTimeLogs(raw: unknown[]): Task['timeLogs'] {
+  const logs: NonNullable<Task['timeLogs']> = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const l = entry as Record<string, unknown>
+    const hours = typeof l.hours === 'number' || (typeof l.hours === 'string' && l.hours.trim()) ? Number(l.hours) : NaN
+    if (!Number.isFinite(hours)) continue
+    logs.push({ ...(l as unknown as NonNullable<Task['timeLogs']>[number]), hours })
+  }
+  return logs
+}
+
+/** Map raw frontmatter fields to a Task, with optional overrides */
 export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Task>): Task {
   // Absent when empty (flagged/recurrence idiom): the key never round-trips into files.
   const links = hydrateLinks(r.links)
+  const id = str(r.id, '')
   return makeTask({
-    id: r.id as string,
+    // A missing id keeps makeTask's fresh one; a note file passes its own
+    // stable fallback through `overrides`.
+    ...(id ? { id } : {}),
     key: typeof r.key === 'string' ? r.key : '',
-    title: (r.title as string) ?? 'Untitled',
-    description: (r.description as string) ?? '',
-    type: (r.type as string) === 'milestone' ? 'milestone' : (r.type as string) === 'subtask' ? 'subtask' : 'task',
+    title: str(r.title, 'Untitled'),
+    description: str(r.description, ''),
+    type: r.type === 'milestone' ? 'milestone' : r.type === 'subtask' ? 'subtask' : 'task',
     issueType: typeof r.issueType === 'string' && r.issueType ? r.issueType : 'task',
-    status: (r.status as Task['status']) ?? 'todo',
-    priority: (r.priority as Task['priority']) ?? 'medium',
+    status: str(r.status, 'todo'),
+    priority: str(r.priority, 'medium'),
     severity: typeof r.severity === 'string' ? r.severity : '',
     verdict: typeof r.verdict === 'string' ? r.verdict : '',
     // Anything not literally true (absent, 'yes', 1, …) hydrates to false.
     flagged: r.flagged === true,
     bucket: hydrateBucket(r.bucket),
-    start: (r.start as string) ?? '',
-    due: (r.due as string) ?? '',
-    occurredAt: isoOr(r.occurredAt, ''),
-    detectedAt: typeof r.detectedAt === 'string' ? r.detectedAt : '',
-    respondedAt: typeof r.respondedAt === 'string' ? r.respondedAt : '',
-    containedAt: typeof r.containedAt === 'string' ? r.containedAt : '',
-    resolvedAt: typeof r.resolvedAt === 'string' ? r.resolvedAt : '',
+    start: day(r.start),
+    due: day(r.due),
+    occurredAt: str(r.occurredAt, ''),
+    detectedAt: str(r.detectedAt, ''),
+    respondedAt: str(r.respondedAt, ''),
+    containedAt: str(r.containedAt, ''),
+    resolvedAt: str(r.resolvedAt, ''),
     progress: typeof r.progress === 'number' ? r.progress : 0,
-    completed: (r.completed as string) ?? '',
+    completed: day(r.completed),
     iocs: hydrateIocs(r.iocs),
     ...(links.length ? { links } : {}),
-    attack: Array.isArray(r.attack) ? [...(r.attack as string[])].filter((t) => typeof t === 'string') : [],
+    attack: strList(r.attack),
     activity: hydrateActivity(r.activity),
-    // Copy container fields rather than aliasing them. On the metadataCache
-    // fast path `r` is Obsidian's live frontmatter object, so a shared array or
-    // object would let an in-place task mutation corrupt the cache.
-    assignees: Array.isArray(r.assignees) ? [...(r.assignees as string[])] : [],
-    tags: Array.isArray(r.tags) ? [...(r.tags as string[])] : [],
+    // Fresh arrays and objects, never the source's: on the metadataCache fast
+    // path `r` is Obsidian's live frontmatter object, so a shared container
+    // would let an in-place task mutation corrupt the cache.
+    assignees: strList(r.assignees),
+    tags: strList(r.tags, true),
     subtasks: [],
-    dependencies: Array.isArray(r.dependencies) ? [...(r.dependencies as string[])] : [],
+    dependencies: strList(r.dependencies),
     recurrence:
       r.recurrence && typeof r.recurrence === 'object'
         ? ({ ...(r.recurrence as Task['recurrence']) } as Task['recurrence'])
         : undefined,
     timeEstimate: typeof r.timeEstimate === 'number' ? r.timeEstimate : undefined,
-    timeLogs: Array.isArray(r.timeLogs)
-      ? (r.timeLogs as { date: string; hours: number; note: string }[]).map((log) => ({ ...log }))
-      : undefined,
+    timeLogs: Array.isArray(r.timeLogs) ? hydrateTimeLogs(r.timeLogs) : undefined,
     customFields:
       typeof r.customFields === 'object' && r.customFields !== null
         ? { ...(r.customFields as Record<string, unknown>) }
         : {},
     collapsed: r.collapsed === true,
     // createdAt is the SLA anchor for any case with no detection stamp
-    // (slaAnchor), so a non-string must not survive: `??` fires only on
-    // null/undefined and let a Date through to `createdAt: {}`.
-    createdAt: isoOr(r.createdAt, new Date().toISOString()),
-    updatedAt: isoOr(r.updatedAt, new Date().toISOString()),
+    // (slaAnchor), so a non-string must not survive as an object.
+    createdAt: str(r.createdAt, new Date().toISOString()),
+    updatedAt: str(r.updatedAt, new Date().toISOString()),
     ...overrides
   })
 }
@@ -224,6 +269,11 @@ export function hydrateTaskFromFile(
     if (!KNOWN_TASK_FRONTMATTER_KEYS.has(k) && v !== undefined) extra[k] = v
   }
   const task = mapRawToTask(frontmatter, {
+    // A note with no id falls back to its own path: the same on every load,
+    // and never shared by two notes. A fresh random id here would change on
+    // every reload, and two id-less notes used to share `undefined`, so the
+    // loader kept one and silently dropped the other.
+    id: str(frontmatter.id, '') || filePath,
     description: stripAutoGeneratedContent(rest),
     comments,
     filePath,
@@ -231,8 +281,10 @@ export function hydrateTaskFromFile(
       ? { extraFrontmatter: JSON.parse(JSON.stringify(extra)) as Record<string, unknown> }
       : {})
   })
-  const subtaskIds = Array.isArray(frontmatter.subtaskIds) ? (frontmatter.subtaskIds as string[]) : []
-  const parentId = typeof frontmatter.parentId === 'string' && frontmatter.parentId ? frontmatter.parentId : null
+  // Id references are coerced like the ids themselves, or a hand-written
+  // numeric-id vault would lose its hierarchy on the next save.
+  const subtaskIds = strList(frontmatter.subtaskIds)
+  const parentId = str(frontmatter.parentId, '') || null
   return { task, subtaskIds, parentId }
 }
 
@@ -244,20 +296,20 @@ export function hydrateProjectFromFrontmatter(
   basename: string
 ): Project {
   return {
-    id: (frontmatter.id as string) ?? basename,
-    title: (frontmatter.title as string) ?? basename,
-    description: (frontmatter.description as string) ?? body.trim(),
-    color: (frontmatter.color as string) ?? '#8b72be',
-    icon: (frontmatter.icon as string) ?? '\u{1F4CB}',
+    id: str(frontmatter.id, basename),
+    title: str(frontmatter.title, basename),
+    description: str(frontmatter.description, body.trim()),
+    color: str(frontmatter.color, '#8b72be'),
+    icon: str(frontmatter.icon, '\u{1F4CB}'),
     tasks: [],
     // Copy containers: on the metadataCache fast path `frontmatter` is Obsidian's
     // live object, so sharing these arrays would let an in-place edit corrupt the cache.
     customFields: Array.isArray(frontmatter.customFields) ? [...(frontmatter.customFields as CustomFieldDef[])] : [],
-    teamMembers: Array.isArray(frontmatter.teamMembers) ? [...(frontmatter.teamMembers as string[])] : [],
+    teamMembers: strList(frontmatter.teamMembers),
     keyPrefix: typeof frontmatter.keyPrefix === 'string' ? frontmatter.keyPrefix : '',
     nextKeySeq: typeof frontmatter.nextKeySeq === 'number' && frontmatter.nextKeySeq >= 1 ? frontmatter.nextKeySeq : 1,
-    createdAt: (frontmatter.createdAt as string) ?? new Date().toISOString(),
-    updatedAt: (frontmatter.updatedAt as string) ?? new Date().toISOString(),
+    createdAt: str(frontmatter.createdAt, new Date().toISOString()),
+    updatedAt: str(frontmatter.updatedAt, new Date().toISOString()),
     filePath,
     savedViews: hydrateSavedViews((frontmatter.savedViews as unknown[]) ?? []),
     config: hydrateProjectConfig(frontmatter.config),

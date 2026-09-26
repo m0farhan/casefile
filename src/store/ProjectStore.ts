@@ -26,7 +26,7 @@ import {
   repointDescendantFiles,
   updateTaskInTree
 } from './TaskTreeOps'
-import { hydrateProjectFromFrontmatter, hydrateTaskFromFile, hydrateTasks } from './YamlHydrator'
+import { hydrateProjectFromFrontmatter, hydrateTaskFromFile, hydrateTasks, strList } from './YamlHydrator'
 import {
   FRONTMATTER_KEY,
   TASK_FRONTMATTER_KEY,
@@ -303,7 +303,9 @@ export class ProjectStore implements TaskSource {
     const files = this.findProjectFiles(folder)
     const loaded = await Promise.all(files.map((f) => this.loadProject(f)))
     const projects = loaded.filter((p): p is Project => p !== null)
-    return projects.sort((a, b) => a.title.localeCompare(b.title))
+    // String(): one board whose title slipped through as a number used to
+    // throw here and take every board off every screen.
+    return projects.sort((a, b) => String(a.title).localeCompare(String(b.title)))
   }
 
   /**
@@ -409,7 +411,7 @@ export class ProjectStore implements TaskSource {
         this.markAllDirty(project, 'full')
       } else {
         const taskFolder = this.projectTaskFolder(project)
-        const taskIds = Array.isArray(frontmatter.taskIds) ? (frontmatter.taskIds as string[]) : []
+        const taskIds = strList(frontmatter.taskIds)
         project.tasks = await this.loadTasksFromFolder(taskFolder, taskIds)
         rebuildTaskIndex(project)
         // Memory matches disk now, drop any stale dirty entries.
