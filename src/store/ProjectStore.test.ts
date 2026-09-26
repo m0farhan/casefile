@@ -252,6 +252,42 @@ describe('ProjectStore round-trip', () => {
   })
 })
 
+describe('ProjectStore legacy migration with repeated titles', () => {
+  it('migrates two embedded tasks with one title in one save, and a second save creates nothing', async () => {
+    const { store, vault } = newStore()
+    const fm = ['---', 'pm-project: true', 'id: legacy', 'title: Legacy', 'tasks:']
+    for (const [id, title] of [
+      ['t1aaaaaaaa', 'Follow up'],
+      ['t2bbbbbbbb', 'Follow up'],
+      ['t3cccccccc', 'Other']
+    ]) {
+      fm.push(`  - id: ${id}`, `    title: ${title}`, '    status: todo')
+    }
+    fm.push('---', '')
+    await vault.create('Projects/Legacy.md', fm.join('\n'))
+    const file = vault.getAbstractFileByPath('Projects/Legacy.md') as TFile
+    const project = expectDefined(await store.loadProject(file))
+
+    await store.saveProject(project)
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/Follow up.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/follow-up-t2bbbbbb.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/Other.md')).toBeInstanceOf(TFile)
+    expect(parseFrontmatter(await vault.cachedRead(file)).frontmatter?.taskIds).toHaveLength(3)
+
+    vault.resetCounts()
+    await store.updateTask(project, 't2bbbbbbbb', { description: 'still here' })
+    expect([...vault.createCount.keys()]).toEqual([])
+    expect(findTask(project.tasks, 't2bbbbbbbb')?.title).toBe('Follow up')
+  })
+
+  it('a new task whose title already has a file is still refused', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Refuse', 'Projects')
+    await addNamed(store, project, 'Taken')
+    await expect(addNamed(store, project, 'Taken')).rejects.toThrow('already exists')
+  })
+})
+
 describe('ProjectStore completion date', () => {
   const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 

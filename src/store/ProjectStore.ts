@@ -790,24 +790,32 @@ export class ProjectStore implements TaskSource {
     const errors: Error[] = []
     const batchSize = 16
     for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
-      const jobs: { task: Task; parentTask: Task | null; folder: string; kind: DirtyKind }[] = []
+      const jobs: { task: Task; parentTask: Task | null; folder: string; path: string; kind: DirtyKind }[] = []
       const folders = new Set<string>()
       for (const j of byDepth.get(depth) ?? []) {
         const jobFolder = this.folderForTask(project, j.task)
+        let path = normalizePath(resolveTaskPath(j.task, jobFolder, j.task.filePath))
+        if (targetPaths.has(path) && !j.task.filePath) {
+          // Two never-written tasks with one title (a legacy board's embedded
+          // tasks, a repeated checklist line): the later one takes the
+          // id-suffixed slug, a historical name resolveTaskPath keeps from then
+          // on. Throwing here kept the board dirty for good, so a legacy board
+          // never finished migrating and every later save of it failed.
+          path = normalizePath(`${jobFolder}/${taskSlugLegacy(j.task.title)}-${j.task.id.slice(0, 8)}.md`)
+        }
         // Two dirty tasks resolving to the same file would race below and surface
         // as a generic create error; detect it up front and keep the typed error.
-        const path = normalizePath(resolveTaskPath(j.task, jobFolder, j.task.filePath))
         if (targetPaths.has(path)) throw new TaskFileNameConflictError(path)
         targetPaths.add(path)
         folders.add(jobFolder)
-        jobs.push({ ...j, folder: jobFolder })
+        jobs.push({ ...j, folder: jobFolder, path })
       }
       for (const f of folders) {
         if (f !== folder) await this.ensureFolder(f)
       }
       for (let i = 0; i < jobs.length; i += batchSize) {
         const results = await Promise.allSettled(
-          jobs.slice(i, i + batchSize).map((j) => this.saveTaskFile(j.task, project, j.parentTask, j.folder, j.kind))
+          jobs.slice(i, i + batchSize).map((j) => this.saveTaskFile(j.task, project, j.parentTask, j.path, j.kind))
         )
         for (const r of results) {
           if (r.status === 'rejected') errors.push(r.reason instanceof Error ? r.reason : new Error(String(r.reason)))
@@ -820,15 +828,15 @@ export class ProjectStore implements TaskSource {
     }
   }
 
+  /** Write one task's note at `filePath`, the path saveDirtyTasks settled for it. */
   private async saveTaskFile(
     task: Task,
     project: Project,
     parentTask: Task | null,
-    folder: string,
+    filePath: string,
     kind: DirtyKind
   ): Promise<void> {
     const previousPath = task.filePath
-    const filePath = normalizePath(resolveTaskPath(task, folder, previousPath))
     const renamed = previousPath !== undefined && previousPath !== filePath
 
     try {
