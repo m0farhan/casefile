@@ -98,7 +98,7 @@
   cursor: pointer;
 }
 .pm-gantt-label-title:hover {
-  color: var(--interactive-accent);
+  color: var(--interactive-accent-hover);
 }
 
 .pm-gantt-label-progress {
