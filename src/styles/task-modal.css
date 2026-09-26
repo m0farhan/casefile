@@ -899,8 +899,14 @@ button.pm-verdict-cancel:hover {
   color: var(--gs-ink-muted);
   font-size: var(--font-ui-smaller);
 }
+/* Wraps in a narrow pane. Core buttons are one fixed-height line that never
+   wraps, and at 300px this label ran past its card's edge. */
 .pm-att-open {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--input-height);
   margin: 8px 0 4px;
+  white-space: normal;
 }
 /* The hash label is furniture: fixed width so the three values line up, and
    unselectable so copying a row copies the hash alone. */
