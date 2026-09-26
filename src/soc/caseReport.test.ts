@@ -159,6 +159,31 @@ describe('composeCaseReport', () => {
     expect(md).not.toContain('response time not recorded')
   })
 
+  it('reports a stamp before the clock anchor as not computable, never met by more than the target', () => {
+    const task = makeTask({
+      issueType: 'incident',
+      severity: 'sev1',
+      status: 'done',
+      detectedAt: '2026-07-30T10:00:00.000Z',
+      respondedAt: '2026-07-30T08:00:00.000Z',
+      resolvedAt: '2026-07-30T09:00:00.000Z'
+    })
+    const md = composeCaseReport(task, ctxFor([task]))
+    expect(md).toContain("the resolved time is before the clock's anchor")
+    expect(md).not.toContain('inside target')
+    expect(md).not.toContain('readable date')
+
+    const open = makeTask({
+      issueType: 'incident',
+      severity: 'sev1',
+      detectedAt: '2026-07-30T10:00:00.000Z',
+      respondedAt: '2026-07-30T08:00:00.000Z'
+    })
+    const openMd = composeCaseReport(open, ctxFor([open]))
+    expect(openMd).toContain("- Response: not computable — the responded time is before the clock's anchor")
+    expect(openMd).not.toContain('inside target')
+  })
+
   it('treats a policy with a blank (0) target as no target, not as a breach at creation', () => {
     const task = makeTask({ issueType: 'incident', severity: 'sev1', detectedAt: '2026-07-30T11:59:59.000Z' })
     const md = composeCaseReport(task, {

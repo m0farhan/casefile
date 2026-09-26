@@ -72,7 +72,9 @@ function noClockLine(task: Task): string {
   if (Number.isNaN(Date.parse(iso))) {
     return `Target set — no clock: the ${from === 'detected' ? 'detection' : 'creation'} time is not a readable date.`
   }
-  return 'Target set — not computable: the resolved time is not a readable date.'
+  return Number.isNaN(Date.parse(task.resolvedAt))
+    ? 'Target set — not computable: the resolved time is not a readable date.'
+    : "Target set — not computable: the resolved time is before the clock's anchor."
 }
 
 /**
@@ -134,6 +136,10 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
     const responded = task.respondedAt ? Date.parse(task.respondedAt) : NaN
     if (task.respondedAt && Number.isNaN(responded)) {
       lines.push('- Response: not computable — the responded time is not a readable date')
+    } else if (responded < anchor) {
+      // A stamp before the anchor would print a margin larger than the target
+      // itself, as met. The lifecycle panel hides such a duration; so does this.
+      lines.push("- Response: not computable — the responded time is before the clock's anchor")
     } else if (!Number.isNaN(responded)) {
       const margin = anchor + policy.responseMins * 60_000 - responded
       lines.push(
@@ -155,7 +161,9 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
       // Resolved without a response timestamp — the response phase is honestly unknown.
       lines.push('- Response: response time not recorded')
     }
-    if (state.phase === 'resolution' && state.done) {
+    if (state.phase === 'resolution' && state.done && Date.parse(task.resolvedAt) < anchor) {
+      lines.push("- Resolution: not computable — the resolved time is before the clock's anchor")
+    } else if (state.phase === 'resolution' && state.done) {
       lines.push(
         `- Resolution: ${
           state.breached
