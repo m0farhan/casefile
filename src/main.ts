@@ -1,7 +1,7 @@
 import { MarkdownView, Menu, Plugin, Notice, TFile, TFolder, normalizePath } from 'obsidian'
 import { DEFAULT_SETTINGS, type PMSettings, type Project, type Task } from './types'
 import { flattenTasks, findTask } from './store/TaskTreeOps'
-import { ProjectStore } from './store'
+import { ProjectStore, safeColor } from './store'
 import type { TaskSource } from './store'
 import { PMSettingTab } from './settings'
 import { ProjectView, PM_PROJECT_VIEW_TYPE } from './views/ProjectView'
@@ -373,20 +373,44 @@ export default class PMPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     const saved = (await this.loadData()) as Partial<PMSettings> | null
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {})
-    if (!saved?.statuses?.length) this.settings.statuses = DEFAULT_SETTINGS.statuses
-    if (!saved?.priorities?.length) this.settings.priorities = DEFAULT_SETTINGS.priorities
-    if (!saved?.issueTypes?.length) this.settings.issueTypes = DEFAULT_SETTINGS.issueTypes
-    if (!saved?.severities?.length) this.settings.severities = DEFAULT_SETTINGS.severities
-    if (!saved?.verdicts?.length) this.settings.verdicts = DEFAULT_SETTINGS.verdicts
+    // Every default is a copy: the settings screens edit these lists in place,
+    // and editing DEFAULT_SETTINGS itself changed what "the defaults" meant.
+    const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
+    this.settings = Object.assign(clone(DEFAULT_SETTINGS), saved ?? {})
+    // Trust boundary: a hand-edited data.json, or a drag dropped on the wrong
+    // list, can leave a null or a stray value in a palette, and every loop
+    // below and every render reads `.id` — one null kept the plugin from
+    // loading. Keep entries with a string id; an empty list gets the
+    // defaults. Colours reach CSS `background`, where url() fetches, so
+    // anything but a plain colour becomes the neutral grey.
+    const palette = <T extends { id: string; color: string }>(v: unknown, defaults: T[]): T[] => {
+      const kept = Array.isArray(v)
+        ? v.filter((e): e is T => typeof (e as { id?: unknown } | null)?.id === 'string')
+        : []
+      const list = kept.length ? kept : clone(defaults)
+      for (const e of list) e.color = safeColor(e.color, '#8a94a0')
+      return list
+    }
+    this.settings.statuses = palette(saved?.statuses, DEFAULT_SETTINGS.statuses)
+    this.settings.priorities = palette(saved?.priorities, DEFAULT_SETTINGS.priorities)
+    this.settings.issueTypes = palette(saved?.issueTypes, DEFAULT_SETTINGS.issueTypes)
+    this.settings.severities = palette(saved?.severities, DEFAULT_SETTINGS.severities)
+    this.settings.verdicts = palette(saved?.verdicts, DEFAULT_SETTINGS.verdicts)
     // Retired verdicts: an older running build can re-save a stale data.json
     // after an upgrade edits it, resurrecting removed entries — prune on load.
     this.settings.verdicts = this.settings.verdicts.filter((v) => v.id !== 'pending' && v.id !== 'duplicate')
-    if (!this.settings.verdicts.length) this.settings.verdicts = DEFAULT_SETTINGS.verdicts
-    if (!saved?.slaPolicies || !Object.keys(saved.slaPolicies).length) {
-      this.settings.slaPolicies = DEFAULT_SETTINGS.slaPolicies
+    if (!this.settings.verdicts.length) this.settings.verdicts = clone(DEFAULT_SETTINGS.verdicts)
+    // Empty is a real choice for these two (every target cleared = no clocks;
+    // every template deleted), so only a missing or malformed value gets the
+    // defaults. Re-seeding `{}` brought back targets the analyst had removed,
+    // and the breach log then recorded misses against them.
+    const sla: unknown = saved?.slaPolicies
+    if (!sla || typeof sla !== 'object' || Array.isArray(sla)) {
+      this.settings.slaPolicies = clone(DEFAULT_SETTINGS.slaPolicies)
     }
-    if (!saved?.incidentTemplates?.length) this.settings.incidentTemplates = DEFAULT_SETTINGS.incidentTemplates
+    if (!Array.isArray(saved?.incidentTemplates)) {
+      this.settings.incidentTemplates = clone(DEFAULT_SETTINGS.incidentTemplates)
+    }
     // Keys saved by builds before 2.21 move to device-local storage and are
     // blanked in data.json (ST-5); an existing device-local key is never
     // overwritten by a stale data.json copy.
@@ -405,14 +429,13 @@ export default class PMPlugin extends Plugin {
     // Trust boundary: a hand-edited data.json can hand us a string, a null, or
     // numbers inside the list. Filtering to strings (not just checking the
     // container) matters — a non-string element throws out of assetRule inside
-    // renderRows and takes the whole Indicators section down. The filter also
-    // detaches from DEFAULT_SETTINGS.ownedAssets, which Object.assign shares
-    // by reference when data.json has no list of its own.
+    // renderRows and takes the whole Indicators section down.
     // Same trust boundary as ownedAssets: a hand-edited catalog must not throw
-    // out of categoryTerms inside every card render.
+    // out of categoryTerms inside every card render, nor its colour fetch.
     this.settings.alertCategories = normalizeAlertCategories(
       (saved as { alertCategories?: unknown } | null)?.alertCategories
     )
+    for (const c of this.settings.alertCategories) c.color = safeColor(c.color, '#8a94a0')
     this.settings.ownedAssets = Array.isArray(this.settings.ownedAssets)
       ? this.settings.ownedAssets.filter((v): v is string => typeof v === 'string')
       : []
