@@ -1103,6 +1103,23 @@ describe('a legacy Office document', () => {
     expect(md).toContain('  - the compound-file directory lists storage `Macros`: named as VBA macro storage')
     expect(md).not.toContain('embedded picture')
   })
+
+  it('names an encrypted Office file for what its bytes and directory say', async () => {
+    // A password-protected .xlsx is a compound file, not a legacy document,
+    // and nothing said its contents were encrypted.
+    const bytes = compound([
+      ['Root Entry', 5],
+      ['\u0006DataSpaces', 1],
+      ['EncryptionInfo', 2],
+      ['EncryptedPackage', 2]
+    ])
+    const mail = mailWith(attached('Remittance.xlsx', bytes)).replace('see attached', 'The password is 1234')
+    const md = formatPhishReport(await analysePhishing(mail, [], []))
+    expect(md).toContain('named .xlsx but the bytes begin as OLE compound file')
+    expect(md).toContain(
+      'lists stream `EncryptedPackage`: named as an encrypted Office package, whose contents cannot be read here'
+    )
+  })
 })
 
 describe('end to end, on files shaped like the real thing', () => {
@@ -1559,5 +1576,121 @@ describe('what the parts’ own headers and bytes say', () => {
     expect(census).toContain('\\objdata ×1')
     expect(census).toContain('the first \\objclass reads Equation.3')
     expect(formatPhishReport(report)).toContain('RTF object and DDEAUTO markers found: \\object ×1')
+  })
+})
+
+describe('end to end, on the fixes the readers made', () => {
+  it('catches a program named as a picture inside an archive by its bytes', async () => {
+    const pe = new Uint8Array(200)
+    pe.set([0x4d, 0x5a, 0x90, 0x00])
+    const other = pe.slice()
+    other[199] = 1
+    const bytes = zip([
+      { name: 'Invoice.jpg', data: pe },
+      { name: 'photo.jfif', data: other }
+    ])
+    const mail = mailWith(attached('files.zip', bytes, 'application/zip'))
+    const report = await analysePhishing(mail, [], [])
+    const digest = await hashBytes(pe)
+    const lines = structureLines(report.attachments[0])
+    expect(lines).toContain(
+      `  - inner file \`Invoice.jpg\`: named .jpg but the bytes begin as Windows executable (MZ); SHA-256 ${digest} (computed here)`
+    )
+    expect(lines).toContain(
+      `  - inner file \`photo.jfif\`: named .jfif but the bytes begin as Windows executable (MZ); SHA-256 ${await hashBytes(other)} (computed here)`
+    )
+    expect(lines.join('\n')).not.toContain('embedded picture')
+    expect(report.indicators).toContain(`hash: ${digest}`)
+    expect(caseIocs(report, mail)).toContainEqual({
+      type: 'hash',
+      value: digest,
+      note: 'Invoice.jpg inside files.zip (hashed here)'
+    })
+  })
+
+  it('reads a filename folded into two encoded words as the one name a client shows', async () => {
+    const mail = mailWith({
+      headers: [
+        'Content-Type: application/octet-stream',
+        'Content-Disposition: attachment; filename="=?UTF-8?B?aW52b2ljZS5w?= =?UTF-8?B?ZGYuZXhl?="'
+      ],
+      bytes: ascii('MZ')
+    })
+    const [a] = (await analysePhishing(mail, [], [])).attachments
+    expect(a.filename).toBe('invoice.pdf.exe')
+    expect(a.facts).toContain(
+      'double extension — the name ends .pdf.exe; with the last extension hidden it reads as .pdf'
+    )
+  })
+
+  it('reads a URL in prose up to the sentence around it, in the links, the indicators and the case', async () => {
+    const mail =
+      'From: a@sender.test\nContent-Type: text/plain\n\nPlease sign in at “https://login.evil-portal.test/verify” today. Or https://x.test/verify.\n'
+    const report = await analysePhishing(mail, [], [])
+    expect(report.links.map((l) => l.target).sort()).toEqual([
+      'https://login.evil-portal.test/verify',
+      'https://x.test/verify'
+    ])
+    expect(report.indicators).toContain('url: hxxps://login[.]evil-portal[.]test/verify')
+    const urls = caseIocs(report, mail)
+      .filter((i) => i.type === 'url')
+      .map((i) => i.value)
+    expect(urls.sort()).toEqual(['https://login.evil-portal.test/verify', 'https://x.test/verify'])
+    // Bytes that do not decode end a URL inside a file too.
+    const bytes = new Uint8Array([...ascii('xx http://evil.example.com/stage'), 0xff, 0xfe, ...ascii('AB')])
+    const [a] = (await analysePhishing(mailWith(attached('x.bin', bytes)), [], [])).attachments
+    expect(a.inside).toContain('url: hxxp://evil[.]example[.]com/stage')
+  })
+
+  it('shows every format character a sender wrote as its code, outside the message body', async () => {
+    const rlo = '‮'
+    const docx = zip([
+      { name: '[Content_Types].xml', data: ascii('<Types/>') },
+      { name: `word/_rels/${rlo}slmx.document.xml.rels`, data: ascii('xx'), flags: 1 }
+    ])
+    const mail = [
+      `From: "Pay${rlo}lap" <a@evil.test>`,
+      'Subject: files',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="B"',
+      '',
+      '--B',
+      'Content-Type: text/html',
+      '',
+      '<a href="https://micro­soft-login.test/verify">sign in</a>',
+      '--B',
+      `Content-Type: application/${rlo}exe.fdp; name="scan.pdf"`,
+      'Content-Disposition: attachment; filename="scan.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      base64(ascii('%PDF-1.7\n')),
+      '--B',
+      `Content-Type: image/${rlo}gnp; name="report.docx"`,
+      'Content-Disposition: attachment; filename="report.docx"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      base64(docx),
+      '--B',
+      'Content-Type: application/octet-stream',
+      'Content-Disposition: attachment; filename="=?utf-8?Q?Invoice=E2=80=AEfdp.exe?="',
+      'Content-Transfer-Encoding: base64',
+      '',
+      '!!!!',
+      '--B--',
+      ''
+    ].join('\n')
+    const md = formatPhishReport(await analysePhishing(mail, [], []))
+    const outsideFences = md.replace(/^(`{3,})\n[\s\S]*?\n\1$/gm, '')
+    expect(outsideFences.split('\n').filter((l) => /\p{Cf}/u.test(l))).toEqual([])
+    for (const shown of [
+      'Pay<U+202E>lap',
+      'application/<U+202E>exe.fdp',
+      'image/<U+202E>gnp',
+      'word/_rels/<U+202E>slmx.document.xml.rels',
+      'Invoice<U+202E>fdp.exe',
+      'micro<U+00AD>soft-login'
+    ]) {
+      expect(outsideFences).toContain(shown)
+    }
   })
 })
