@@ -133,7 +133,17 @@ describe('attachmentFacts', () => {
   })
 
   it('catches the double extension that reads as a document', () => {
-    expect(attachmentFacts(att('invoice.pdf.exe'))).toContain('double extension — reads as pdf but is not')
+    expect(attachmentFacts(att('invoice.pdf.exe'))).toContain(
+      'double extension — the name ends .pdf.exe; with the last extension hidden it reads as .pdf'
+    )
+    expect(attachmentFacts(att('Invoice.pdf.lnk')).join(' ')).toContain('double extension — the name ends .pdf.lnk')
+  })
+
+  it('says nothing about a name that gives the same type twice, as scanners write them', () => {
+    // "reads as pdf but is not" was said about Invoice.pdf.pdf, whose bytes are a PDF.
+    for (const name of ['Invoice.pdf.pdf', 'scan.jpg.jpeg', 'page.htm.html', 'SCAN.PDF.pdf']) {
+      expect(attachmentFacts(att(name)).join(' ')).not.toContain('double extension')
+    }
   })
 
   it('catches a right-to-left override in the filename', () => {
@@ -341,6 +351,8 @@ describe('what a file actually is', () => {
 
   it('reads the type from the first bytes', () => {
     expect(sniffType(bytes(0x4d, 0x5a, 0x90, 0x00))).toBe('Windows executable (MZ)')
+    // Compound file and nothing more: an encrypted .xlsx and an .msi begin the same way.
+    expect(sniffType(bytes(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1))).toBe('OLE compound file')
     expect(sniffType(bytes(0x25, 0x50, 0x44, 0x46))).toBe('PDF')
     expect(sniffType(bytes(0x01, 0x02))).toBe('')
   })
@@ -350,6 +362,11 @@ describe('what a file actually is', () => {
       'named .pdf but the bytes begin as Windows executable (MZ)'
     )
     expect(contentMismatch('invoice.pdf', 'application/pdf', 'PDF')).toBe('')
+    // .jfif is a JPEG name too, so a program under it is a mismatch.
+    expect(contentMismatch('photo.jfif', '', 'Windows executable (MZ)')).toBe(
+      'named .jfif but the bytes begin as Windows executable (MZ)'
+    )
+    expect(contentMismatch('photo.jfif', '', 'JPEG image')).toBe('')
   })
 
   it('knows a shortcut, a OneNote file and a cabinet by their headers', () => {
