@@ -261,6 +261,68 @@ describe('PhishAnalysisView: a loaded message is analysed whole and kept out of 
   })
 })
 
+describe('PhishAnalysisView: the old report cannot be acted on once the message changes', () => {
+  it('disables Copy and Create case from the first keystroke, through the debounce', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('First', 'https://one.test/x'), 'a.eml (1 bytes)')
+    await showing(view, 'First')
+    expect(button(root, 'Create case').disabled).toBe(false)
+    const box = input(root)
+    box.value = mail('Second', 'https://two.test/y')
+    box.fire('input')
+    // Nothing has run yet: the debounce is still pending.
+    expect(timer.pending).not.toBeNull()
+    for (const name of ['Copy report', 'Copy indicators', 'Create case']) expect(button(root, name).disabled).toBe(true)
+    timer.pending?.()
+    await showing(view, 'Second')
+    expect(button(root, 'Create case').disabled).toBe(false)
+  })
+
+  it('disables them while a loaded message is analysed', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('First', 'https://one.test/x'), 'a.eml (1 bytes)')
+    await showing(view, 'First')
+    view.analyse(mail('Second', 'https://two.test/y'), 'b.eml (1 bytes)')
+    // Synchronously after the call: the analysis has not landed.
+    expect(report(view)?.headers.identities.find((i) => i.label === 'Subject')?.value).toBe('First')
+    for (const name of ['Copy report', 'Copy indicators', 'Create case']) expect(button(root, name).disabled).toBe(true)
+    await showing(view, 'Second')
+  })
+
+  it('a case is made from one message even when the next lands while the board picker is open', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('Invoice AAA', 'Pay at https://alpha-evil.test/a'), 'a.eml (1 bytes)')
+    await showing(view, 'Invoice AAA')
+    button(root, 'Create case').fire('click')
+    await vi.waitFor(() => expect(openProjectPicker).toHaveBeenCalled())
+    const pick = vi.mocked(openProjectPicker).mock.calls[0][2]
+
+    view.analyse(mail('Payroll BBB', 'Pay at https://bravo-evil.test/b'), 'b.eml (1 bytes)')
+    await showing(view, 'Payroll BBB')
+    pick({ id: 'board' } as never)
+    await vi.waitFor(() => expect(insertTask).toHaveBeenCalledTimes(1))
+    const task = insertTask.mock.calls[0][1]
+    expect(task.title).toBe('Invoice AAA')
+    expect(task.description).toContain('Invoice AAA')
+    expect(task.description).not.toContain('BBB')
+    expect(task.iocs.map((i) => i.value).join(' ')).not.toContain('bravo')
+  })
+
+  it('a Reset while the picker is open still files the message the case was asked for, and throws nothing', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('Invoice AAA', 'Pay at https://alpha-evil.test/a'), 'a.eml (1 bytes)')
+    await showing(view, 'Invoice AAA')
+    button(root, 'Create case').fire('click')
+    await vi.waitFor(() => expect(openProjectPicker).toHaveBeenCalled())
+    const pick = vi.mocked(openProjectPicker).mock.calls[0][2]
+    button(root, 'Reset').fire('click')
+    await vi.waitFor(() => expect(report(view)).toBeNull())
+    pick({ id: 'board' } as never)
+    await vi.waitFor(() => expect(insertTask).toHaveBeenCalledTimes(1))
+    expect(insertTask.mock.calls[0][1].title).toBe('Invoice AAA')
+  })
+})
+
 describe('PhishAnalysisView: long lists are drawn when opened', () => {
   it('draws cards past the cap only when their disclosure opens, and then all of them', async () => {
     const { view, root } = await openView()

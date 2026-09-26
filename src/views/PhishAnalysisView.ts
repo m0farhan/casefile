@@ -134,9 +134,19 @@ export class PhishAnalysisView extends ItemView {
     const copyBtn = new ButtonComponent(row).setButtonText('Copy report').setDisabled(true)
     const iocBtn = new ButtonComponent(row).setButtonText('Copy indicators').setDisabled(true)
     const caseBtn = new ButtonComponent(row).setButtonText('Create case').setCta().setDisabled(true)
+    // From the moment the message changes until its analysis lands, the report
+    // on screen is the previous message's. These three act on that report, so
+    // they wait: a case filed in that window was the old mail under the new
+    // one's name.
+    const stale = (): void => {
+      copyBtn.setDisabled(true)
+      iocBtn.setDisabled(true)
+      caseBtn.setDisabled(true)
+    }
 
     const refresh = safeAsync(async () => {
       const run = ++this.runId
+      stale()
       const raw = this.loaded ?? input.value
       const report = raw.trim()
         ? await analysePhishing(raw, this.plugin.settings.ownedAssets, this.plugin.settings.phishBrands)
@@ -164,6 +174,7 @@ export class PhishAnalysisView extends ItemView {
     // Debounced: the full parse hashes every attachment, and running it on
     // each keystroke of a pasted 4MB message locks the UI thread.
     input.addEventListener('input', () => {
+      stale()
       // Typing replaces a loaded message: the box is the message again.
       this.loaded = null
       loadNote.setText('')
@@ -242,16 +253,21 @@ export class PhishAnalysisView extends ItemView {
    * case born with a verdict is a case nobody judged.
    */
   private async createCase(): Promise<void> {
-    if (!this.report) return
+    // Read once, here. A new analysis can land while the board picker is open,
+    // and a case whose title came from one message and whose description came
+    // from the next describes neither.
+    const report = this.report
+    const raw = this.raw
+    if (!report) return
     const projects = await this.plugin.store.loadAllProjects(this.plugin.settings.projectsFolder)
     if (!projects.length) {
       new Notice('No boards yet. Create a board first.')
       return
     }
-    const title = subjectOf(this.report) || 'Reported phishing email'
+    const title = subjectOf(report) || 'Reported phishing email'
     // Built from the PARSED message by the same code as the Indicators tab,
     // so a lure a structure reader found inside a PDF is on the case too.
-    const iocs = caseIocs(this.report, this.raw)
+    const iocs = caseIocs(report, raw)
     openProjectPicker(this.plugin, projects, (project) => {
       void (async () => {
         const config = this.plugin.store.configFor(project)
@@ -261,7 +277,7 @@ export class PhishAnalysisView extends ItemView {
           status: getDefaultStatusId(config.statuses),
           priority: getDefaultPriorityId(config.priorities),
           tags: ['phishing'],
-          description: formatPhishReport(this.report as PhishReport),
+          description: formatPhishReport(report),
           iocs
         })
         try {
