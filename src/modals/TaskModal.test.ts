@@ -7,7 +7,7 @@ import { findTaskById } from '../store/TaskIndex'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { DEFAULT_SETTINGS, makeTask, type Task } from '../types'
 import { confirmDialog } from '../ui/ModalFactory'
-import { TaskModal } from './TaskModal'
+import { BOARD_REFUSAL, TaskModal, TITLE_REFUSAL } from './TaskModal'
 
 const { notices, menuItems } = vi.hoisted(() => ({
   notices: [] as string[],
@@ -222,5 +222,28 @@ describe('TaskModal new-case draft', () => {
     await settle()
     expect(go).not.toHaveBeenCalled()
     expect(m.closed).toBe(false)
+  })
+})
+
+describe('store refusals the modal and intake show as they are', () => {
+  /** The message a store call is refused with, '' when it goes through. */
+  const refusal = async (call: Promise<void>): Promise<string> => {
+    try {
+      await call
+      return ''
+    } catch (err) {
+      return (err as Error).message
+    }
+  }
+
+  it('the message prefixes match what the store throws', async () => {
+    const { store, project } = await setup()
+    expect(await refusal(store.insertTask(project, makeTask({ title: '   ' })))).toMatch(
+      new RegExp(`^${TITLE_REFUSAL}`)
+    )
+    project.detached = { recorded: 1, folder: 'Projects/Board/Tasks' }
+    expect(await refusal(store.insertTask(project, makeTask({ title: 'New' })))).toMatch(
+      new RegExp(`^${BOARD_REFUSAL}New"`)
+    )
   })
 })

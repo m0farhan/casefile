@@ -22,6 +22,14 @@ import { renderAttachmentsSection } from './AttachmentsSection'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from './DescriptionEditor'
 import { renderCommentsSection, type CommentsSectionHandle } from '../soc/CommentsSection'
 
+// ponytail: the store throws these as plain Errors, so they are known by how
+// their message starts (ProjectStore.assertTitleSavable and insertTask). A
+// typed error there would replace the prefixes.
+/** A title with no character a file name can hold. */
+export const TITLE_REFUSAL = 'A case title needs'
+/** A board that cannot be saved (detached, or its note gone) takes no new case. */
+export const BOARD_REFUSAL = 'Not adding "'
+
 export class TaskModal extends Modal {
   private task: Task
   private isNew: boolean
@@ -620,6 +628,15 @@ export class TaskModal extends Modal {
       } catch (err) {
         if (err instanceof TaskFileNameConflictError) {
           showTitleError(`A note named "${err.fileName}" already exists. Choose a different title.`)
+          return
+        }
+        // The store's own refusals say why; the modal stays open to fix it.
+        if (err instanceof Error && err.message.startsWith(TITLE_REFUSAL)) {
+          showTitleError(err.message)
+          return
+        }
+        if (err instanceof Error && err.message.startsWith(BOARD_REFUSAL)) {
+          new Notice(err.message)
           return
         }
         console.error('[PM]', err)

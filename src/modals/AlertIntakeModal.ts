@@ -4,6 +4,7 @@ import { type Project, type Task, makeTask } from '../types'
 import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
+import { BOARD_REFUSAL, TITLE_REFUSAL } from './TaskModal'
 import { parseAlertPaste, type ParsedAlert } from '../soc/alertIntake'
 import { assetRule, sightingsIndex } from '../soc/ioc'
 import { suggestCategory } from '../soc/alertCategory'
@@ -274,6 +275,11 @@ export class AlertIntakeModal extends Modal {
     } catch (err) {
       if (err instanceof TaskFileNameConflictError) {
         new Notice(`Case not created: a note named "${err.fileName}" already exists.`)
+        return
+      }
+      // The store's own refusals say why (see TaskModal).
+      if (err instanceof Error && (err.message.startsWith(TITLE_REFUSAL) || err.message.startsWith(BOARD_REFUSAL))) {
+        new Notice(`Case not created. ${err.message}`)
         return
       }
       throw err
