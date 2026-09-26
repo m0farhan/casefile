@@ -675,6 +675,16 @@ button.pm-verdict-cancel:hover {
   padding-top: 12px;
   border-top: 1px solid var(--gs-hairline);
 }
+/* Which file is being analysed while the paste box is empty; nothing when the
+   box holds the message. A file name with no spaces breaks rather than
+   running under the pane's hidden overflow. */
+.pm-phish-view > .pm-phish-loaded {
+  flex: 0 0 auto;
+  overflow-wrap: break-word;
+}
+.pm-phish-view > .pm-phish-loaded:empty {
+  display: none;
+}
 
 /* The analysis is what gets read; the paste box is a doorway. */
 .pm-headers-out {

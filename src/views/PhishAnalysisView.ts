@@ -40,6 +40,13 @@ import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
 /** How much body is painted on screen. The full text always reaches the report. */
 const BODY_PREVIEW = 4000
 
+/**
+ * One formatter for every count on screen. `toLocaleString()` builds a new one
+ * per call in Chromium, and a ZIP directory listing makes tens of thousands of
+ * those calls: 81,920 of them took about 450 ms. The output is the same.
+ */
+const NUMBER = new Intl.NumberFormat()
+
 type TabId = 'message' | 'links' | 'attachments' | 'body' | 'indicators'
 
 export const PHISH_VIEW_TYPE = 'casefile-phish-analysis'
@@ -54,12 +61,21 @@ export const PHISH_VIEW_TYPE = 'casefile-phish-analysis'
 export class PhishAnalysisView extends ItemView {
   private report: PhishReport | null = null
   private raw = ''
+  /**
+   * A message read from a file or from an attachment, analysed from here and
+   * not put in the paste box. The box lays out every line it holds, so a 10 MB
+   * .eml cost over a second there before the analysis began, and again on each
+   * keystroke. Typing or Reset drops it and the box is the message again.
+   */
+  private loaded: string | null = null
   /** Monotonic: a slow run must never overwrite the result of a newer one. */
   private runId = 0
   private debounce: number | null = null
   private tab: TabId = 'message'
   private tabStrip: HTMLElement | null = null
   private input: HTMLTextAreaElement | null = null
+  /** Says which file is being analysed while the paste box is empty. */
+  private loadNote: HTMLElement | null = null
   private refresh: (() => void) | null = null
 
   constructor(
@@ -103,6 +119,7 @@ export class PhishAnalysisView extends ItemView {
       cls: 'pm-headers-input',
       attr: { placeholder: 'Received: from …', rows: '5', spellcheck: 'false' }
     })
+    const loadNote = contentEl.createDiv('pm-headers-note pm-phish-loaded')
     // Outside the scroll box: the strip that switches panes must stay put, or
     // it scrolls off the top of a long pane and the only way back is to scroll
     // up through the thing you were trying to leave.
@@ -120,7 +137,7 @@ export class PhishAnalysisView extends ItemView {
 
     const refresh = safeAsync(async () => {
       const run = ++this.runId
-      const raw = input.value
+      const raw = this.loaded ?? input.value
       const report = raw.trim()
         ? await analysePhishing(raw, this.plugin.settings.ownedAssets, this.plugin.settings.phishBrands)
         : null
@@ -141,11 +158,15 @@ export class PhishAnalysisView extends ItemView {
       ;(this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.()
     })
     this.input = input
+    this.loadNote = loadNote
     this.refresh = refresh
 
     // Debounced: the full parse hashes every attachment, and running it on
     // each keystroke of a pasted 4MB message locks the UI thread.
     input.addEventListener('input', () => {
+      // Typing replaces a loaded message: the box is the message again.
+      this.loaded = null
+      loadNote.setText('')
       if (this.debounce !== null) window.clearTimeout(this.debounce)
       this.debounce = window.setTimeout(refresh, 300)
     })
@@ -155,6 +176,8 @@ export class PhishAnalysisView extends ItemView {
       if (this.debounce !== null) window.clearTimeout(this.debounce)
       this.debounce = null
       this.tab = 'message'
+      this.loaded = null
+      loadNote.setText('')
       input.value = ''
       refresh()
       input.focus()
@@ -168,8 +191,8 @@ export class PhishAnalysisView extends ItemView {
         }
         openEmlPicker(this.plugin, files, (file) => {
           void (async () => {
-            input.value = await this.app.vault.cachedRead(file)
-            refresh()
+            const text = await this.app.vault.cachedRead(file)
+            this.analyse(text, `${visibleName(file.name)} (${NUMBER.format(file.stat.size)} bytes)`)
           })()
         })
       })
@@ -193,10 +216,20 @@ export class PhishAnalysisView extends ItemView {
     input.focus()
   }
 
-  /** Analyse this message text, as if it had been pasted. */
-  analyse(text: string): void {
-    if (!this.input || !this.refresh) return
-    this.input.value = text
+  /**
+   * Analyse a whole message read from elsewhere — a .eml in the vault, or a
+   * message attached to another — named by `source` in the line under the
+   * paste box. The box is left empty (see `loaded`), and the text is never cut
+   * to fit it: an excerpt the tool cut itself would hash a truncated
+   * attachment as if it were the file.
+   */
+  analyse(text: string, source: string): void {
+    if (!this.input || !this.loadNote || !this.refresh) return
+    if (this.debounce !== null) window.clearTimeout(this.debounce)
+    this.debounce = null
+    this.loaded = text
+    this.input.value = ''
+    this.loadNote.setText(`Loaded ${source}. Analysed in full; not shown here.`)
     this.refresh()
   }
 
@@ -420,7 +453,7 @@ export class PhishAnalysisView extends ItemView {
         if (trimmed.length > BODY_PREVIEW) {
           body.createDiv({
             cls: 'pm-headers-note',
-            text: `Showing the first ${BODY_PREVIEW.toLocaleString()} of ${trimmed.length.toLocaleString()} characters here. The copied report and the case carry all of it.`
+            text: `Showing the first ${NUMBER.format(BODY_PREVIEW)} of ${NUMBER.format(trimmed.length)} characters here. The copied report and the case carry all of it.`
           })
         }
       }
@@ -464,13 +497,15 @@ export class PhishAnalysisView extends ItemView {
       host.createDiv({ cls: 'pm-headers-empty', text: 'None.' })
       return
     }
-    for (const attachment of list) {
-      const card = host.createDiv('pm-att-card')
+    // Capped as the rows inside a card are: a mail of 20,000 tiny parts drew
+    // 20,000 cards on every click of this tab.
+    capped(host, list, (at, attachment) => {
+      const card = at.createDiv('pm-att-card')
       card.createDiv({ cls: 'pm-att-name', text: visibleName(attachment.filename) })
       // An undecoded part has no size and no first bytes, and its own fact says
       // why, so the line shows neither rather than a "0 bytes" it never had.
       const begins = attachment.sniffed ? ` · bytes begin as ${attachment.sniffed}` : ''
-      const size = attachment.sha256 ? `${attachment.size.toLocaleString()} bytes` : 'size not recorded'
+      const size = attachment.sha256 ? `${NUMBER.format(attachment.size)} bytes` : 'size not recorded'
       card.createDiv({ cls: 'pm-headers-note', text: `${visibleName(attachment.contentType)}${begins} · ${size}` })
       if (isMessage(attachment)) {
         // The forwarded message's own headers — its Received chain, its
@@ -479,7 +514,12 @@ export class PhishAnalysisView extends ItemView {
         const open = new ButtonComponent(card)
           .setButtonText('Analyse this message in a new tab')
           .setClass('pm-att-open')
-          .onClick(() => openPhishAnalysis(this.plugin, new TextDecoder().decode(attachment.bytes)))
+          .onClick(() =>
+            openPhishAnalysis(this.plugin, {
+              text: new TextDecoder().decode(attachment.bytes),
+              source: `${visibleName(attachment.filename) || 'an attached message'} (${NUMBER.format(attachment.bytes.length)} bytes)`
+            })
+          )
         setTooltip(
           open.buttonEl,
           'Open the attached message in its own analyser tab: its own headers, path, links and attachments. Nothing is fetched.'
@@ -504,7 +544,7 @@ export class PhishAnalysisView extends ItemView {
         }))
       )
       if (!this.renderStructure(card, attachment)) this.renderPreview(card, attachment)
-    }
+    })
   }
 
   /**
@@ -547,11 +587,13 @@ export class PhishAnalysisView extends ItemView {
       entryList(
         box,
         entriesRead(office.entries.length),
+        office.entries.length,
         // Encryption sits with the method, before the name: the sender's text
         // always ends the row, so nothing it writes can pass for a column.
-        office.entries.map(
-          (e) => `${sizeText(e.size)}\t${e.method}${e.encrypted ? ', encrypted' : ''}\t${visibleName(e.name)}`
-        )
+        () =>
+          office.entries.map(
+            (e) => `${sizeText(e.size)}\t${e.method}${e.encrypted ? ', encrypted' : ''}\t${visibleName(e.name)}`
+          )
       )
       cappedRows(
         box,
@@ -577,9 +619,7 @@ export class PhishAnalysisView extends ItemView {
       )
     }
     if (ole) {
-      entryList(
-        box,
-        entriesRead(ole.entries.length, 'the compound-file directory'),
+      entryList(box, entriesRead(ole.entries.length, 'the compound-file directory'), ole.entries.length, () =>
         ole.entries.map((e) => `${sizeText(e.size)}\t${e.type}\t${visibleName(e.name)}`)
       )
       cappedRows(
@@ -605,7 +645,7 @@ export class PhishAnalysisView extends ItemView {
     const where = visibleName(image.where)
     host.createDiv({
       cls: 'pm-headers-note',
-      text: `Picture at ${where} · ${image.bytes.length.toLocaleString()} bytes`
+      text: `Picture at ${where} · ${NUMBER.format(image.bytes.length)} bytes`
     })
     hashRow(host, 'SHA-256', image.sha256)
     const url =
@@ -718,11 +758,11 @@ function resultClass(result: string): string {
  * the message already in it, and comparing a reported mail with the one that
  * arrived an hour earlier is ordinary work, not an edge case.
  */
-export function openPhishAnalysis(plugin: PMPlugin, text?: string): void {
+export function openPhishAnalysis(plugin: PMPlugin, message?: { text: string; source: string }): void {
   const leaf = plugin.app.workspace.getLeaf('tab')
   void (async () => {
     await leaf.setViewState({ type: PHISH_VIEW_TYPE, active: true })
-    if (text !== undefined && leaf.view instanceof PhishAnalysisView) leaf.view.analyse(text)
+    if (message && leaf.view instanceof PhishAnalysisView) leaf.view.analyse(message.text, message.source)
   })()
 }
 
@@ -760,17 +800,25 @@ function hashRow(host: HTMLElement, label: string, value: string): void {
 }
 
 /**
- * The first STRUCTURE_LIST_CAP rows, and the rest behind a native disclosure.
+ * The first STRUCTURE_LIST_CAP items, and the rest behind a native disclosure.
  * Uncapped, a ZIP of two hundred encrypted programs was four hundred flagged
  * lines and put the next attachment twenty-six screens down. Nothing is
- * dropped: the rest is one click away.
+ * dropped: the rest is one click away, and is drawn on that click — built up
+ * front, twenty ZIPs of 4,096 entries were 80,000 rows nobody had opened,
+ * rebuilt on every click of a tab.
  */
-function cappedRows(host: HTMLElement, rows: { cls: string; text: string }[]): void {
-  for (const row of rows.slice(0, STRUCTURE_LIST_CAP)) host.createDiv(row)
-  if (rows.length <= STRUCTURE_LIST_CAP) return
+function capped<T>(host: HTMLElement, items: T[], draw: (host: HTMLElement, item: T) => void): void {
+  for (const item of items.slice(0, STRUCTURE_LIST_CAP)) draw(host, item)
+  if (items.length <= STRUCTURE_LIST_CAP) return
   const more = host.createEl('details', { cls: 'pm-att-entries' })
-  more.createEl('summary', { text: `${(rows.length - STRUCTURE_LIST_CAP).toLocaleString()} more` })
-  for (const row of rows.slice(STRUCTURE_LIST_CAP)) more.createDiv(row)
+  more.createEl('summary', { text: `${NUMBER.format(items.length - STRUCTURE_LIST_CAP)} more` })
+  more.addEventListener('toggle', () => items.slice(STRUCTURE_LIST_CAP).forEach((item) => draw(more, item)), {
+    once: true
+  })
+}
+
+function cappedRows(host: HTMLElement, rows: { cls: string; text: string }[]): void {
+  capped(host, rows, (at, row) => at.createDiv(row))
 }
 
 /**
@@ -779,16 +827,18 @@ function cappedRows(host: HTMLElement, rows: { cls: string; text: string }[]): v
  * stopped early; the reader's own note says why. A .docx holds twenty ordinary
  * parts and they should not push the findings off screen. Nothing is drawn
  * when nothing was read, rather than an empty list that looks like an empty
- * archive.
+ * archive. The listing is built when first opened, as capped's rows are.
  */
-function entryList(host: HTMLElement, summary: string, rows: string[]): void {
-  if (!rows.length) return
+function entryList(host: HTMLElement, summary: string, count: number, rows: () => string[]): void {
+  if (!count) return
   const all = host.createEl('details', { cls: 'pm-att-entries' })
   all.createEl('summary', { text: summary })
-  all.createEl('pre', { cls: 'pm-headers-pre', text: rows.join('\n') })
+  all.addEventListener('toggle', () => all.createEl('pre', { cls: 'pm-headers-pre', text: rows().join('\n') }), {
+    once: true
+  })
 }
 
 /** A declared size, or the words for its absence — never a made-up number. */
 function sizeText(size: number | null): string {
-  return size === null ? 'size not recorded' : `${size.toLocaleString()} bytes`
+  return size === null ? 'size not recorded' : `${NUMBER.format(size)} bytes`
 }
