@@ -152,6 +152,17 @@ describe('parser evasions that used to hide content from the analyst', () => {
     expect(eml.html).toContain('http://evil.test/login')
   })
 
+  it('records an attachment disposition beside a Content-ID, as Gmail sends a picture', () => {
+    const part = (disposition: string): string =>
+      `Content-Type: image/png; name="qr.png"\nContent-Disposition: ${disposition}; filename="qr.png"\n` +
+      'Content-ID: <f_m1abc>\nX-Attachment-Id: f_m1abc\nContent-Transfer-Encoding: base64\n\n' +
+      b64of('\x89PNG\r\n\x1a\n')
+    const [sent] = parseEml(part('attachment')).attachments
+    expect(sent.inline).toBe(true) // the Content-ID is still stated
+    expect(sent.attached).toBe(true)
+    expect(parseEml(part('inline')).attachments[0].attached).toBe(false)
+  })
+
   it('RFC 2231 filename* wins, because it is the name the client saves', () => {
     const mail =
       'Content-Type: application/octet-stream\n' +

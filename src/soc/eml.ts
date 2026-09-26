@@ -26,8 +26,19 @@ export interface Attachment {
   /** Bytes after transfer decoding — the true size, not the encoded length. */
   size: number
   bytes: Uint8Array
-  /** Referenced from the HTML body (a logo) rather than offered as a file. */
+  /**
+   * Its own headers mark it inline or give it a Content-ID. Nothing checks
+   * that the body refers to it, and Gmail gives ordinary attachments a
+   * Content-ID, so this alone does not make it a logo.
+   */
   inline: boolean
+  /**
+   * Its own Content-Disposition says `attachment`, whatever else it carries —
+   * a Content-ID included. `inline` stays true for such a part, because the
+   * Content-ID is a true fact about it; this is what says it was sent as a
+   * file, so a picture sent that way is not filed as an inline image.
+   */
+  attached?: boolean
   /**
    * The transfer encoding could not be decoded, so `bytes` is empty because
    * nothing was read — NOT because the file is empty. Callers must print the
@@ -397,7 +408,8 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   // the text/html part move the whole body out of the body: the client still
   // rendered it — the header says inline — while the analysis showed no HTML
   // source, no links, and one unremarkable row under Attachments.
-  const isAttachment = /^attachment/i.test(disposition) || (Boolean(filename) && !inline)
+  const attached = /^attachment/i.test(disposition)
+  const isAttachment = attached || (Boolean(filename) && !inline)
   const { bytes, exact, failed } = decodeBody(part.body, encoding)
   if (failed) {
     out.notes.push(
@@ -411,9 +423,7 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   // real payload's name, bytes and hash in front of the analyst instead of a
   // single row reading `fwd.eml — message/rfc822`.
   if (mime === 'message/rfc822') {
-    if (filename || /^attachment/i.test(disposition)) {
-      pushAttachment(out, filename, mime, bytes, inline, failed, exact)
-    }
+    if (filename || attached) pushAttachment(out, filename, mime, bytes, inline, failed, exact, attached)
     walk(
       splitHeadersAndBody(decodeText(bytes, param(contentType, 'charset'), exact, part.body, out, mime)),
       out,
@@ -423,7 +433,7 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   }
 
   if (isAttachment || !mime.startsWith('text/')) {
-    pushAttachment(out, filename, mime, bytes, inline, failed, exact)
+    pushAttachment(out, filename, mime, bytes, inline, failed, exact, attached)
     return
   }
 
@@ -446,7 +456,8 @@ function pushAttachment(
   bytes: Uint8Array,
   inline: boolean,
   undecodable: boolean,
-  exact: boolean
+  exact: boolean,
+  attached = false
 ): void {
   out.attachments.push({
     filename: filename || '(no filename given)',
@@ -454,6 +465,7 @@ function pushAttachment(
     size: bytes.length,
     bytes,
     inline,
+    attached,
     undecodable,
     exact
   })
