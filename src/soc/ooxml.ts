@@ -295,11 +295,27 @@ function endsWithRels(bytes: Uint8Array, at: number, length: number): boolean {
  */
 const utf8 = new TextDecoder('utf-8')
 
+/**
+ * A part's text, decoded as its byte-order mark says.
+ *
+ * Always decoding as UTF-8 turned a UTF-16 .rels into noise that held no
+ * `<Relationship`, and the note then said no declarations appear in the bytes
+ * read — which the bytes plainly contradict. The XML spec requires a BOM on
+ * UTF-16, so the BOM is enough to tell.
+ */
+function decodeXml(bytes: Uint8Array): string {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.subarray(2))
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes.subarray(2))
+  return utf8.decode(bytes)
+}
+
 function walkCentralDirectory(bytes: Uint8Array, view: DataView, end: EndRecord, notes: string[]): CentralRecord[] {
   const records: CentralRecord[] = []
   let at = end.cdOffset
   let truncatedName = false
   let unrepresentable = 0
+  let unresolved = 0
+  let firstUnresolved = ''
   let firstUnrepresentable = ''
   while (records.length < MAX_ENTRIES) {
     if (at + 46 > bytes.length || view.getUint32(at, true) !== SIG_CENTRAL) break
@@ -334,6 +350,16 @@ function walkCentralDirectory(bytes: Uint8Array, view: DataView, end: EndRecord,
     ) {
       unrepresentable++
       if (firstUnrepresentable === '') firstUnrepresentable = entry.name
+    }
+    // 0xffffffff is the ZIP64 marker, not a size: it means "the real value is in
+    // the ZIP64 extra field". One still standing after that field was read had
+    // no field to resolve it, and printing it gave a 200-byte container a
+    // 4.29 GB vbaProject.bin. Unknown is the honest value.
+    if (entry.size === 0xffffffff || entry.compressedSize === 0xffffffff) {
+      if (entry.size === 0xffffffff) entry.size = null
+      if (entry.compressedSize === 0xffffffff) entry.compressedSize = null
+      unresolved++
+      if (firstUnresolved === '') firstUnresolved = entry.name
     }
     records.push(entry)
     at = nameAt + nameLength + extraLength + commentLength
@@ -385,6 +411,13 @@ function walkCentralDirectory(bytes: Uint8Array, view: DataView, end: EndRecord,
   if (truncatedName) {
     notes.push(
       `One or more entry names were longer than ${MAX_NAME_BYTES} bytes and are shown cut short, marked with …`
+    )
+  }
+  if (unresolved > 0) {
+    notes.push(
+      unresolved === 1
+        ? `${firstUnresolved} carries the ZIP64 size marker but no ZIP64 field to say what the size is, so its size is not recorded.`
+        : `${unresolved} entries, starting with ${firstUnresolved}, carry the ZIP64 size marker but no ZIP64 field to say what the size is, so their sizes are not recorded.`
     )
   }
   if (unrepresentable === 1) {
@@ -544,6 +577,9 @@ async function inflate(
  */
 const RELATIONSHIP_START = /<(?:[A-Za-z_][\w.-]*:)?Relationship\b/gi
 
+/** The root's closing tag: present only when the part was read to its end. */
+const CLOSES_RELATIONSHIPS = /<\/(?:[A-Za-z_][\w.-]*:)?Relationships\s*>/i
+
 /** Every real relationship part contains this, if only in its own `<Relationships>` root. */
 const RELATIONSHIP_SHAPE = /<(?:[A-Za-z_][\w.-]*:)?Relationship/i
 
@@ -602,14 +638,121 @@ function elementEnd(xml: string, from: number): { at: number; closed: boolean } 
   }
   return null
 }
-const ATTR_ID = /\bId\s*=\s*(?:"([^"]*)"|'([^']*)')/i
-const ATTR_TYPE = /\bType\s*=\s*(?:"([^"]*)"|'([^']*)')/i
-const ATTR_TARGET = /\bTarget\s*=\s*(?:"([^"]*)"|'([^']*)')/i
-const ATTR_MODE = /\bTargetMode\s*=\s*(?:"([^"]*)"|'([^']*)')/i
+/**
+ * The attributes of one element, read in order, name to raw value.
+ *
+ * Not a regex over the element text. `/\bTargetMode\s*=.../` searched the
+ * WHOLE element, so text sitting inside another attribute's value was read as
+ * an attribute of its own: `Target="internal.xml' TargetMode='External"` —
+ * legal, since a double-quoted value may hold single quotes — produced an
+ * External row for a relationship Word treats as internal. Walking name,
+ * `=`, quoted value in turn can only ever find an attribute where one is.
+ *
+ * Names are matched exactly, as XML matches them and as Word reads them: a
+ * `targetmode="External"` is not a TargetMode to Word, so it is not one here.
+ * The first occurrence wins; a repeated attribute is malformed and Word
+ * rejects the part, so which copy "counts" is not a question worth guessing.
+ */
+function attributes(element: string): Map<string, string> {
+  const found = new Map<string, string>()
+  const n = element.length
+  let i = 1
+  while (i < n && !isNameEnd(element[i] ?? '')) i++ // the element's own name
+  while (i < n) {
+    while (i < n && isSpace(element[i] ?? '')) i++
+    const start = i
+    while (i < n && !isNameEnd(element[i] ?? '') && element[i] !== '=') i++
+    const name = element.slice(start, i)
+    if (name === '') {
+      i++
+      continue
+    }
+    while (i < n && isSpace(element[i] ?? '')) i++
+    if (element[i] !== '=') continue
+    i++
+    while (i < n && isSpace(element[i] ?? '')) i++
+    const quote = element[i]
+    if (quote !== '"' && quote !== "'") continue
+    const close = element.indexOf(quote, i + 1)
+    if (close < 0) break
+    const local = name.includes(':') ? name.slice(name.indexOf(':') + 1) : name
+    if (!found.has(local)) found.set(local, element.slice(i + 1, close))
+    i = close + 1
+  }
+  return found
+}
 
-function attr(element: string, pattern: RegExp): string {
-  const found = pattern.exec(element)
-  return found ? (found[1] ?? found[2] ?? '') : ''
+function isSpace(ch: string): boolean {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'
+}
+
+function isNameEnd(ch: string): boolean {
+  return ch === '' || ch === '>' || ch === '/' || isSpace(ch)
+}
+
+/**
+ * The same text with every comment, CDATA section, processing instruction and
+ * DOCTYPE blanked to spaces — same length, so an index into the result is an
+ * index into the original.
+ *
+ * `<!-- <Relationship Target="https://lure" TargetMode="External"/> -->` is
+ * not a relationship; Word never reads it. Scanning straight for
+ * `<Relationship` reported it as a declared external target anyway, so a link
+ * that was commented out, or quoted as an example, read as one the document
+ * uses. Masking first means the scan only ever sees markup.
+ *
+ * Linear: indexOf to each opener, indexOf to its closer. An opener with no
+ * closer blanks to the end, because everything after an unclosed `<!--`
+ * really is inside the comment — the safe direction, since it can only hide
+ * text, never invent it.
+ */
+function maskNonMarkup(xml: string): string {
+  let out = ''
+  let i = 0
+  for (;;) {
+    const lt = xml.indexOf('<', i)
+    if (lt < 0) return out + xml.slice(i)
+    const close = nonMarkupClose(xml, lt)
+    if (close === null) {
+      out += xml.slice(i, lt + 1)
+      i = lt + 1
+      continue
+    }
+    out += xml.slice(i, lt)
+    const end = close < 0 ? xml.length : close
+    out += ' '.repeat(end - lt)
+    if (close < 0) return out
+    i = end
+  }
+}
+
+/**
+ * Where the non-markup construct opening at `lt` ends (the index just past its
+ * closer), -1 when it never closes, or null when `lt` opens ordinary markup.
+ */
+function nonMarkupClose(xml: string, lt: number): number | null {
+  const pairs: Array<[string, string]> = [
+    ['<!--', '-->'],
+    ['<![CDATA[', ']]>'],
+    ['<?', '?>']
+  ]
+  for (const [open, shut] of pairs) {
+    if (!xml.startsWith(open, lt)) continue
+    const at = xml.indexOf(shut, lt + open.length)
+    return at < 0 ? -1 : at + shut.length
+  }
+  if (xml.slice(lt, lt + 9).toUpperCase() !== '<!DOCTYPE') return null
+  // An internal subset holds its own `>` characters, so the DOCTYPE ends at the
+  // `>` after the closing `]` when there is one.
+  const gt = xml.indexOf('>', lt)
+  const bracket = xml.indexOf('[', lt)
+  if (bracket >= 0 && (gt < 0 || bracket < gt)) {
+    const shut = xml.indexOf(']', bracket)
+    if (shut < 0) return -1
+    const after = xml.indexOf('>', shut)
+    return after < 0 ? -1 : after + 1
+  }
+  return gt < 0 ? -1 : gt + 1
 }
 
 /**
@@ -639,7 +782,8 @@ function xmlText(value: string): string {
  * reasons about the bytes that were not read — the cap that cut them off says
  * so itself, at the call site, with its own numbers.
  */
-function collectTargets(from: string, xml: string, out: ExternalTarget[], notes: string[]): void {
+function collectTargets(from: string, raw: string, out: ExternalTarget[], notes: string[]): void {
+  const xml = maskNonMarkup(raw)
   RELATIONSHIP_START.lastIndex = 0
   let undelimited = 0
   let stopped = false
@@ -682,14 +826,15 @@ function collectTargets(from: string, xml: string, out: ExternalTarget[], notes:
     // MAX_UNCLOSED is what bounds that. `end` is always at least 13 bytes on
     // from the start (`<Relationship` holds no `>`), so this always advances.
     RELATIONSHIP_START.lastIndex = end + 1
-    const mode = attr(element, ATTR_MODE)
-    if (mode.toLowerCase() !== 'external') continue
+    const attrs = attributes(element)
+    const mode = attrs.get('TargetMode') ?? ''
+    if (mode !== 'External') continue
     out.push({
       from,
-      target: xmlText(attr(element, ATTR_TARGET)),
+      target: xmlText(attrs.get('Target') ?? ''),
       mode,
-      type: xmlText(attr(element, ATTR_TYPE)),
-      id: attr(element, ATTR_ID)
+      type: xmlText(attrs.get('Type') ?? ''),
+      id: attrs.get('Id') ?? ''
     })
   }
   if (undelimited === 0) return
@@ -779,7 +924,7 @@ async function readRelationships(
       if (length < located.length) {
         facts.notes.push(`${entry.name} is larger than ${cap} bytes and was read only that far.`)
       }
-      xml = utf8.decode(bytes.subarray(located.start, located.start + length))
+      xml = decodeXml(bytes.subarray(located.start, located.start + length))
       budget -= length
     } else if (entry.methodCode === 8) {
       const input = Math.min(located.length, MAX_RELS_INPUT)
@@ -789,7 +934,13 @@ async function readRelationships(
           `${entry.name} expanded past ${cap} bytes; reading stopped there and anything declared beyond that point was not read.`
         )
       }
-      if (out.failed) {
+      xml = decodeXml(out.bytes)
+      // A decompressor also errors on bytes AFTER a complete stream — a
+      // declared compressed size longer than the stream, or a read that ran
+      // on to the end of the file — having already produced every byte of the
+      // part. The part is then whole, and saying it "could not be fully
+      // decompressed" is false. Its own closing root tag is what says it is.
+      if (out.failed && !CLOSES_RELATIONSHIPS.test(xml)) {
         // What broke the stream is not claimed. A cut stream, bytes that were
         // never deflate and a damaged tail are indistinguishable from here,
         // and the analyst acts on the same fact either way.
@@ -797,7 +948,6 @@ async function readRelationships(
           `${entry.name} could not be fully decompressed. Anything past the break is unknown, not absent.`
         )
       }
-      xml = utf8.decode(out.bytes)
       budget -= out.bytes.length
     } else {
       facts.notes.push(`${entry.name} is compressed with ${entry.method}, which this reader cannot inflate.`)

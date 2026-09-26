@@ -153,6 +153,16 @@ describe('URLs', () => {
   })
 })
 
+describe('the header window', () => {
+  it('finds a header that starts inside the first 1024 bytes but ends past them', () => {
+    // Slicing at exactly 1024 cut this header in half and the note then said
+    // there was no header in the first 1024 bytes.
+    const facts = readPdf(pdf('x'.repeat(1019), '%PDF-1.4\n1 0 obj << >> endobj\n%%EOF'))
+    expect(facts?.version).toBe('1.4')
+    expect(facts?.notes.join(' ')).not.toContain('No %PDF header')
+  })
+})
+
 describe('images', () => {
   const head = '%PDF-1.5\n4 0 obj\n<< /Type /XObject /Subtype /Image /Filter /DCTDecode /Length 15 >>\nstream\n'
 
@@ -218,7 +228,7 @@ describe('images', () => {
   it('says so when a stream has no endstream, instead of returning half a file', () => {
     const facts = readPdf(pdf('%PDF-1.5\n<< /Filter /DCTDecode >>\nstream\n', JPEG, TRAILER.replace('%%EOF', '')))
     expect(facts?.images).toEqual([])
-    expect(facts?.notes.join(' ')).toContain('no readable stream')
+    expect(facts?.notes.join(' ')).toContain('not proof there is no image there')
   })
 
   it('stops at the image cap and names the cap', () => {
@@ -384,7 +394,7 @@ describe('notes that would otherwise be wrong', () => {
     // not in the notes — while the two neighbouring failure paths were counted.
     const facts = readPdf(pdf('%PDF-1.5\n<< /Filter /DCTDecode /Length 0 >>\nstream\nendstream\nendobj', TRAILER))
     expect(facts?.images).toEqual([])
-    expect(facts?.notes.join(' ')).toContain('1 /DCTDecode or /JPXDecode entr(ies) declared a stream with no bytes')
+    expect(facts?.notes.join(' ')).toContain('1 /DCTDecode or /JPXDecode entr(ies) held nothing but line-ending bytes')
   })
 
   it('names the byte cap when one oversized image trips it, instead of "Stopped after 0 image(s)"', () => {
@@ -673,7 +683,7 @@ describe('files built to make the scan run away', () => {
     expect([...(facts?.images[0]?.bytes ?? [])]).toEqual([...JPEG])
     const notes = facts?.notes.join(' ') ?? ''
     expect(notes).toContain('Stopped after examining 4096')
-    expect(notes).toContain('declared a stream with no bytes')
+    expect(notes).toContain('held nothing but line-ending bytes')
     expect(ms).toBeLessThan(1000)
   })
 

@@ -934,3 +934,122 @@ describe('readZipDocument', () => {
     expect(facts?.notes.join(' ')).not.toMatch(/ZIP64/i)
   })
 })
+
+describe('the relationship list reports only what Word would read', () => {
+  const rels = (body: string) =>
+    `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`
+
+  it('does not report a relationship that is commented out', async () => {
+    // A lure quoted as an example, or left commented in a template, is not a
+    // link the document uses. The scan used to find `<Relationship` inside
+    // the comment and report it as declared.
+    const facts = await readZipDocument(
+      zip([
+        {
+          name: '_rels/.rels',
+          data: enc.encode(
+            rels(
+              '<!-- <Relationship Id="rX" Type="t/hyperlink" Target="https://commented.lure/x" TargetMode="External"/> -->' +
+                '<Relationship Id="r1" Type="t/hyperlink" Target="https://real.lure/y" TargetMode="External"/>'
+            )
+          )
+        }
+      ])
+    )
+    expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://real.lure/y'])
+  })
+
+  it('does not report a relationship inside CDATA or a processing instruction', async () => {
+    const facts = await readZipDocument(
+      zip([
+        {
+          name: '_rels/.rels',
+          data: enc.encode(
+            rels(
+              '<![CDATA[<Relationship Id="rC" Target="https://cdata.lure/" TargetMode="External"/>]]>' +
+                '<?pi <Relationship Id="rP" Target="https://pi.lure/" TargetMode="External"/> ?>'
+            )
+          )
+        }
+      ])
+    )
+    expect(facts?.externalTargets).toEqual([])
+  })
+
+  it('does not read text inside one attribute value as another attribute', async () => {
+    // Single quotes are legal inside a double-quoted value. The old regex
+    // found `TargetMode='External'` inside Target's own value and reported an
+    // INTERNAL relationship as External.
+    const facts = await readZipDocument(
+      zip([
+        {
+          name: '_rels/.rels',
+          // Target's double-quoted value holds a complete `TargetMode='External'`.
+          // There is no TargetMode attribute on this element at all.
+          data: enc.encode(rels(`<Relationship Id="r1" Type="t/x" Target="internal.xml' TargetMode='External' x='"/>`))
+        }
+      ])
+    )
+    expect(facts?.externalTargets).toEqual([])
+  })
+
+  it('still reports a genuine external relationship, prefixed or not', async () => {
+    const facts = await readZipDocument(
+      zip([
+        {
+          name: 'word/_rels/document.xml.rels',
+          data: enc.encode(
+            '<r:Relationships xmlns:r="x"><r:Relationship Id="rId9" Type="t/attachedTemplate" Target="https://tpl.lure/a.dotm" TargetMode="External"/></r:Relationships>'
+          )
+        }
+      ])
+    )
+    expect(facts?.externalTargets).toEqual([
+      {
+        from: 'word/_rels/document.xml.rels',
+        target: 'https://tpl.lure/a.dotm',
+        mode: 'External',
+        type: 't/attachedTemplate',
+        id: 'rId9'
+      }
+    ])
+  })
+
+  it('reads a relationship part written in UTF-16, instead of saying it holds none', async () => {
+    const text = rels('<Relationship Id="r1" Type="t/x" Target="https://utf16.lure/" TargetMode="External"/>')
+    const body = new Uint8Array(2 + text.length * 2)
+    body[0] = 0xff
+    body[1] = 0xfe
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      body[2 + i * 2] = code & 0xff
+      body[3 + i * 2] = code >> 8
+    }
+    const facts = await readZipDocument(zip([{ name: '_rels/.rels', data: body }]))
+    expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://utf16.lure/'])
+    expect(facts?.notes.join(' ')).not.toContain('No relationship declarations appear')
+  })
+
+  it('does not say a part failed to decompress when trailing bytes followed a complete stream', async () => {
+    // A declared compressed size longer than the stream makes the decompressor
+    // error on the junk AFTER it — having already produced the whole part.
+    const deflated = await deflateRaw(
+      enc.encode(rels('<Relationship Id="r1" Type="t/x" Target="https://whole.lure/" TargetMode="External"/>'))
+    )
+    const padded = concat([deflated, enc.encode('TRAILING-JUNK-AFTER-THE-STREAM')])
+    const facts = await readZipDocument(zip([{ name: '_rels/.rels', data: padded, method: 8 }]))
+    expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://whole.lure/'])
+    expect(facts?.notes.join(' ')).not.toContain('could not be fully decompressed')
+  })
+})
+
+describe('sizes the directory cannot state', () => {
+  it('reports an unresolved ZIP64 marker as unknown, never as 4,294,967,295', async () => {
+    // 0xffffffff means "look in the ZIP64 field". With no field there, the
+    // size is unknown — printing it gave a 200-byte file a 4.29 GB entry.
+    const facts = await readZipDocument(zip([{ name: 'word/vbaProject.bin', data: enc.encode('x'), size: 0xffffffff }]))
+    const entry = facts?.entries.find((e) => e.name === 'word/vbaProject.bin')
+    expect(entry?.size).toBeNull()
+    expect(facts?.notes.join(' ')).toContain('carries the ZIP64 size marker but no ZIP64 field')
+  })
+})

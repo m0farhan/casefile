@@ -180,7 +180,11 @@ export function readPdf(bytes: Uint8Array): PdfFacts | null {
   // polyglot with a prefix in front of the header opens as a PDF for the
   // victim, and a reader that insists on offset 0 declines to look at exactly
   // the file that was built to be looked at twice.
-  const header = /%PDF-(\d+\.\d+)/.exec(text.slice(0, HEADER_WINDOW))
+  // The window bounds where the header may START. Slicing at exactly 1024 cut
+  // a header beginning at byte 1020 in half, and the note then said there was
+  // no header in the first 1024 bytes about a file that had one there.
+  const matched = /%PDF-(\d+\.\d+)/.exec(text.slice(0, HEADER_WINDOW + 16))
+  const header = matched && matched.index < HEADER_WINDOW ? matched : null
   // No header at all is still a readable PDF when the object skeleton is there
   // (hand-assembled files, and files whose header was pushed past the window).
   const structural = text.includes('endobj') && text.includes('%%EOF')
@@ -725,7 +729,9 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
   }
   if (missed) {
     notes.push(
-      `${missed} /DCTDecode or /JPXDecode entr(ies) had no readable stream within the scanned bytes and were not extracted.`
+      `${missed} /DCTDecode or /JPXDecode entr(ies) were not extracted: this scan looks for the 'stream' keyword ` +
+        `within ${STREAM_LOOKAHEAD} bytes of the filter name and an 'endstream' after it, and did not find both. ` +
+        `That is where this scan stopped looking, not proof there is no image there.`
     )
   }
   if (unverified) {
@@ -737,8 +743,8 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
   }
   if (empty) {
     notes.push(
-      `${empty} /DCTDecode or /JPXDecode entr(ies) declared a stream with no bytes in it — its 'endstream' follows ` +
-        'the `stream` keyword immediately — so there was nothing to extract.'
+      `${empty} /DCTDecode or /JPXDecode entr(ies) held nothing but line-ending bytes between 'stream' and ` +
+        `'endstream', so there was no image in them to extract.`
     )
   }
   if (out.length) {
