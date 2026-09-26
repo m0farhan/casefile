@@ -62,7 +62,7 @@ describe('ProjectStore self-write tracking', () => {
     expect(store.consumeSelfWrite(expectDefined(task.filePath))).toBe(false) // single-use
   })
 
-  it('marks both old and new path on title rename (modify new, trash old)', async () => {
+  it('marks both old and new path on title rename', async () => {
     const { store, vault } = newStore()
     const project = await store.createProject('R', 'Projects')
     const task = await addNamed(store, project, 'Before')
@@ -71,8 +71,8 @@ describe('ProjectStore self-write tracking', () => {
 
     await store.updateTask(project, task.id, { title: 'Renamed' })
 
-    // The new path is created (marked for cache invalidation) and the old
-    // path is trashed (marked so the delete listener skips the reload).
+    // The note is renamed from the old path to the new one: both are marked,
+    // so neither the rename nor the cache listeners treat it as external.
     expect(store.consumeSelfWrite(expectDefined(task.filePath))).toBe(true)
     expect(store.consumeSelfWrite(oldPath)).toBe(true)
   })
@@ -133,8 +133,9 @@ describe('ProjectStore dirty-set save efficiency', () => {
 
     await store.updateTask(project, parent.id, { title: 'New parent' })
 
-    // Parent file is renamed (create new + trash old), not modified.
-    expect(vault.modifyCount.get(expectDefined(parent.filePath)) ?? 0).toBe(0)
+    // Parent note is moved by the link-aware rename, then rewritten once in place.
+    expect(vault.modifyCount.get(expectDefined(parent.filePath))).toBe(1)
+    expect(vault.createCount.size + vault.trashCount.size).toBe(0)
     // Children stay at the same path but get rewritten because their Parent link broke.
     expect(vault.modifyCount.get(expectDefined(child1.filePath))).toBe(1)
     expect(vault.modifyCount.get(expectDefined(child2.filePath))).toBe(1)
@@ -153,9 +154,11 @@ describe('ProjectStore dirty-set save efficiency', () => {
 
     expect(vault.modifyCount.get(expectDefined(p1.filePath))).toBe(1)
     expect(vault.modifyCount.get(expectDefined(p2.filePath))).toBe(1)
-    // The child's file relocates under the new parent's folder: create + trash, not modify.
-    expect(vault.createCount.get(expectDefined(child.filePath))).toBe(1)
-    expect(vault.trashCount.get(oldChildPath)).toBe(1)
+    // The child's note relocates under the new parent's folder by the
+    // link-aware rename, then one in-place rewrite: nothing created or trashed.
+    expect(vault.modifyCount.get(expectDefined(child.filePath))).toBe(1)
+    expect(vault.getAbstractFileByPath(oldChildPath)).toBeNull()
+    expect(vault.createCount.size + vault.trashCount.size).toBe(0)
   })
 
   it('rewrites the parent (not the deleted task) on deleteTask', async () => {
@@ -2409,5 +2412,36 @@ describe('ProjectStore refuses a title before changing anything', () => {
     }
     expect(t.title).toBe('Named')
     expect(vault.getAbstractFileByPath('Projects/Empty/Tasks/.md')).toBeNull()
+  })
+})
+
+describe('ProjectStore relocating a case note', () => {
+  it('uses the link-aware rename, keeping the note itself, so links from other notes can follow', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Links', 'Projects')
+    const task = await addNamed(store, project, 'Phish from CEO')
+    await store.updateTask(project, task.id, { description: 'The body.' })
+    const before = vault.getAbstractFileByPath(expectDefined(task.filePath))
+    const renames: string[] = []
+    const rename = app.fileManager.renameFile.bind(app.fileManager)
+    app.fileManager.renameFile = async (file, to) => {
+      renames.push(`${file.path} -> ${to}`)
+      await rename(file, to)
+    }
+    vault.resetCounts()
+
+    await store.updateTask(project, task.id, { title: 'BEC wire fraud' })
+    expect(renames).toEqual(['Projects/Links/Tasks/Phish from CEO.md -> Projects/Links/Tasks/BEC wire fraud.md'])
+    expect(vault.getAbstractFileByPath('Projects/Links/Tasks/BEC wire fraud.md')).toBe(before)
+    expect(vault.trashCount.size).toBe(0)
+    const { body } = parseFrontmatter(await vault.cachedRead(before as TFile))
+    expect(body.startsWith('The body.')).toBe(true)
+  })
+
+  it('listing boards never creates the default folder', async () => {
+    const { store, vault } = newStore()
+    await store.createProject('B', 'Elsewhere')
+    expect((await store.loadAllProjects('Projects')).map((p) => p.title)).toEqual(['B'])
+    expect(vault.getAbstractFileByPath('Projects')).toBeNull()
   })
 })

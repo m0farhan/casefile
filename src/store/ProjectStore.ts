@@ -323,7 +323,9 @@ export class ProjectStore implements TaskSource {
   // ─── Load ──────────────────────────────────────────────────────────────────
 
   async loadAllProjects(folder: string): Promise<Project[]> {
-    if (folder) await this.ensureFolder(folder)
+    // No ensureFolder: listing is a read. The default folder is where new
+    // boards go, not a fence, and an analyst who emptied and deleted it
+    // should not see it come back on the next dashboard render.
     const files = this.findProjectFiles(folder)
     const loaded = await Promise.all(files.map((f) => this.loadProject(f)))
     const projects = loaded.filter((p): p is Project => p !== null)
@@ -854,9 +856,27 @@ export class ProjectStore implements TaskSource {
         // File missing somehow; fall through to recreate it.
       }
 
-      const existing = this.app.vault.getAbstractFileByPath(filePath)
+      let existing = this.app.vault.getAbstractFileByPath(filePath)
       if (existing instanceof TFile && existing.path !== previousPath) {
         throw new TaskFileNameConflictError(filePath)
+      }
+
+      if (!existing && renamed && previousPath) {
+        // A retitle, reparent or archive move relocates the note through the
+        // link-aware rename, so links the analyst wrote to it from other notes
+        // follow it (per their Obsidian setting), and an open tab keeps its
+        // file. Writing a new note and trashing the old one broke both. The
+        // in-place rewrite below then serialises it at its new path.
+        const oldFile = this.app.vault.getAbstractFileByPath(previousPath)
+        if (oldFile instanceof TFile) {
+          this.markSelfWrite(previousPath)
+          this.markSelfWrite(filePath)
+          await this.app.fileManager.renameFile(oldFile, filePath)
+          // Pointed at the real file at once: if the rewrite below fails, the
+          // next save must not look for the note at a path it has left.
+          task.filePath = filePath
+          existing = oldFile
+        }
       }
 
       if (existing instanceof TFile) {
@@ -875,15 +895,7 @@ export class ProjectStore implements TaskSource {
           )
         })
       } else {
-        // New file or rename target. For a rename of an unhydrated task, read
-        // the old file once to recover the description before creating the new one.
-        if (!this.hydratedBodies.has(task) && previousPath) {
-          const oldFile = this.app.vault.getAbstractFileByPath(previousPath)
-          if (oldFile instanceof TFile) {
-            const content = await this.app.vault.cachedRead(oldFile)
-            recoverBodyInto(task, parseFrontmatter(content).body)
-          }
-        }
+        // A new note (a rename whose old note is gone lands here too).
         const content = serializeTask(
           task,
           project,
@@ -898,11 +910,6 @@ export class ProjectStore implements TaskSource {
       this.hydratedBodies.add(task)
 
       if (renamed && previousPath) {
-        const oldFile = this.app.vault.getAbstractFileByPath(previousPath)
-        if (oldFile instanceof TFile) {
-          this.markSelfWrite(previousPath)
-          await this.app.fileManager.trashFile(oldFile)
-        }
         // Keep the task's own folder (attachments and nested subtask files)
         // with the renamed note.
         this.markSelfWrite(this.taskFolder(previousPath))
