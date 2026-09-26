@@ -2334,3 +2334,80 @@ describe('ProjectStore loader repairs', () => {
     expect(expectDefined(p).tasks.map((t) => t.id)).toEqual(['P'])
   })
 })
+
+describe('ProjectStore refuses a title before changing anything', () => {
+  it('a conflicting insert leaves no ghost, and the next insert and edits still save', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Ghost', 'Projects')
+    project.keyPrefix = 'SOC'
+    const first = await addNamed(store, project, 'Phish alert')
+    await expect(addNamed(store, project, 'Phish alert')).rejects.toThrow('already exists')
+    expect(flattenTasks(project.tasks).map((f) => f.task.title)).toEqual(['Phish alert'])
+
+    const other = await addNamed(store, project, 'Unrelated')
+    expect(other.key).toBe('SOC-2')
+    await store.updateTask(project, first.id, { status: 'done' })
+    const fm = parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(project.filePath) as TFile))
+    expect(fm.frontmatter?.taskIds).toEqual([first.id, other.id])
+  })
+
+  it('a case whose note could not be written is taken back out of the board', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Unwritten', 'Projects')
+    const create = vault.create.bind(vault)
+    vault.create = async (path: string, content: string) => {
+      if (path.endsWith('Doomed.md')) throw new Error('disk full')
+      return create(path, content)
+    }
+    await expect(addNamed(store, project, 'Doomed')).rejects.toThrow('disk full')
+    expect(project.tasks).toEqual([])
+    expect(project.taskIndex.size).toBe(0)
+    await addNamed(store, project, 'Fine')
+    expect(project.tasks.map((t) => t.title)).toEqual(['Fine'])
+  })
+
+  it('a subtask is checked where it will live, and a retry after a refusal places it once', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Retry', 'Projects')
+    await addNamed(store, project, 'Top')
+    const parent = await addNamed(store, project, 'Parent')
+    const kid = await addNamed(store, project, 'Kid', parent.id)
+    // Named like a top-level note, but it lives in Parent/: allowed.
+    await addNamed(store, project, 'Top', parent.id)
+
+    const retry = makeTask({ title: 'Kid' })
+    await expect(store.insertTask(project, retry, parent.id)).rejects.toThrow('already exists')
+    retry.title = 'Kid 2'
+    await store.insertTask(project, retry, parent.id)
+    await store.insertTask(project, retry, parent.id)
+    const fm = parseFrontmatter(
+      await vault.cachedRead(vault.getAbstractFileByPath(expectDefined(parent.filePath)) as TFile)
+    )
+    expect((fm.frontmatter?.subtaskIds as string[]).filter((id) => id === retry.id)).toHaveLength(1)
+    expect(parent.subtasks.map((s) => s.title)).toEqual(['Kid', 'Top', 'Kid 2'])
+    expect(kid.filePath).toBe('Projects/Retry/Tasks/Parent/Kid.md')
+  })
+
+  it('a rename onto a sibling keeps the old title, and other cases still save', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Rename', 'Projects')
+    const a = await addNamed(store, project, 'Alpha')
+    const b = await addNamed(store, project, 'Beta')
+    await expect(store.updateTask(project, b.id, { title: 'Alpha' })).rejects.toThrow('already exists')
+    expect(b.title).toBe('Beta')
+    await store.updateTask(project, a.id, { status: 'done' })
+    expect(a.status).toBe('done')
+  })
+
+  it('an empty title, or one that makes no file name, is refused', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Empty', 'Projects')
+    const t = await addNamed(store, project, 'Named')
+    for (const title of ['', '...']) {
+      await expect(store.updateTask(project, t.id, { title })).rejects.toThrow('file name')
+      await expect(addNamed(store, project, title)).rejects.toThrow('file name')
+    }
+    expect(t.title).toBe('Named')
+    expect(vault.getAbstractFileByPath('Projects/Empty/Tasks/.md')).toBeNull()
+  })
+})

@@ -313,10 +313,9 @@ export class ProjectStore implements TaskSource {
    * when the parent has no file yet (its write failed) — the loader is
    * layout-agnostic and the next successful save relocates.
    */
-  private folderForTask(project: Project, task: Task): string {
+  private folderForTask(project: Project, task: Task, parentId = findParentId(project, task.id)): string {
     const base = this.projectTaskFolder(project)
     if (task.archived) return normalizePath(base + '/Archive')
-    const parentId = findParentId(project, task.id)
     const parent = parentId ? findTaskById(project, parentId) : null
     return parent?.filePath ? this.taskFolder(parent.filePath) : base
   }
@@ -934,10 +933,15 @@ export class ProjectStore implements TaskSource {
   /**
    * Pre-flight check: would saving this task (at its current title) collide
    * with another file already in the vault? Returns a typed error callers can
-   * surface inline, or null if the save would proceed cleanly.
+   * surface inline, or null if the save would proceed cleanly. `parentId`
+   * places a task that is not in the tree yet; left out, the tree says.
    */
-  findTaskFileConflict(project: Project, task: Task): TaskFileNameConflictError | null {
-    const folder = this.folderForTask(project, task)
+  findTaskFileConflict(
+    project: Project,
+    task: Task,
+    parentId: string | null = findParentId(project, task.id)
+  ): TaskFileNameConflictError | null {
+    const folder = this.folderForTask(project, task, parentId)
     const desired = normalizePath(resolveTaskPath(task, folder, task.filePath))
     if (desired === task.filePath) return null
     const existing = this.app.vault.getAbstractFileByPath(desired)
@@ -969,7 +973,25 @@ export class ProjectStore implements TaskSource {
     return project
   }
 
+  /**
+   * Refuse a title before anything is mutated: one that makes no file name
+   * at all ('' or '...' would write `Tasks/.md`), or one that lands on a note
+   * that already exists. Checking after the tree changed left a ghost card
+   * behind that failed every later save of the board.
+   */
+  private assertTitleSavable(project: Project, task: Task, parentId?: string | null): void {
+    if (/\/\.md$/.test(taskFilePath(task.title, ''))) {
+      throw new Error('A case title needs at least one character that can go in a file name.')
+    }
+    const conflict = this.findTaskFileConflict(project, task, parentId)
+    if (conflict) throw conflict
+  }
+
   async insertTask(project: Project, task: Task, parentId: string | null = null): Promise<void> {
+    // Idempotent: a retry after a save that wrote the note but failed later
+    // must not place the same case twice.
+    if (project.taskIndex.has(task.id)) return
+    this.assertTitleSavable(project, task, parentId)
     if (!task.completed && isTerminalStatus(task.status, this.statusesFor(project))) {
       task.completed = today().toString()
     }
@@ -978,7 +1000,17 @@ export class ProjectStore implements TaskSource {
     indexAddSubtree(project, task, parentId)
     this.markDirty(project, [task.id], 'full')
     if (parentId) this.markDirty(project, [parentId], 'full')
-    await this.saveProject(project)
+    try {
+      await this.saveProject(project)
+    } catch (e) {
+      // Never written: take it back out, so no card stands for a note that
+      // does not exist and later saves do not keep retrying it.
+      if (!task.filePath) {
+        deleteTaskFromTree(project.tasks, task.id)
+        indexRemoveSubtree(project, task)
+      }
+      throw e
+    }
   }
 
   /**
@@ -1285,6 +1317,11 @@ export class ProjectStore implements TaskSource {
   ): Promise<void> {
     const task = findTaskById(project, taskId)
     const oldTitle = task?.title
+    // A rename that cannot be saved is refused before the title changes in
+    // memory; afterwards, every later save of the board failed on it.
+    if (task && patch.title !== undefined && patch.title !== oldTitle) {
+      this.assertTitleSavable(project, { ...task, title: patch.title })
+    }
     if (task) {
       this.stampCompletion(project, task, patch)
       this.stampActivity(project, task, patch)
