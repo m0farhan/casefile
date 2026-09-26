@@ -7,7 +7,7 @@ import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { confirmDialog, openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { findTaskById } from '../store/TaskIndex'
-import { renderKeyChip } from '../ui/composites/issueMeta'
+import { renderIssueTypeIcon, renderKeyChip } from '../ui/composites/issueMeta'
 import { renderStatusBadge } from '../ui/StatusBadge'
 import { renderTaskFormFields } from './TaskFormFields'
 import { renderLifecyclePanel } from '../soc/LifecyclePanel'
@@ -373,6 +373,13 @@ export class TaskModal extends Modal {
     crumb.createSpan({ cls: 'pm-te-crumb-name', text: this.project.title })
     const crumbSep = crumb.createSpan({ cls: 'pm-te-crumb-sep' })
     setIcon(crumbSep, 'chevron-right')
+    // The same glyph the board card and the side panel draw for this case,
+    // read from the working copy so a kind picked below shows at once.
+    renderIssueTypeIcon(
+      crumb,
+      config.issueTypes.find((t) => t.id === this.task.issueType),
+      { alert: { tags: this.task.tags, title: this.task.title, categories: this.plugin.settings.alertCategories } }
+    )
     if (this.task.key) {
       renderKeyChip(crumb, this.task.key, { copy: true })
     } else {

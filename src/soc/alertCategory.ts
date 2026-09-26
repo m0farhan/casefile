@@ -61,13 +61,67 @@ export function suggestCategory(
   title: string,
   categories: readonly AlertCategoryConfig[]
 ): CategorySuggestion | undefined {
+  const hit = titleMatch(title, categories)
+  return hit && { id: hit.category.id, label: hit.category.label, matched: hit.matched }
+}
+
+function titleMatch(
+  title: string,
+  categories: readonly AlertCategoryConfig[]
+): { category: AlertCategoryConfig; matched: string } | undefined {
   const hay = title.toLowerCase()
   if (!hay) return undefined
-  for (const cat of categories) {
-    const matched = categoryTerms(cat).find((t) => wordMatch(hay, t))
-    if (matched) return { id: cat.id, label: cat.label, matched }
+  for (const category of categories) {
+    const matched = categoryTerms(category).find((t) => wordMatch(hay, t))
+    if (matched) return { category, matched }
   }
   return undefined
+}
+
+/** The kind a case shows. `derivedFrom` is set only when no tag records it. */
+export interface AlertKind {
+  category: AlertCategoryConfig
+  /** The title word the kind was derived from. Absent = the case's own tag records it. */
+  derivedFrom?: string
+}
+
+/**
+ * The case's kind: the one its tags record, else — only with `derive` — the
+ * one its title names, marked as derived with the word that matched. Nothing
+ * here writes: a derived kind is a reading of the title, and it stays one
+ * until the analyst sets the kind, which writes the tag.
+ */
+export function alertKindOf(
+  tags: readonly string[],
+  title: string,
+  categories: readonly AlertCategoryConfig[],
+  derive: boolean
+): AlertKind | undefined {
+  const recorded = categoryForTags(tags, categories)
+  if (recorded) return { category: recorded }
+  const hit = derive ? titleMatch(title, categories) : undefined
+  return hit && { category: hit.category, derivedFrom: hit.matched }
+}
+
+/**
+ * The tags with the case's kind set to `id`: every tag that names a kind is
+ * dropped and `id` is added, so a case records exactly one kind. '' clears the
+ * kind. A tag already equal to `id` stays where it is.
+ */
+export function setKindTag(tags: readonly string[], categories: readonly AlertCategoryConfig[], id: string): string[] {
+  const same = (t: string): boolean => t.trim().toLowerCase() === id.toLowerCase()
+  const kept = tags.filter((t) => same(t) || !categoryForTags([t], categories))
+  return !id || kept.some(same) ? kept : [...kept, id]
+}
+
+/**
+ * The built-in kinds a saved list lacks, by id, as fresh copies. Only ever
+ * appended on the analyst's click: an existing vault's list is theirs, and a
+ * new default must not silently rewrite it or bring back one they deleted.
+ */
+export function missingBuiltInKinds(categories: readonly AlertCategoryConfig[]): AlertCategoryConfig[] {
+  const have = new Set(categories.map((c) => c.id.trim().toLowerCase()))
+  return DEFAULT_ALERT_CATEGORIES.filter((c) => !have.has(c.id)).map((c) => ({ ...c, match: [...c.match] }))
 }
 
 /**

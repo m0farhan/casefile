@@ -1,13 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type PMPlugin from '../../main'
 import { TaskFileNameConflictError } from '../../store/ProjectStore'
-import { makeTask, type Task } from '../../types'
+import { DEFAULT_ALERT_CATEGORIES, makeTask, type Task } from '../../types'
+import { renderIssueTypeIcon } from '../../ui/composites/issueMeta'
 import { SelectCell, type SelectCellProps } from '../../ui/composites/cells/SelectCell'
 import { TitleCell, type TitleCellProps } from '../../ui/composites/cells/TitleCell'
 import type { TableContext, TableState } from './TableRenderer'
 import { renderTaskRow } from './TableRow'
 
-const h = vi.hoisted(() => ({ notices: [] as string[] }))
+const h = vi.hoisted(() => ({
+  notices: [] as string[],
+  /** The glyph TitleCell drew, as the row's querySelector finds it. */
+  glyph: null as { replaceWith: (el: unknown) => void } | null
+}))
 
 // The stub carries no view or modal classes; the row's import chain only
 // needs them to exist. Notice is captured so what the row says can be read.
@@ -37,7 +42,7 @@ vi.mock('obsidian', async (importOriginal) => {
 const withEl = vi.hoisted(
   () =>
     function (): { el: object } {
-      return { el: {} }
+      return { el: { querySelector: () => h.glyph } }
     }
 )
 vi.mock('../../ui/composites/TaskRow', () => ({ TaskRow: vi.fn<() => { el: object }>(withEl) }))
@@ -53,6 +58,9 @@ vi.mock('../../ui/composites/cells/TimeCell', () => ({ TimeCell: vi.fn<() => voi
 vi.mock('../../ui/composites/cells/CustomFieldCell', () => ({ CustomFieldCell: vi.fn<() => void>() }))
 vi.mock('../../ui/composites/cells/ActionsCell', () => ({ ActionsCell: vi.fn<() => void>() }))
 vi.mock('../../soc/slaTicker', () => ({ renderSlaChip: vi.fn<() => void>() }))
+vi.mock('../../ui/composites/issueMeta', () => ({
+  renderIssueTypeIcon: vi.fn<() => object>(() => ({ kind: 'glyph' }))
+}))
 vi.mock('./TableRenderer', () => ({
   updateSelectCheckboxes: vi.fn<() => void>(),
   getVisibleTaskIds: (state: TableState) => state.visibleRows.map((f) => f.task.id)
@@ -70,7 +78,10 @@ function row(task: Task, visible: Task[], conflict: TaskFileNameConflictError | 
   }
   const ctx = {
     project: { customFields: [] },
-    plugin: { store, settings: { showTagColors: false, slaPolicies: {} } } as unknown as PMPlugin,
+    plugin: {
+      store,
+      settings: { showTagColors: false, slaPolicies: {}, alertCategories: DEFAULT_ALERT_CATEGORIES }
+    } as unknown as PMPlugin,
     statuses: [],
     boardType: 'case',
     state,
@@ -88,6 +99,7 @@ const click = (checked: boolean, shiftKey: boolean): MouseEvent =>
 
 beforeEach(() => {
   h.notices.length = 0
+  h.glyph = null
 })
 
 describe('row checkbox', () => {
@@ -139,5 +151,18 @@ describe('inline title edit', () => {
     const r = row(t, [])
     await r.title.onTitleSave('Renamed')
     expect(r.store.updateTask).toHaveBeenCalledWith(r.ctx.project, t.id, { title: 'Renamed' })
+  })
+})
+
+describe('issue-type glyph', () => {
+  it("is redrawn with the case's tags and title, the same input the board card gives it", () => {
+    const replaceWith = vi.fn<(el: unknown) => void>()
+    h.glyph = { replaceWith }
+    const t = makeTask({ title: '77 - SOC138 - Detected Suspicious Xls File', issueType: 'incident' })
+    row(t, [t])
+    const [, type, opts] = vi.mocked(renderIssueTypeIcon).mock.lastCall ?? []
+    expect(type?.id).toBe('incident')
+    expect(opts?.alert).toEqual({ tags: [], title: t.title, categories: DEFAULT_ALERT_CATEGORIES })
+    expect(replaceWith).toHaveBeenCalledWith({ kind: 'glyph' })
   })
 })

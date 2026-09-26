@@ -346,7 +346,8 @@ export class TaskDetailView extends ItemView {
     const header = contentEl.createDiv('pm-td-header')
     renderIssueTypeIcon(
       header,
-      config.issueTypes.find((t) => t.id === task.issueType)
+      config.issueTypes.find((t) => t.id === task.issueType),
+      { alert: { tags: task.tags, title: task.title, categories: this.plugin.settings.alertCategories } }
     )
     if (task.key) renderKeyChip(header, task.key, { copy: true })
     // Severity shows on any task type of any board; the SLA chip stays

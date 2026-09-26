@@ -326,6 +326,11 @@ export interface PMSettings {
   incidentTemplates: IncidentTemplate[]
   /** Alert-kind catalog for the card glyph. Global-only, like severities/verdicts. */
   alertCategories: AlertCategoryConfig[]
+  /**
+   * An incident with no kind tag shows the kind its title names, drawn as
+   * derived and saying which word matched. Display only: nothing is written.
+   */
+  deriveAlertKind: boolean
   /** Vault path of the generated shift-handover note. */
   handoverPath: string
   /**
@@ -494,6 +499,16 @@ export const DEFAULT_ALERT_CATEGORIES: AlertCategoryConfig[] = [
     color: '#2fbfa4',
     icon: 'network',
     match: ['port scan', 'suspicious traffic', 'lateral movement', 'exfiltration', 'dns tunnel']
+  },
+  // Kept apart from 'network' (scans, tunnels, bulk traffic): one host talking
+  // to one peer. No term here is used by another kind — "C2 connection" stays
+  // Malware through its 'c2' — so list order never decides between them.
+  {
+    id: 'suspicious-connection',
+    label: 'Suspicious connection',
+    color: '#f178b6',
+    icon: 'radio-tower',
+    match: ['outbound connection', 'inbound connection', 'connection attempt', 'blocked connection']
   }
 ]
 
@@ -594,6 +609,7 @@ export const DEFAULT_SETTINGS: PMSettings = {
   slaPolicies: DEFAULT_SLA_POLICIES,
   incidentTemplates: DEFAULT_INCIDENT_TEMPLATES,
   alertCategories: DEFAULT_ALERT_CATEGORIES,
+  deriveAlertKind: true,
   handoverPath: 'SOC/Handover.md',
   linkTasksToBoard: false,
   showIncidentTimeline: false,

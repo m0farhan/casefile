@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_ALERT_CATEGORIES } from '../types'
-import { categoryForTags, normalizeAlertCategories, suggestCategory } from './alertCategory'
+import {
+  alertKindOf,
+  categoryForTags,
+  missingBuiltInKinds,
+  normalizeAlertCategories,
+  setKindTag,
+  suggestCategory
+} from './alertCategory'
 
 const CATS = DEFAULT_ALERT_CATEGORIES
 
@@ -81,5 +88,71 @@ describe('normalizeAlertCategories', () => {
     const out = normalizeAlertCategories(undefined)
     out[0].match.push('mutated')
     expect(CATS[0].match).not.toContain('mutated')
+  })
+})
+
+describe('alertKindOf', () => {
+  const HAND_MADE = '77 - SOC138 - Detected Suspicious Xls File'
+
+  it("derives a hand-made case's kind from its title, saying which word matched", () => {
+    const kind = alertKindOf([], HAND_MADE, CATS, true)
+    expect(kind?.category.id).toBe('suspicious-file')
+    expect(kind?.derivedFrom).toBe('xls')
+  })
+
+  it('a recorded tag wins over the title, and is not marked derived', () => {
+    const kind = alertKindOf(['phishing'], HAND_MADE, CATS, true)
+    expect(kind?.category.id).toBe('phishing')
+    expect(kind?.derivedFrom).toBeUndefined()
+  })
+
+  it('derives nothing with derivation off, or from a title that names no kind', () => {
+    expect(alertKindOf([], HAND_MADE, CATS, false)).toBeUndefined()
+    expect(alertKindOf(['xls'], HAND_MADE, CATS, false)?.category.id).toBe('suspicious-file')
+    expect(alertKindOf([], 'DEMO - Playbook walkthrough', CATS, true)).toBeUndefined()
+  })
+
+  it('reads a suspicious connection without taking a term from another kind', () => {
+    expect(alertKindOf([], 'SOC301 - Suspicious Connection to Rare Host', CATS, true)?.category.id).toBe(
+      'suspicious-connection'
+    )
+    expect(alertKindOf([], 'Blocked Connection Attempt', CATS, true)?.category.id).toBe('suspicious-connection')
+    // 'c2' belongs to Malware, earlier in the list, so this never depends on order.
+    expect(alertKindOf([], 'C2 Connection Detected', CATS, true)?.category.id).toBe('malware')
+    // No term names two built-in kinds.
+    const terms = CATS.flatMap((c) => [...new Set([c.id, c.label, ...c.match].map((t) => t.toLowerCase()))])
+    expect(new Set(terms).size).toBe(terms.length)
+  })
+})
+
+describe('setKindTag', () => {
+  it('records exactly one kind: every tag that names a kind goes, other tags stay', () => {
+    expect(setKindTag(['soc138', 'macro', 'Phishing', 'day-shift'], CATS, 'malware')).toEqual([
+      'soc138',
+      'day-shift',
+      'malware'
+    ])
+  })
+
+  it('keeps a tag that already is the chosen kind where it is', () => {
+    expect(setKindTag(['phishing', 'demo', 'malware'], CATS, 'phishing')).toEqual(['phishing', 'demo'])
+  })
+
+  it("'' clears the kind", () => {
+    expect(setKindTag(['xls', 'demo'], CATS, '')).toEqual(['demo'])
+    expect(setKindTag(['demo'], CATS, '')).toEqual(['demo'])
+  })
+})
+
+describe('missingBuiltInKinds', () => {
+  it('offers only the built-ins a saved list lacks, as copies, and leaves the list alone', () => {
+    const saved = CATS.filter((c) => c.id !== 'suspicious-connection').map((c) => ({ ...c, label: 'edited' }))
+    const before = JSON.stringify(saved)
+    const missing = missingBuiltInKinds(saved)
+    expect(missing.map((c) => c.id)).toEqual(['suspicious-connection'])
+    expect(JSON.stringify(saved)).toBe(before)
+    missing[0].match.push('mutated')
+    expect(CATS.at(-1)?.match).not.toContain('mutated')
+    expect(missingBuiltInKinds(CATS)).toEqual([])
   })
 })
