@@ -136,6 +136,31 @@ describe('readTimestamp', () => {
     expect(readTimestamp('2026-09-10 14:03:11+0100')[0].iso).toBe('2026-09-10T13:03:11.000Z')
     expect(readTimestamp('2026-09-10T14:03:11.123456Z')[0].iso).toBe('2026-09-10T14:03:11.123Z')
     expect(readTimestamp('2026-09-10 14:03:11')[0].assumption).toContain('no zone')
+    // A short offset is applied by the parser, so it is a stated zone.
+    for (const s of ['Sep 21 2026 12:12 GMT+2', 'Sep 21 2026 12:12 UTC+02', 'Sep 21 2026 12:12 +2']) {
+      expect(readTimestamp(s)).toEqual([{ assumption: 'as written (zone stated)', iso: '2026-09-21T10:12:00.000Z' }])
+    }
+    // A year after a hyphen is not an offset.
+    expect(readTimestamp('12:12 21-Sep-2026')[0].assumption).toContain('no zone')
+  })
+
+  it('offers no reading for a day the calendar does not have', () => {
+    // V8 rolled each of these into the next month: a date nobody wrote.
+    for (const s of [
+      '2026-02-30',
+      '2026-02-29',
+      '2026-02-31T10:00Z',
+      '2026-04-31 10:00',
+      'Feb 30, 2026 10:00',
+      'Sep 31 2026 10:00'
+    ]) {
+      expect(readTimestamp(s)).toEqual([])
+    }
+    // A stated zone may rightly move the UTC month; that is still a reading.
+    expect(readTimestamp('Sep 30 2026 23:00 -0500')).toEqual([
+      { assumption: 'as written (zone stated)', iso: '2026-10-01T04:00:00.000Z' }
+    ])
+    expect(readTimestamp('2028-02-29')).toHaveLength(1)
   })
 })
 

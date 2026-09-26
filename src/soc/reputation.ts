@@ -111,6 +111,10 @@ export function buildRequests(type: IocType, value: string, keys: RepKeys, owned
   // <addr@host> or a UNC form it does not reduce names an internal machine or
   // a user and has no reputation to look up, so it fails closed here.
   if (!hasIocShape(real)) return []
+  // The shape is judged on the host a UNC or domain\user value reduces to, but
+  // the request would carry the whole value, share and file name included. A
+  // backslash outside a URL is never a public indicator, so nothing is sent.
+  if (real.includes('\\') && !/^[a-z][a-z0-9+.-]*:\/\//i.test(real)) return []
   const out: RepRequest[] = []
   const vt = keys.virustotal?.trim()
   const ab = keys.abuseipdb?.trim()

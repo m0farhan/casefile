@@ -149,8 +149,13 @@ const ISO_STAMP = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?)(\.\d+)?\s
 const MONTH_NAME =
   /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i
 
-/** A zone the parser reads, at the end of a written date, with an optional '(PDT)' comment after it. */
-const STATED_ZONE = /(?:\dZ|[+-]\d{2}:?\d{2}|\b(?:UTC?|GMT|Z|[ECMP][SD]T))(?:\s*\([^)]*\))?$/i
+/**
+ * A zone the parser reads, at the end of a written date, with an optional
+ * '(PDT)' comment after it. The parser applies a short offset too ('GMT+2',
+ * ' -5'), so one is a stated zone; the sign must follow a space, GMT or UTC,
+ * or the year in '21-Sep-2026' reads as an offset it is not.
+ */
+const STATED_ZONE = /(?:\dZ|(?:\s|GMT|UTC)[+-]\d{1,2}(?::?\d{2})?|\b(?:UTC?|GMT|Z|[ECMP][SD]T))(?:\s*\([^)]*\))?$/i
 
 /**
  * Every reading the value could plausibly be, each labelled with its epoch.
@@ -185,9 +190,12 @@ export function readTimestamp(input: string): TimeReading[] {
   const iso = ISO_STAMP.exec(raw)
   if (iso) {
     const [, date, time, frac, zone] = iso
+    // The written day is checked on its own first: V8 rolls 2026-02-30 over to
+    // 2 March rather than refusing it, a date nobody wrote.
+    if (plausibleIso(Date.parse(`${date}T00:00Z`))?.slice(0, 10) !== date) return out
     const offset = !zone ? '' : /^[+-]/.test(zone) ? `${zone.slice(0, 3)}:${zone.slice(-2)}` : 'Z'
-    // Rebuilt in the one form ECMAScript defines, so every platform reads it
-    // alike: a date alone is UTC midnight, and a time with no zone is local.
+    // Rebuilt in the one form ECMAScript defines, so every platform reads a
+    // real day alike: a date alone is UTC midnight, a time with no zone local.
     const strict = time ? `${date}T${time}${frac ? frac.slice(0, 4).padEnd(4, '0') : ''}${offset}` : date
     add(!time ? 'date only (read as UTC midnight)' : zone ? 'as written (zone stated)' : LOCAL, Date.parse(strict))
     return out
@@ -199,7 +207,14 @@ export function readTimestamp(input: string): TimeReading[] {
   // not in the text.
   // ponytail: the legacy parse is implementation-defined, so iOS may read or
   // refuse a form V8 reads differently; every form it gets states its own year.
-  if (!MONTH_NAME.test(raw) || !/\b\d{4}\b/.test(raw) || !/\b\d{1,2}\b/.test(raw)) return out
+  const month = MONTH_NAME.exec(raw)
+  if (!month || !/\b\d{4}\b/.test(raw) || !/\b\d{1,2}\b/.test(raw)) return out
+  // An impossible day rolls over too ('Sep 31' is 1 October), so the month
+  // read must be the month written. Compared as wall-clock time with the zone
+  // taken off, since a stated zone may rightly move the UTC month.
+  const wall = new Date(Date.parse(raw.replace(STATED_ZONE, (z) => (/^\d/.test(z) ? z[0] : ''))))
+  const named = 'janfebmaraprmayjunjulaugsepoctnovdec'.indexOf(month[0].slice(0, 3).toLowerCase())
+  if (wall.getMonth() * 3 !== named) return out
   add(STATED_ZONE.test(raw) ? 'as written (zone stated)' : LOCAL, Date.parse(raw))
   return out
 }

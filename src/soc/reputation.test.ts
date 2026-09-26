@@ -315,6 +315,19 @@ describe('the asset boundary is the one outbound gate (ST-4)', () => {
     expect(buildRequests('url', 'https://evil.test/a\\b?c=<d>', all, owned).length).toBe(2)
   })
 
+  it('sends no backslash value the shape gate passed on its reduced host', () => {
+    // The gate read files.example.net and contoso.com, then the requests went
+    // out carrying the share, the file name and the user.
+    const all = { ...KEYS, abusech: 'ac-key' }
+    for (const v of [
+      '\\\\files.example.net\\Finance\\Q3 payroll.xlsx',
+      'contoso.com\\jürgen',
+      'dc01.corp.example\\c$\\résumé.exe'
+    ]) {
+      expect(buildRequests('domain', v, all, [])).toEqual([])
+    }
+  })
+
   it('keeps the own IDN domain in, however it is spelled', () => {
     expect(buildRequests('url', 'https://mail.bücher.example/login', KEYS, ['bücher.example'])).toEqual([])
     expect(buildRequests('domain', 'mail\u3002corp.example', KEYS, ['corp.example'])).toEqual([])

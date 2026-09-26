@@ -315,8 +315,11 @@ function domainOf(address: string): string {
  * sender gave first; Exim and qmail put the address or reverse name first and
  * the sender's HELO in the comment — a label right for one is false for the
  * other. The comment may hold one nested comment, Sendmail's "(may be forged)".
+ * ponytail: both loops stop at 4096 characters. V8 keeps a backtrack entry
+ * per character, and a crafted multi-megabyte comment overflowed its stack;
+ * one that long is dropped and the name kept.
  */
-const FROM_CLAUSE = /\bfrom\s+([^\s;()]+)(\s*\((?:[^()\\]|\\.|\((?:[^()\\]|\\.)*\))*\))?/i
+const FROM_CLAUSE = /\bfrom\s+([^\s;()]+)(\s*\((?:[^()\\]|\\.|\((?:[^()\\]|\\.){0,4096}\)){0,4096}\))?/i
 
 function parseHop(value: string, n: number): Hop {
   // The clause words are read with comments removed. Comments are free text:

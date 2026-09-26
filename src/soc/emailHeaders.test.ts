@@ -76,6 +76,14 @@ describe('addressOf', () => {
 describe('analyseHeaders', () => {
   const a = analyseHeaders(SPOOF)
 
+  it('survives a Received comment of many megabytes', async () => {
+    // A crafted .eml has no header-size limit; the from-clause regex overflowed
+    // V8's stack past about 8.5 MB and no report was produced.
+    const raw = 'Received: from x (' + 'a'.repeat(2e7) + ')\n\n'
+    expect(analyseHeaders(raw).hops[0].from).toBe('x')
+    await expect(analysePhishing(raw, [], [])).resolves.toBeDefined()
+  })
+
   it('reports authentication results as stated, never as a verdict', () => {
     expect(a.auth).toContainEqual({
       mechanism: 'spf',
