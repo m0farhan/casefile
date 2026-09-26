@@ -288,6 +288,39 @@ describe('images', () => {
       pdf('%PDF-1.5\n<< /Filter [/DCTDecode /DCTDecode] >>\nstream\n', JPEG, '\nendstream', TRAILER)
     )
     expect(facts?.images).toHaveLength(1)
+    // The second name reaches the same start, which is the image itself and
+    // not a stream beginning inside it.
+    expect(facts?.notes.join(' ')).not.toContain('begin inside the data')
+  })
+
+  it('takes bytes into one picture only, so 24 nested dictionaries are not 24 pictures', () => {
+    // Each dictionary is written inside the previous stream's data, and each
+    // declares a /Length that lands on the one `endstream` they all share, so
+    // every one confirmed. All 24 came back, overlapping views over the same
+    // bytes: 24 times the file, which a mail of copies multiplied again.
+    const soi = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0])
+    let data = pdf(soi, 'x'.repeat(1000), Uint8Array.from([0xff, 0xd9]))
+    for (let k = 0; k < 23; k++) {
+      data = pdf(soi, `<< /Filter /DCTDecode /Length ${data.length} >>\nstream\n`, data)
+    }
+    const file = pdf(
+      '%PDF-1.5\n1 0 obj\n',
+      `<< /Filter /DCTDecode /Length ${data.length} >>\nstream\n`,
+      data,
+      '\nendstream\nendobj\n2 0 obj\n<< /Filter /DCTDecode /Length 15 >>\nstream\n',
+      JPEG,
+      '\nendstream\nendobj',
+      TRAILER
+    )
+    const facts = readPdf(file)
+    // The outer image whole, and the ordinary one after the shared endstream
+    // still taken: the skip is for streams inside a picture, not after one.
+    expect(facts?.images.map((i) => [...i.bytes])).toEqual([[...data], [...JPEG]])
+    const notes = facts?.notes.join(' ') ?? ''
+    expect(notes).toContain('23 /DCTDecode or /JPXDecode entr(ies) begin inside the data of an image already extracted')
+    expect(notes).toContain('unread as pictures here, not absent')
+    const total = facts?.images.reduce((n, i) => n + i.bytes.length, 0) ?? 0
+    expect(total).toBeLessThanOrEqual(file.length)
   })
 
   it('says so when a stream has no endstream, instead of returning half a file', () => {
@@ -488,6 +521,25 @@ describe('notes that would otherwise be wrong', () => {
     const facts = readPdf(pdf('%PDF-1.5\n<< /Filter /DCTDecode >>\nstream\n', JPEG, '\nendstream', TRAILER))
     expect(facts?.images).toHaveLength(1)
     expect(facts?.notes.join(' ')).toContain("cut at the next 'endstream' keyword")
+  })
+
+  it('does not say an image declared no direct /Length when it declared one this scan missed or found wrong', () => {
+    // Both files DO declare a direct /Length. The first hides it behind the
+    // inner `>>` of /DecodeParms, where the dictionary window is cut; the second
+    // declares 12 for a 15-byte stream, so it does not land on `endstream`. Both
+    // are cut by search, and the note used to say each "declared no direct
+    // /Length" — a false sentence about each file, on the card and in the report.
+    for (const dict of [
+      '<< /Length 15 /DecodeParms << /ColorTransform 1 >> /Filter /DCTDecode >>',
+      '<< /Length 12 /Filter /DCTDecode >>'
+    ]) {
+      const facts = readPdf(pdf(`%PDF-1.5\n${dict}\nstream\n`, JPEG, '\nendstream\nendobj', TRAILER))
+      expect([...(facts?.images[0]?.bytes ?? [])]).toEqual([...JPEG])
+      const notes = facts?.notes.join(' ') ?? ''
+      expect(notes).not.toContain('declared no direct /Length')
+      expect(notes).toContain("cut at the next 'endstream' keyword")
+      expect(notes).toContain('had no direct /Length this scan could read')
+    }
   })
 
   it('does not say an image cut at its declared /Length could be a prefix', () => {
@@ -781,11 +833,15 @@ describe('files built to make the scan run away', () => {
     // The absolute number belongs to the machine; the ratio belongs to the
     // code. A hostile 16MB file may cost more than a blank one — it must not
     // cost a different SHAPE, which is what 766 seconds against 0.3 was.
+    // The benign baseline is now the scan alone: the bytes-to-text conversion
+    // both files paid used to be most of it, and once that got about seven
+    // times cheaper the hostile file's real per-marker cost showed through at
+    // roughly 4x. Ten still catches a change of shape by orders of magnitude.
     const benign = timed(pdf('%PDF-1.4\n', 'x'.repeat(16 * MB), '\nendobj\n%%EOF'))
     const hostile = timed(pdf(`%PDF-1.4\n/URI (${REAL_LINK})\n`, '/URI<'.repeat(3_300_000), '\nendobj\n%%EOF'))
     expect(hostile.facts?.uris).toEqual([REAL_LINK])
     expect(hostile.ms).toBeLessThan(2000)
-    expect(hostile.ms).toBeLessThan(benign.ms * 4)
+    expect(hostile.ms).toBeLessThan(benign.ms * 10)
   })
 
   it('says the strings it never got to went unread, not that they were never closed', () => {
