@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { latin1Bytes, parseEml } from './eml'
+import { latin1Bytes, parseEml, withoutLeadingBlankLines } from './eml'
 
 const b64 = (s: string): string => btoa(s)
 
@@ -178,6 +178,28 @@ describe('parser evasions that used to hide content from the analyst', () => {
       'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhttp://a.test' +
       '\n--B\nContent-Type: text/plain\n\n/evil\n--B--\n'
     expect(parseEml(mail).text).not.toContain('http://a.test/evil')
+  })
+})
+
+describe('a paste that opens on a blank line', () => {
+  it('still reads the headers and the attachment of the message after it', () => {
+    for (const prefix of ['\n', '\r\n', '\n\n', '\r']) {
+      const eml = parseEml(prefix + MAIL)
+      expect(eml.headers.find((h) => h.name === 'From')?.value).toContain('billing@paypa1.test')
+      expect(eml.attachments.map((a) => a.filename)).toEqual(['invoice.docm'])
+      expect(eml.text).not.toContain('Content-Type')
+    }
+  })
+
+  it('keeps a pasted body that is not headers as the body, link and all', () => {
+    const eml = parseEml('\nClick http://evil.test/a now\n\nThanks')
+    expect(eml.text).toContain('http://evil.test/a')
+  })
+
+  it('does not overflow on millions of blank lines', () => {
+    const raw = '\n'.repeat(5_000_000) + 'From: a@b.test\n\nbody'
+    expect(() => parseEml(raw)).not.toThrow()
+    expect(withoutLeadingBlankLines(raw)).toBe('From: a@b.test\n\nbody')
   })
 })
 

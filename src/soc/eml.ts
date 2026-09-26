@@ -236,9 +236,28 @@ function decodeText(bytes: Uint8Array, charset: string, exact: boolean, raw: str
   }
 }
 
+/**
+ * Blank lines ahead of the first header are dropped, as parseHeaderBlock does,
+ * but only when a header follows: a pasted body that opens on a blank line is
+ * still body. Without it, one stray Enter before a paste made the whole
+ * message a headerless body — its attachments gone and "None" said of them —
+ * while the header panel read the same paste normally.
+ *
+ * A search, not a repeated-group regex, which overflows V8's backtrack stack on
+ * a few million blank lines.
+ */
+export function withoutLeadingBlankLines(raw: string): string {
+  const first = raw.search(/\S/)
+  if (first < 0) return raw
+  const start = Math.max(raw.lastIndexOf('\n', first), raw.lastIndexOf('\r', first)) + 1
+  return /^[!-9;-~]+:/.test(raw.slice(start, start + 1000)) ? raw.slice(start) : raw
+}
+
 /** Take a raw .eml apart. Pure, offline, and it never renders anything. */
 export function parseEml(raw: string): Eml {
-  const root = splitHeadersAndBody(raw)
+  // The root only: a MIME part that opens on a blank line genuinely has no
+  // headers, and splitHeadersAndBody keeps that rule for parts.
+  const root = splitHeadersAndBody(withoutLeadingBlankLines(raw))
   const out: Eml = { headers: root.headers, text: '', html: '', attachments: [], notes: [] }
   walk(root, out, 0)
   if (!out.text && !out.html && !out.attachments.length) {
