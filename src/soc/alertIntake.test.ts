@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseAlertPaste } from './alertIntake'
+import { assetRule } from './ioc'
 import type { SeverityConfig } from '../types'
 
 const SEVERITIES: SeverityConfig[] = [
@@ -67,6 +68,38 @@ describe('parseAlertPaste', () => {
     expect(parseAlertPaste('Alert Time : 2024-05-13T06:22:00Z', CFG).occurredAt).toBe('')
   })
 
+  it('refuses a date with no time of day, rather than inventing a midnight', () => {
+    // ISO date-only parses as UTC midnight and 'May 13, 2024' as local midnight:
+    // a time nobody wrote, a day early west of UTC, and a sev1 born breached.
+    expect(parseAlertPaste('Detected : 2024-05-13', CFG).detectedAt).toBe('')
+    expect(parseAlertPaste('Detected : May 13, 2024', CFG).detectedAt).toBe('')
+    expect(parseAlertPaste('Event Time : 2024-05-13', CFG).occurredAt).toBe('')
+    // A ':' is not a date: this used to become 1 January.
+    expect(parseAlertPaste('Detected : 2024 09:22', CFG).detectedAt).toBe('')
+  })
+
+  it('says when a stamp named no zone and was read as local time', () => {
+    const r = parseAlertPaste('Alert Time : 2024-05-13 09:22', CFG)
+    expect(r.detectedAt).toBe(new Date(2024, 4, 13, 9, 22).toISOString())
+    expect(r.zoneAssumed.detectedAt).toBe(true)
+    expect(parseAlertPaste('Event Time : May, 13, 2024, 10:38 AM', CFG).zoneAssumed.occurredAt).toBe(true)
+  })
+
+  it.each([
+    '2024-05-13T09:22:00Z',
+    '2024-05-13T09:22:00+03:00',
+    '2024-05-13 09:22 +03',
+    'Mon, 13 May 2024 06:22:00 GMT',
+    '2024-05-13 09:22 UTC',
+    '13 May 2024 09:22 +0300 (EEST)',
+    '13 May 2024 09:22 GMT+0300',
+    'May 13, 2024 09:22 AM EST'
+  ])('takes the zone written in %s', (value) => {
+    const r = parseAlertPaste(`Detected : ${value}`, CFG)
+    expect(r.detectedAt).not.toBe('')
+    expect(r.zoneAssumed.detectedAt).toBe(false)
+  })
+
   it('refuses a count as a timestamp, so a bare number cannot anchor the SLA', () => {
     // Date.parse('3') is 2001-03-01 and Date.parse('257') is year 257 — V8's
     // legacy fallback. An EDR's `Detected : 3` must not fabricate a stamp.
@@ -74,6 +107,28 @@ describe('parseAlertPaste', () => {
     expect(parseAlertPaste('Detected : 257', CFG).detectedAt).toBe('')
     expect(parseAlertPaste('Time : 2024', CFG).occurredAt).toBe('')
     expect(parseAlertPaste('Detected : 2024-05-13T06:22:00Z', CFG).detectedAt).toBe('2024-05-13T06:22:00.000Z')
+  })
+
+  it('skips a key with nothing after its colon, trailing space or not', () => {
+    // `Rule : ` used to record an empty Rule, so the case got an empty title.
+    const r = parseAlertPaste('Rule : \nSeverity : High', CFG)
+    expect(r.title).toBe('Rule :')
+    expect(r.severityId).toBe('sev2')
+    expect(parseAlertPaste('Rule :\nSeverity : High', CFG).title).toBe('Rule :')
+  })
+
+  it('reads a paste with a long run of whitespace at once, not in seconds', () => {
+    // The key/value regex this replaced took 4 s on 3,000 spaces, on every keystroke.
+    const paste = ['Rule : SOC138', 'Severity : High', ' '.repeat(3000), '\u00a0'.repeat(3000), 'Time : x'].join('\n')
+    const start = performance.now()
+    const r = parseAlertPaste(paste, CFG)
+    expect(performance.now() - start).toBeLessThan(100)
+    expect(r.title).toBe('SOC138')
+    expect(r.severityId).toBe('sev2')
+  })
+
+  it('splits a line at its first colon only', () => {
+    expect(parseAlertPaste('Rule : Detected at 12:00:01 on WS-042', CFG).title).toBe('Detected at 12:00:01 on WS-042')
   })
 
   it('falls back to the first non-empty line when there is no Rule line', () => {
@@ -85,6 +140,14 @@ describe('parseAlertPaste', () => {
     const result = parseAlertPaste('A'.repeat(80), CFG)
     expect(result.title).toBe('A'.repeat(60))
     expect(parseAlertPaste(`Rule : ${'B'.repeat(80)}`, CFG).title).toBe('B'.repeat(60))
+  })
+
+  it('never cuts an emoji in half at the cap', () => {
+    // A lone surrogate is stored on disk as U+FFFD, so the note is never found again.
+    expect(parseAlertPaste(`Rule : ${'y'.repeat(59)}\u{1F512} account locked`, CFG).title).toBe('y'.repeat(59))
+    expect(parseAlertPaste(`${'z'.repeat(59)}\u{1F512} account locked`, CFG).title).toBe('z'.repeat(59))
+    // An emoji that fits whole is kept whole.
+    expect(parseAlertPaste(`Rule : ${'y'.repeat(58)}\u{1F512} x`, CFG).title).toBe(`${'y'.repeat(58)}\u{1F512}`)
   })
 
   it('extracts defanged and real indicators from the whole paste', () => {
@@ -101,6 +164,7 @@ describe('parseAlertPaste', () => {
       severityId: '',
       occurredAt: '',
       detectedAt: '',
+      zoneAssumed: { occurredAt: false, detectedAt: false },
       description: '',
       iocs: []
     })
@@ -138,6 +202,38 @@ describe('parseAlertPaste, markdown-formatted alerts', () => {
   it('leaves underscores alone, because they live inside real values', () => {
     expect(parseAlertPaste('**Rule :** host_01 beaconing', CFG).title).toBe('host_01 beaconing')
   })
+
+  // The SOC138 alert from a user's case, whose Indicators section was empty.
+  const SOC138 = [
+    'Event Time : 2021-03-13T20:20:58+03:00',
+    'Rule : SOC138 - Detected Suspicious Xls File',
+    'Source Address : 172.16.17.56',
+    'File Name : ORDER SHEET & SPEC.xlsm',
+    'File Hash : 7ccf88c0bbe3b29bf19d877c4596a8d4'
+  ]
+
+  it('records the MD5 file hash of the SOC138 alert, pasted plain or as a list', () => {
+    for (const paste of [SOC138, SOC138.map((l) => `- ${l}`)]) {
+      const iocs = parseAlertPaste(paste.join('\n'), CFG).iocs
+      expect(iocs.find((i) => i.value === '7ccf88c0bbe3b29bf19d877c4596a8d4')?.type).toBe('hash')
+      // The private source address is recorded too, as one of your own assets,
+      // so it is never searched or sent anywhere.
+      expect(iocs.map((i) => i.value)).toContain('172.16.17.56')
+      expect(assetRule('172.16.17.56', [])?.builtIn).toBe(true)
+    }
+  })
+
+  it('reads the header of an alert pasted as a list', () => {
+    // A `- ` bullet used to stay on the key, so the Rule and the Event Time
+    // were missed and the title became the first line, bullet and all.
+    const r = parseAlertPaste(SOC138.map((l) => `- ${l}`).join('\n'), CFG)
+    expect(r.title).toBe('SOC138 - Detected Suspicious Xls File')
+    expect(r.occurredAt).toBe('2021-03-13T17:20:58.000Z')
+    expect(parseAlertPaste('+ **Rule :** `SOC138`\n• Severity : High', CFG)).toMatchObject({
+      title: 'SOC138',
+      severityId: 'sev2'
+    })
+  })
 })
 
 describe('a pasted alert that quotes a message', () => {
@@ -154,6 +250,32 @@ describe('a pasted alert that quotes a message', () => {
     const paste = '<b>x</b>\n```\ncode\n```'
     const out = parseAlertPaste(paste, CFG).description
     expect(out.startsWith('````')).toBe(true)
+  })
+
+  it.each([
+    ['a markdown image', 'Rule : Reported phish\nBody : ![](https://evil.example/beacon.png?id=42)'],
+    ['a reference-style image', 'Rule : Reported phish\n![logo][r]\n\n[r]: https://evil.example/r.png'],
+    ['an embed', 'Rule : Reported phish\nBody : ![[Secret note]]'],
+    ['a dataviewjs block', 'Rule : Reported phish\n```dataviewjs\ndv.el("b", "x")\n```'],
+    ['a tilde fence', 'Rule : Reported phish\n~~~\ncode\n~~~'],
+    ['an inline Dataview query', 'Rule : Reported phish\nBody : `$= dv.el("b", "x")`']
+  ])('fences a paste holding %s', (_name, paste) => {
+    const out = parseAlertPaste(paste, CFG).description
+    const fence = out.slice(0, out.indexOf('\n'))
+    expect(fence).toMatch(/^`{3,}$/)
+    expect(out).toBe(`${fence}\n${paste}\n${fence}`)
+  })
+
+  it('fences a code block inside the paste with a longer fence it cannot close', () => {
+    const out = parseAlertPaste('Rule : x\n```dataviewjs\ncode\n```', CFG).description
+    expect(out.startsWith('````\n')).toBe(true)
+    expect(out.endsWith('\n````')).toBe(true)
+  })
+
+  it('leaves a dollar sign that is not a Dataview query as prose', () => {
+    expect(parseAlertPaste('Rule : Invoice fraud\nCost : $=5', CFG).description).toBe(
+      'Rule : Invoice fraud\nCost : $=5'
+    )
   })
 
   it('leaves an ordinary alert as prose, so its emphasis still renders', () => {
