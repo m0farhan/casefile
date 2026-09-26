@@ -204,6 +204,18 @@ async function showing(view: PhishAnalysisView, subject: string): Promise<void> 
   )
 }
 
+/** The panel's sections as heading → the texts under it. */
+function sections(root: FakeEl): Map<string, string[]> {
+  const panel = root.querySelector('.pm-headers-panel') as FakeEl
+  const out = new Map<string, string[]>()
+  let heading = ''
+  for (const el of panel.children) {
+    if (el.tagName === 'h4') heading = el.textContent
+    else out.set(heading, el.texts())
+  }
+  return out
+}
+
 const mail = (subject: string, body: string, extra = ''): string =>
   `From: Sender <sender@example.test>
 To: analyst@corp.test
@@ -320,6 +332,93 @@ describe('PhishAnalysisView: the old report cannot be acted on once the message 
     pick({ id: 'board' } as never)
     await vi.waitFor(() => expect(insertTask).toHaveBeenCalledTimes(1))
     expect(insertTask.mock.calls[0][1].title).toBe('Invoice AAA')
+  })
+})
+
+describe('PhishAnalysisView: sender text is drawn escaped', () => {
+  // U+202E in the From domain (as an encoded word), the Subject, a Received
+  // host and an undecodable part's name; a soft hyphen in a link host.
+  const RLO_MAIL = `Received: from mx‮liame.evil.test (mx.evil.test [192.0.2.1]) by b‮evil.test with ESMTP; Mon, 21 Sep 2026 09:15:00 +0000
+Return-Path: <bounce@evil.test>
+From: PayPal <x@=?utf-8?b?4oCubW9jLmxhcHlhcA==?=>
+To: analyst@corp.test
+Subject: =?utf-8?b?4oCuSGVsbG8=?=
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B"
+
+--B
+Content-Type: text/html
+
+<a href="https://micro­soft-login.test/verify">sign in</a>
+--B
+Content-Type: application/octet-stream; name="=?utf-8?Q?Invoice=E2=80=AEfdp.exe?="
+Content-Transfer-Encoding: base64
+
+!!!!
+--B--
+`
+  const CF = /\p{Cf}/u
+
+  it('the Message tab escapes identities, hops and observations', async () => {
+    const { view, root } = await openView()
+    view.analyse(RLO_MAIL, 'rlo.eml (1 bytes)')
+    await showing(view, '‮Hello')
+    const drawn = (root.querySelector('.pm-headers-panel') as FakeEl).texts()
+    expect(drawn.filter((t) => CF.test(t))).toEqual([])
+    expect(drawn.some((t) => t.includes('<U+202E>moc.lapyap'))).toBe(true)
+    expect(drawn.some((t) => t.startsWith('from mx<U+202E>liame'))).toBe(true)
+  })
+
+  it('the Indicators tab escapes its rows and its notes', async () => {
+    const { view, root } = await openView()
+    view.analyse(RLO_MAIL, 'rlo.eml (1 bytes)')
+    await showing(view, '‮Hello')
+    button(root, 'Indicators').fire('click')
+    const drawn = (root.querySelector('.pm-headers-panel') as FakeEl).texts()
+    expect(drawn.filter((t) => CF.test(t))).toEqual([])
+    expect(drawn.some((t) => t.includes('Invoice<U+202E>fdp.exe'))).toBe(true)
+  })
+
+  it('a case titled from the subject carries it escaped', async () => {
+    const { view, root } = await openView()
+    view.analyse(RLO_MAIL, 'rlo.eml (1 bytes)')
+    await showing(view, '‮Hello')
+    button(root, 'Create case').fire('click')
+    await vi.waitFor(() => expect(openProjectPicker).toHaveBeenCalled())
+    vi.mocked(openProjectPicker).mock.calls[0][2]({ id: 'board' } as never)
+    await vi.waitFor(() => expect(insertTask).toHaveBeenCalled())
+    expect(insertTask.mock.calls[0][1].title).toBe('<U+202E>Hello')
+  })
+})
+
+describe('PhishAnalysisView: Indicators tab headings', () => {
+  it('puts parser notes under "Parser notes", not under "Not in this paste"', async () => {
+    const { view, root } = await openView()
+    const text = `From: a@example.test
+Subject: Notes
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B"
+
+--B
+Content-Type: text/plain
+
+hello
+--B
+Content-Type: application/octet-stream; name="payload.bin"
+Content-Transfer-Encoding: base64
+
+!!!!
+--B--
+`
+    view.analyse(text, 'n.eml (1 bytes)')
+    await showing(view, 'Notes')
+    button(root, 'Indicators').fire('click')
+    const s = sections(root)
+    const undecodable = (t: string): boolean => t.includes('payload.bin') && t.includes('could not be decoded')
+    expect(s.get('Parser notes')?.some(undecodable)).toBe(true)
+    expect(s.get('Not in this paste')?.some(undecodable) ?? false).toBe(false)
+    // The header notes keep their own heading: this mail has no Return-Path.
+    expect(s.get('Not in this paste')?.length).toBeGreaterThan(0)
   })
 })
 

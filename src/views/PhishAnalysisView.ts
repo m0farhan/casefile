@@ -264,7 +264,8 @@ export class PhishAnalysisView extends ItemView {
       new Notice('No boards yet. Create a board first.')
       return
     }
-    const title = subjectOf(report) || 'Reported phishing email'
+    // The sender wrote the subject, so it is escaped as the tab title is.
+    const title = visibleName(subjectOf(report)) || 'Reported phishing email'
     // Built from the PARSED message by the same code as the Indicators tab,
     // so a lure a structure reader found inside a PDF is on the case too.
     const iocs = caseIocs(report, raw)
@@ -345,6 +346,11 @@ export class PhishAnalysisView extends ItemView {
       return panel.createDiv('pm-headers-body')
     }
     const a = report.headers
+    // Everything on this tab quotes the sender's headers, so it is shown
+    // through visibleName, as attachment names are: a right-to-left override in
+    // the From domain reversed the tool's own sentence around it, and made
+    // "moc.lapyap" read as paypal.com. The parsed values stay raw; only what
+    // is drawn is escaped.
     if (this.tab === 'message') {
       const ids = section('Identities')
       for (const id of a.identities) {
@@ -353,7 +359,7 @@ export class PhishAnalysisView extends ItemView {
         // "not recorded" is an absence, and it should not read like a value.
         line.createSpan({
           cls: id.value === 'not recorded' ? 'pm-headers-value pm-headers-absent' : 'pm-headers-value',
-          text: id.value
+          text: visibleName(id.value)
         })
       }
 
@@ -365,8 +371,8 @@ export class PhishAnalysisView extends ItemView {
           // The word the header states, coloured as what it states. A faithful
           // rendering of a stated result, not a judgement on the mail.
           line.createSpan({ cls: `pm-headers-result ${resultClass(r.result)}`, text: r.result })
-          line.createSpan({ cls: 'pm-headers-detail', text: r.detail })
-          line.createSpan({ cls: 'pm-headers-by', text: `asserted by ${r.assertedBy}` })
+          line.createSpan({ cls: 'pm-headers-detail', text: visibleName(r.detail) })
+          line.createSpan({ cls: 'pm-headers-by', text: `asserted by ${visibleName(r.assertedBy)}` })
         }
       } else {
         auth.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
@@ -377,7 +383,10 @@ export class PhishAnalysisView extends ItemView {
         for (const hop of a.hops) {
           const line = path.createDiv('pm-headers-row')
           line.createSpan({ cls: 'pm-headers-label pm-headers-hop', text: String(hop.n) })
-          line.createSpan({ cls: 'pm-headers-value', text: `from ${hop.from} by ${hop.by} with ${hop.via}` })
+          line.createSpan({
+            cls: 'pm-headers-value',
+            text: visibleName(`from ${hop.from} by ${hop.by} with ${hop.via}`)
+          })
           if (!hop.at) {
             line.createSpan({ cls: 'pm-headers-absent', text: 'no time recorded' })
           } else if (hop.delaySec !== null && hop.delaySec < 0) {
@@ -400,7 +409,7 @@ export class PhishAnalysisView extends ItemView {
       if (a.observations.length) {
         for (const o of a.observations) {
           // Coloured from the comparison's own outcome, not from its wording.
-          obs.createDiv({ cls: `pm-obs ${o.aligned ? 'pm-obs--match' : 'pm-obs--differ'}`, text: o.text })
+          obs.createDiv({ cls: `pm-obs ${o.aligned ? 'pm-obs--match' : 'pm-obs--differ'}`, text: visibleName(o.text) })
         }
       } else {
         obs.createDiv({ cls: 'pm-headers-empty', text: 'Nothing to compare.' })
@@ -408,7 +417,7 @@ export class PhishAnalysisView extends ItemView {
 
       if (report.senderFacts.length) {
         const sender = section('Sender domain')
-        for (const fact of report.senderFacts) sender.createDiv({ cls: 'pm-headers-flag', text: fact })
+        for (const fact of report.senderFacts) sender.createDiv({ cls: 'pm-headers-flag', text: visibleName(fact) })
       }
       return
     }
@@ -482,17 +491,25 @@ export class PhishAnalysisView extends ItemView {
       return
     }
 
+    // Escaped as the Links tab escapes the same values: a soft hyphen in a host
+    // is invisible, and a block list copied off this pane then never matches.
     const iocs = section('Indicators')
     if (report.indicators.length) {
-      for (const i of report.indicators) iocs.createDiv({ cls: 'pm-headers-ioc', text: i })
+      for (const i of report.indicators) iocs.createDiv({ cls: 'pm-headers-ioc', text: visibleName(i) })
     } else {
       iocs.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
     }
-    const notes = [...a.notes, ...report.notes]
-    if (notes.length) {
-      const el = section('Not in this paste')
-      for (const n of notes) el.createDiv({ cls: 'pm-headers-note', text: n })
+    // Two headings, as the copied report has. The header notes say what the
+    // paste lacks; the parser notes describe parts that ARE in it — a part
+    // that would not decode, a charset that may be mangled — and under "Not in
+    // this paste" they said the opposite. Parser notes can quote a part's name.
+    const notes = (title: string, list: string[]): void => {
+      if (!list.length) return
+      const el = section(title)
+      for (const n of list) el.createDiv({ cls: 'pm-headers-note', text: visibleName(n) })
     }
+    notes('Not in this paste', a.notes)
+    notes('Parser notes', report.notes)
   }
 
   /**
