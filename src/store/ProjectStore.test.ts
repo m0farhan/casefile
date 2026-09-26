@@ -1983,3 +1983,46 @@ describe('ProjectStore board description', () => {
     expect(countLines(await vault.cachedRead(file), 'Board for phishing cases.')).toBe(1)
   })
 })
+
+describe('ProjectStore board note frontmatter the analyst added', () => {
+  it('keeps tags, aliases and cssclasses through insertTask and updateTask', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Tagged', 'Projects')
+    const file = vault.getAbstractFileByPath(project.filePath) as TFile
+    const mine = { tags: ['soc', 'q3'], aliases: ['SOC board'], cssclasses: ['wide'] }
+    await vault.modify(
+      file,
+      (await vault.cachedRead(file)).replace(
+        '---\n',
+        `---\n${Object.entries(mine)
+          .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+          .join('\n')}\n`
+      )
+    )
+    const task = await addNamed(store, project, 'Alpha')
+    const read = async () => expectDefined(parseFrontmatter(await vault.cachedRead(file)).frontmatter)
+    expect(await read()).toMatchObject(mine)
+
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const reloaded = expectDefined(await store2.loadProject(file))
+    await store2.updateTask(reloaded, task.id, { status: 'in-progress' })
+    expect(await read()).toMatchObject(mine)
+  })
+
+  it('a cleared keyPrefix and reports reset stay cleared', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Cleared', 'Projects')
+    project.keyPrefix = 'SOC'
+    project.reportsSince = '2026-01-01T00:00:00.000Z'
+    await store.saveProject(project)
+    project.keyPrefix = ''
+    delete project.reportsSince
+    await store.saveProject(project)
+    const fm = expectDefined(
+      parseFrontmatter(await vault.cachedRead(vault.getAbstractFileByPath(project.filePath) as TFile)).frontmatter
+    )
+    expect(fm).not.toHaveProperty('keyPrefix')
+    expect(fm).not.toHaveProperty('nextKeySeq')
+    expect(fm).not.toHaveProperty('reportsSince')
+  })
+})

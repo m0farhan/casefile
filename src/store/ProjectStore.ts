@@ -638,7 +638,7 @@ export class ProjectStore implements TaskSource {
           // old description from surviving as phantom hand content.
           const prevDesc = typeof frontmatter?.description === 'string' ? frontmatter.description : project.description
           const extraBody = stripGeneratedProjectContent(body, prevDesc)
-          return serializeProject(project, this.statusesFor(project), extraBody)
+          return serializeProject(project, this.statusesFor(project), extraBody, frontmatter)
         })
         this.hydratedBodies.add(project)
       } else {

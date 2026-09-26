@@ -45,7 +45,42 @@ function linkAlias(title: string): string {
   return title.replace(/[[\]]/g, ' ').replace(/[\r\n]+/g, ' ')
 }
 
-export function serializeProject(project: Project, statuses: StatusConfig[] = [], extraBody = ''): string {
+/**
+ * Frontmatter keys the plugin owns on a board note, including the ones written
+ * only sometimes (a cleared keyPrefix or reports reset must stay cleared, not
+ * come back from disk) and the legacy embedded `tasks` (a migrated board must
+ * not carry its old task list forward). Every other key is the analyst's.
+ */
+export const KNOWN_PROJECT_FRONTMATTER_KEYS = new Set([
+  FRONTMATTER_KEY,
+  'id',
+  'title',
+  'description',
+  'color',
+  'icon',
+  'taskIds',
+  'customFields',
+  'teamMembers',
+  'savedViews',
+  'createdAt',
+  'updatedAt',
+  'keyPrefix',
+  'nextKeySeq',
+  'reportsSince',
+  'config',
+  'tasks'
+])
+
+export function serializeProject(
+  project: Project,
+  statuses: StatusConfig[] = [],
+  extraBody = '',
+  /** The note's frontmatter as it is on disk right now. Keys the plugin does
+   *  not own (tags, aliases, cssclasses, …) are carried over after the owned
+   *  ones. Read at write time, so a key added while the board is open
+   *  survives and one the analyst deleted stays deleted. */
+  diskFrontmatter: Record<string, unknown> | null = null
+): string {
   const seen = new Set<string>()
   const tasks: Task[] = []
   for (const t of project.tasks) {
@@ -78,6 +113,9 @@ export function serializeProject(project: Project, statuses: StatusConfig[] = []
   if (project.reportsSince) fm.reportsSince = project.reportsSince
   const config = serializeProjectConfig(project.config)
   if (config) fm.config = config
+  for (const [k, v] of Object.entries(diskFrontmatter ?? {})) {
+    if (!KNOWN_PROJECT_FRONTMATTER_KEYS.has(k) && v !== undefined) fm[k] = v
+  }
 
   const yamlLines: string[] = ['---']
   appendYaml(yamlLines, fm, 0)
