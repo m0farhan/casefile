@@ -5,7 +5,8 @@ import {
   decodeEncodedWords,
   formatDelay,
   formatHeaderReport,
-  parseHeaderBlock
+  parseHeaderBlock,
+  quotedPrintableBytes
 } from './emailHeaders'
 import { analysePhishing } from './phish'
 
@@ -471,5 +472,51 @@ describe('who asserted an authentication result', () => {
           '192.0.2.1 as permitted sender) smtp.mailfrom="x;dkim=pass"@evil.test'
       )
     ).toEqual(['spf=fail by mx.corp.test'])
+  })
+})
+
+describe('adjacent encoded words', () => {
+  it('drop the space a fold put between them', () => {
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?= =?UTF-8?B?UGFs?=')).toBe('PayPal')
+    expect(decodeEncodedWords('"=?UTF-8?B?aW52b2ljZS5w?=\t=?UTF-8?B?ZGYuZXhl?="')).toBe('"invoice.pdf.exe"')
+    const folded = analyseHeaders('Subject: =?UTF-8?B?UGF5?=\r\n =?UTF-8?B?UGFs?= account\nFrom: a@b.test')
+    expect(folded.identities.find((i) => i.label === 'Subject')?.value).toBe('PayPal account')
+  })
+
+  it('decode a character split across two words whole', () => {
+    // U+0430 is D0 B0 in UTF-8, and the split falls between the two bytes.
+    const split = '=?utf-8?B?' + btoa('p\xd0') + '?= =?utf-8?B?' + btoa('\xb0ypal') + '?='
+    expect(decodeEncodedWords(split)).toBe('p\u0430ypal')
+  })
+
+  it('join words in different charsets', () => {
+    expect(decodeEncodedWords('=?utf-8?Q?a?= =?iso-8859-1?Q?=E9?=')).toBe('aé')
+  })
+
+  it('keep whitespace a reader sees, and text that only looks like a word', () => {
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?=\u00A0=?UTF-8?B?UGFs?=')).toBe('Pay\u00A0Pal')
+    expect(decodeEncodedWords('ok?= =?UTF-8?B?UGF5?=')).toBe('ok?= Pay')
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?= x =?UTF-8?B?UGFs?=')).toBe('Pay x Pal')
+  })
+
+  it('join two 3 MB words without running out of stack', () => {
+    const word = '=?utf-8?B?' + btoa('a'.repeat(3_000_000)) + '?='
+    expect(decodeEncodedWords(`${word} ${word}`)).toBe('a'.repeat(6_000_000))
+  })
+
+  it('leave a word that does not decode, and the space beside it, as written', () => {
+    expect(decodeEncodedWords('=?x-made-up?B?VXJnZW50?= =?UTF-8?B?UGF5?=')).toBe('=?x-made-up?B?VXJnZW50?= Pay')
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?= =?UTF-8?B?!!?=')).toBe('Pay =?UTF-8?B?!!?=')
+  })
+})
+
+describe('quoted-printable over text already read as UTF-8', () => {
+  it('keeps a raw non-ASCII character as its UTF-8 bytes, not its low byte', () => {
+    expect([...quotedPrintableBytes('p\u0430y=3D')]).toEqual([112, 208, 176, 121, 61])
+    expect(decodeEncodedWords('=?utf-8?Q?p\u0430ypal?=')).toBe('p\u0430ypal')
+  })
+
+  it('still reads each escape, and leaves a broken one as written', () => {
+    expect(new TextDecoder().decode(quotedPrintableBytes('a=3Db=C3=A9=zz='))).toBe('a=bé=zz=')
   })
 })

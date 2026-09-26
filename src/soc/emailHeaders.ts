@@ -89,44 +89,116 @@ export function parseHeaderBlock(raw: string): HeaderField[] {
   return out
 }
 
+/** One RFC 2047 encoded word: charset, B or Q, payload. */
+const ENCODED_WORD = /=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g
+
+/**
+ * Encoded words with only spaces or tabs between them. RFC 2047 §6.2 drops
+ * that whitespace, and mailers split a long subject or filename across words
+ * at any point, so `invoice.p` + `df.exe` read as "invoice.p df.exe" and the
+ * double extension the reader saw went unreported. Only a space or a tab: a
+ * no-break space between two words is a character the reader sees.
+ */
+const ENCODED_RUN = /=\?[^?]+\?[bBqQ]\?[^?]*\?=(?:[ \t]+=\?[^?]+\?[bBqQ]\?[^?]*\?=)*/g
+
 /**
  * Decode RFC 2047 encoded words (`=?utf-8?B?…?=`), which is how a display name
  * hides that it reads "PayPal Security" in Cyrillic lookalikes. An unknown
  * charset or malformed payload is left exactly as written rather than guessed.
  */
 export function decodeEncodedWords(value: string): string {
-  return value.replace(
-    /=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g,
-    (whole, charset: string, encoding: string, text: string) => {
-      try {
-        const bytes =
-          encoding.toLowerCase() === 'b'
-            ? Uint8Array.from(atob(text), (c) => c.charCodeAt(0))
-            : quotedPrintableBytes(text.replace(/_/g, ' '))
-        // Flattened: a header value is ONE logical line by definition (RFC
-        // 5322 unfolding), so a decoded one carrying CR/LF is malformed. Left
-        // in, a Subject could forge whole sections of the report and whole
-        // timestamped comments on the case note it lands in.
-        return new TextDecoder(charset).decode(bytes).replace(/[\r\n\u2028\u2029]+/g, ' ')
-      } catch {
-        return whole
+  return value.replace(ENCODED_RUN, (run) => {
+    const words = [...run.matchAll(ENCODED_WORD)].map((m) => ({
+      start: m.index ?? 0,
+      end: (m.index ?? 0) + m[0].length,
+      charset: m[1].toLowerCase(),
+      bytes: wordBytes(m[2], m[3])
+    }))
+    let out = ''
+    let end = 0
+    let decodedBefore = false
+    for (let i = 0; i < words.length;) {
+      // Neighbouring words in one charset decode as one byte string, so a
+      // character split across two words comes out whole rather than as two
+      // replacement characters where the look-alike was.
+      const chunks: Uint8Array[] = []
+      let j = i
+      for (; j < words.length; j++) {
+        const bytes = words[j].bytes
+        if (!bytes || words[j].charset !== words[i].charset) break
+        chunks.push(bytes)
       }
+      if (!chunks.length) j = i + 1 // a payload that did not decode stands alone
+      const text = chunks.length ? decodeCharset(words[i].charset, chunks) : null
+      // The gap is dropped only between two words that both decoded. Beside a
+      // word left as written, it is kept as written too.
+      if (text === null || !decodedBefore) out += run.slice(end, words[i].start)
+      out += text ?? run.slice(words[i].start, words[j - 1].end)
+      decodedBefore = text !== null
+      end = words[j - 1].end
+      i = j
     }
-  )
+    return out
+  })
 }
 
-/** `=XX` escapes to bytes. Shared with the MIME body decoder in eml.ts. */
+function wordBytes(encoding: string, payload: string): Uint8Array | null {
+  if (encoding.toLowerCase() === 'q') return quotedPrintableBytes(payload.replace(/_/g, ' '))
+  try {
+    return Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+  } catch {
+    return null
+  }
+}
+
+function decodeCharset(charset: string, chunks: Uint8Array[]): string | null {
+  const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+  let at = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, at)
+    at += chunk.length
+  }
+  try {
+    // Flattened: a header value is ONE logical line by definition (RFC
+    // 5322 unfolding), so a decoded one carrying CR/LF is malformed. Left
+    // in, a Subject could forge whole sections of the report and whole
+    // timestamped comments on the case note it lands in.
+    return new TextDecoder(charset).decode(bytes).replace(/[\r\n\u2028\u2029]+/g, ' ')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `=XX` escapes to bytes. Shared with the MIME body decoder in eml.ts.
+ *
+ * The text arrived already decoded from the file as UTF-8, so a raw character
+ * in it stands for its UTF-8 bytes. Cut to its low byte, a Cyrillic а (U+0430)
+ * became "0": a link to p0ypal, a domain nowhere in the mail, in place of the
+ * look-alike the reader saw. So the text is encoded first and the escapes are
+ * read at the byte level; `=` and hex digits are ASCII, the same bytes either way.
+ */
 export function quotedPrintableBytes(text: string): Uint8Array {
-  const bytes: number[] = []
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '=' && /^[0-9a-f]{2}$/i.test(text.slice(i + 1, i + 3))) {
-      bytes.push(Number.parseInt(text.slice(i + 1, i + 3), 16))
-      i += 2
+  const src = new TextEncoder().encode(text)
+  const out = new Uint8Array(src.length)
+  let n = 0
+  for (let i = 0; i < src.length; i++) {
+    const high = src[i] === 0x3d && i + 2 < src.length ? hexDigit(src[i + 1]) : -1
+    const low = high < 0 ? -1 : hexDigit(src[i + 2])
+    if (low < 0) {
+      out[n++] = src[i]
     } else {
-      bytes.push(text.charCodeAt(i) & 0xff)
+      out[n++] = high * 16 + low
+      i += 2
     }
   }
-  return Uint8Array.from(bytes)
+  return out.slice(0, n)
+}
+
+function hexDigit(byte: number): number {
+  if (byte >= 0x30 && byte <= 0x39) return byte - 0x30
+  const lower = byte | 0x20
+  return lower >= 0x61 && lower <= 0x66 ? lower - 0x57 : -1
 }
 
 /**
