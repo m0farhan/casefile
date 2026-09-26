@@ -148,7 +148,10 @@ function splitParts(body: string, boundary: string): string[] {
   const out: string[] = []
   let current: string[] | null = null
   for (const line of body.split('\n')) {
-    const delimiter = line.replace(/\s+$/, '')
+    // trimEnd, not `/\s+$/`: the regex retries from every space in a run and
+    // took seconds on one attacker-written line of 80,000 spaces. Same set of
+    // characters stripped, in one pass.
+    const delimiter = line.trimEnd()
     if (delimiter === open) {
       if (current) out.push(current.join('\n'))
       current = []
@@ -191,7 +194,11 @@ function decodeBody(body: string, encoding: string): Decoded {
     // and throws on one stray byte — which used to hand back zero bytes marked
     // exact, i.e. the empty-file hash presented as the attachment's own.
     const cleaned = body.replace(/[^A-Za-z0-9+/=]/g, '')
-    const padded = cleaned.replace(/=+$/, '')
+    // A loop, not `/=+$/`, which is quadratic on a long run of '=' followed by
+    // anything else: an 81 KB part of them froze the analysis for seconds.
+    let end = cleaned.length
+    while (end > 0 && cleaned.charCodeAt(end - 1) === 0x3d) end--
+    const padded = cleaned.slice(0, end)
     // A part that carried something but cleaned down to nothing is a part we
     // could not read — not an empty file. The difference matters: the second
     // gets hashed, and the SHA-256 of zero bytes is a real-looking answer that

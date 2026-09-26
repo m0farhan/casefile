@@ -181,6 +181,31 @@ describe('parser evasions that used to hide content from the analyst', () => {
   })
 })
 
+describe('hostile sizes stay linear', () => {
+  // Each of these took seconds at 80 KB when a trim was a regex, and grew four
+  // times over with every doubling. The bound is generous for a loaded machine;
+  // the fixed code takes a few milliseconds.
+  const lines76 = (s: string): string => s.match(/[^]{1,76}/g)?.join('\n') ?? ''
+
+  it('a base64 part that is a long run of = then one letter', () => {
+    const mail =
+      'Content-Type: application/octet-stream\nContent-Disposition: attachment; filename="a.bin"\n' +
+      `Content-Transfer-Encoding: base64\n\n${lines76('='.repeat(80_000) + 'A')}\n`
+    const started = performance.now()
+    parseEml(mail)
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+
+  it('a multipart body line that is a long run of spaces then one letter', () => {
+    const mail =
+      'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\n' +
+      `${' '.repeat(80_000)}x\n--B--\n`
+    const started = performance.now()
+    expect(parseEml(mail).text).toContain('x')
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+})
+
 describe('latin1Bytes', () => {
   it('gives one byte per code unit, for every byte value atob can return', () => {
     const all = Uint8Array.from({ length: 256 }, (_, i) => i)
