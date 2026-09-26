@@ -1434,6 +1434,33 @@ describe('v3 self-contained project folders', () => {
     expect(goals.tasks.map((t) => t.title)).toEqual(['one'])
   })
 
+  it('finds a board created outside the default folder', async () => {
+    const { store } = newStore()
+    // The work-laptop case: the default folder is set, and a board is created
+    // somewhere else. Every screen passes the default folder, so a walk fenced
+    // to it lost the board everywhere at once.
+    await store.createProject('Cases', 'SOC')
+    await store.createProject('Goals', 'Incident Response')
+    const found = await store.loadAllProjects('SOC')
+    expect(found.map((p) => p.filePath)).toEqual(['SOC/Cases/Cases.md', 'Incident Response/Goals/Goals.md'])
+  })
+
+  it('finds a board outside the default folder that arrived from another device', async () => {
+    const { store, vault, app } = newStore()
+    await vault.create(
+      'Personal/Goals/Goals.md',
+      ['---', 'pm-project: true', 'id: g1', 'title: Goals', 'taskIds: []', '---', ''].join('\n')
+    )
+    await vault.create('Personal/Goals/Notes.md', '---\ntitle: not a board\n---\n')
+    // Nothing in this session saved it, so only Obsidian's index knows it is a board.
+    ;(app.metadataCache as unknown as { getFileCache: (f: TFile) => unknown }).getFileCache = (f: TFile) =>
+      f.path === 'Personal/Goals/Goals.md'
+        ? { frontmatter: { 'pm-project': true, id: 'g1', title: 'Goals', taskIds: [] } }
+        : { frontmatter: { title: 'not a board' } }
+    const found = await store.loadAllProjects('SOC')
+    expect(found.map((p) => p.filePath)).toEqual(['Personal/Goals/Goals.md'])
+  })
+
   it('a task file nested under a board is never mistaken for a board', async () => {
     const { store } = newStore()
     const project = await store.createProject('Acme', 'Projects')

@@ -29,6 +29,10 @@ export class FakeVault {
     return this.files.get(n)?.file ?? this.folders.get(n) ?? null
   }
 
+  getMarkdownFiles(): TFile[] {
+    return [...this.files.values()].map((f) => f.file).filter((f) => f.extension === 'md')
+  }
+
   async cachedRead(file: TFile): Promise<string> {
     return this.files.get(file.path)?.content ?? ''
   }

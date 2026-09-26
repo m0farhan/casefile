@@ -327,10 +327,23 @@ export class ProjectStore implements TaskSource {
    *    by reading. That bound is what stops a cold cache turning this into a
    *    full-vault read.
    * A cached file that is NOT a board is skipped either way, with no disk read.
+   *
+   * The base folder is where NEW boards go, not a fence around the old ones.
+   * Once a board could be created in, or moved to, any folder, walking only the
+   * base lost every board filed elsewhere — on every screen at once, because
+   * every caller passes the base. So two more sources join the walk, neither
+   * of which reads a file:
+   *  - every note in the vault the metadataCache marks as a board, and
+   *  - every board this store saved or loaded this session, which covers the
+   *    moment right after "New board" or "Move to folder…", before Obsidian
+   *    has indexed the note at its new path.
+   *
+   * ponytail: a board outside the base folder that Obsidian has not indexed
+   * yet (first launch after a sync brings it in) appears once indexing
+   * catches up; a persisted list of board paths would close that gap.
    */
   private findProjectFiles(base: string): TFile[] {
     const root = this.app.vault.getAbstractFileByPath(normalizePath(base || '/'))
-    if (!(root instanceof TFolder)) return []
     const out: TFile[] = []
     const seen = new Set<string>()
     const push = (f: TAbstractFile | null, knownShape: boolean): void => {
@@ -352,7 +365,9 @@ export class ProjectStore implements TaskSource {
         }
       }
     }
-    walk(root, 0)
+    if (root instanceof TFolder) walk(root, 0)
+    for (const file of this.app.vault.getMarkdownFiles()) push(file, false)
+    for (const path of this.projectCache.keys()) push(this.app.vault.getAbstractFileByPath(path), true)
     return out
   }
 
