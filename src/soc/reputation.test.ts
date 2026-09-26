@@ -273,4 +273,28 @@ describe('the asset boundary is the one outbound gate (ST-4)', () => {
     // The row says "domain" but the value is an internal address.
     expect(buildRequests('domain', '10.0.0.5', KEYS, [])).toEqual([])
   })
+
+  it('sends nothing for a UNC path, a local path or a bracketed address', () => {
+    const all = { ...KEYS, abusech: 'ac-key' }
+    const owned = ['corp.example']
+    for (const v of [
+      '\\\\10.0.0.5\\c$\\evil.exe',
+      '\\\\dc01.corp.example\\share',
+      '[\\\\]dc01[.]corp[.]example\\share\\a.txt',
+      'C:\\Users\\jdoe',
+      '<john@corp.example>',
+      'dc01\\c$\\evil.exe'
+    ]) {
+      expect(buildRequests('domain', v, all, owned)).toEqual([])
+      expect(buildRequests('email', v, all, owned)).toEqual([])
+    }
+    // Hashes and full URLs still go out.
+    expect(buildRequests('hash', 'cd903ad2211cf7d166646d75e57fb866', all, owned).length).toBe(2)
+    expect(buildRequests('url', 'https://evil.test/a\\b?c=<d>', all, owned).length).toBe(2)
+  })
+
+  it('keeps the own IDN domain in, however it is spelled', () => {
+    expect(buildRequests('url', 'https://mail.bücher.example/login', KEYS, ['bücher.example'])).toEqual([])
+    expect(buildRequests('domain', 'mail\u3002corp.example', KEYS, ['corp.example'])).toEqual([])
+  })
 })

@@ -381,10 +381,13 @@ export interface AssetMatch {
 /** Private, loopback and link-local IPv4 — internal by definition, never configured. */
 const BUILT_IN_V4 = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8', '169.254.0.0/16']
 
-/** A host shape: dot-separated labels ending in an alphabetic TLD. Non-ASCII labels
- *  are allowed so an IDN survives; the alphabetic TLD is what keeps a half-typed
- *  address ("198.51.100", "10") from ever becoming a live suffix rule. */
-const RE_HOST_SHAPE = /^(?=.{1,253}$)[^\s./:@]+(?:\.[^\s./:@]+)*\.[a-z¡-￿]{2,}$/i
+/** A host shape: dot-separated labels ending in an alphabetic or punycode TLD.
+ *  Non-ASCII labels are allowed so an IDN survives; the alphabetic TLD is what
+ *  keeps a half-typed address ("198.51.100", "10") from ever becoming a live
+ *  suffix rule, and no address starts with xn--. A backslash or angle bracket
+ *  is never part of a host, so a local path (dc01\c$\evil.exe) or a pasted
+ *  <addr@host> is not one. */
+const RE_HOST_SHAPE = /^(?=.{1,253}$)[^\s./:@\\<>]+(?:\.[^\s./:@\\<>]+)*\.(?:[a-z¡-￿]{2,}|xn--[a-z0-9-]{2,})$/i
 const RE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i
 
 /** Dotted quad → uint32; null when the value is not an IPv4 literal. */
@@ -452,12 +455,13 @@ function builtInV6(g: number[]): string | null {
 }
 
 /**
- * The host an indicator points at — a URL's hostname, an email's domain, or the
- * value itself — refanged, lowercased, de-ported, de-bracketed, de-zoned.
- * Canonical: an IPv6 literal comes back expanded, and an IPv4-mapped one
- * (::ffff:10.0.0.5 — what Java, nginx and Windows event logs emit for internal
- * clients, and what new URL() turns into ::ffff:a00:5) comes back as its dotted
- * quad, so it is judged on the IPv4 side.
+ * The host an indicator points at — a URL's hostname, an email's domain, a UNC
+ * path's server, or the value itself — refanged, lowercased, de-ported,
+ * de-bracketed, de-zoned. Canonical: an IPv6 literal comes back expanded, an
+ * IPv4-mapped one (::ffff:10.0.0.5 — what Java, nginx and Windows event logs
+ * emit for internal clients, and what new URL() turns into ::ffff:a00:5) comes
+ * back as its dotted quad, so it is judged on the IPv4 side, and a non-ASCII
+ * host comes back in the punycode form a browser resolves.
  *
  * A URL the parser rejects is stripped BY HAND rather than waved through:
  * returning '' there would make http://10.0.0.5:99999/a "not an asset" and send
@@ -468,6 +472,11 @@ function builtInV6(g: number[]): string | null {
  */
 export function hostOf(value: string): string {
   let v = refangIoc(value).toLowerCase()
+  // A UNC path names its server first: \\10.0.0.5\c$\x is the host 10.0.0.5.
+  // '@' ends the server too, so a WebDAV \\host@SSL\DavWWWRoot\… is not read
+  // as a mailbox whose domain is 'ssl\davwwwroot\…'.
+  const unc = /^\\\\([^\\/@]*)/.exec(v)
+  if (unc) v = unc[1]
   if (RE_SCHEME.test(v)) {
     try {
       v = new URL(v).hostname
@@ -486,7 +495,24 @@ export function hostOf(value: string): string {
   v = v.replace(/^\[([^\]]*)\](?::\d+)?$/, '$1') // [fe80::1]:443
   const port = /^(.*):\d+$/.exec(v) // an IPv6 body keeps a second colon, so it is never stripped
   if (port && !port[1].includes(':')) v = port[1]
-  v = v.replace(/\.$/, '').split('%')[0]
+  v = v.split('%')[0]
+  // IDNA: the Unicode, punycode, fullwidth and ideographic-dot spellings of one
+  // host are one host, on the rule side and the value side alike, so
+  // bücher.example matches xn--bcher-kva.example and mail。corp.example is
+  // mail.corp.example.
+  // ponytail: non-ASCII only. The URL parser also reads IPv4 shorthand and
+  // octal ('198.51.100' is 198.51.0.100), so ASCII never goes through it, and
+  // an address it makes of fullwidth digits is kept only when it is the
+  // address as written.
+  if (/[^\p{ASCII}]/u.test(v)) {
+    try {
+      const canon = new URL(`http://${v}`).hostname
+      if (ipv4(canon) === null || canon === v.normalize('NFKC').replace(/\u3002/g, '.')) v = canon
+    } catch {
+      // Not a host the parser accepts: judged as written.
+    }
+  }
+  v = v.replace(/\.$/, '')
   const g = ipv6(v)
   if (!g) return v
   const m = mappedV4(g)

@@ -597,6 +597,43 @@ describe('assetRule — the boundary that decides what is never sent', () => {
     expect(assetRule('08:00:27:12:34:56', [])).toBeNull()
   })
 
+  it('judges a UNC path by its server', () => {
+    // \\10.0.0.5\c$ used to reach no built-in range and went to VirusTotal.
+    expect(assetRule('\\\\10.0.0.5\\c$\\evil.exe', [])?.builtIn).toBe(true)
+    expect(assetRule('\\\\dc01.corp.example\\share', ['corp.example'])).not.toBeNull()
+    expect(assetRule('[\\\\]dc01[.]corp[.]example\\share\\a.txt', ['corp.example'])).not.toBeNull()
+    // A WebDAV suffix is not a mailbox separator.
+    expect(assetRule('\\\\dc01.corp.example@SSL\\DavWWWRoot\\x', ['corp.example'])).not.toBeNull()
+    expect(assetRule('\\\\evil.test\\share', ['corp.example'])).toBeNull()
+  })
+
+  it('treats every spelling of an IDN host as that host', () => {
+    // Only a URL used to go through the parser, so a rule and a value spelled
+    // differently never met.
+    expect(assetRule('https://mail.bücher.example/login', ['bücher.example'])).not.toBeNull()
+    expect(assetRule('xn--bcher-kva.example', ['bücher.example'])).not.toBeNull()
+    expect(assetRule('bücher.example', ['xn--bcher-kva.example'])).not.toBeNull()
+    expect(assetRule('mail\u3002corp.example', ['corp.example'])).not.toBeNull()
+    expect(assetRule('mail.\uFF43\uFF4F\uFF52\uFF50.example', ['corp.example'])).not.toBeNull()
+    expect(assetRule('mail.corp.xn--p1ai', ['corp.рф'])).not.toBeNull()
+    expect(assetRule('\uFF11\uFF10.\uFF10.\uFF10.\uFF15', [])?.builtIn).toBe(true)
+    expect(unmatchableAssetRules(['corp.xn--p1ai', 'corp.рф'])).toEqual([])
+    // Still a label boundary.
+    expect(assetRule('evilbücher.example', ['bücher.example'])).toBeNull()
+  })
+
+  it('never reads a half-typed address as a shorthand or octal one', () => {
+    // The URL parser turns '198.51.100' into 198.51.0.100 and '010' into 8.
+    // Neither spelling may become a live rule or an own-asset mark.
+    expect(unmatchableAssetRules(['10', '198.51.100'])).toEqual(['10', '198.51.100'])
+    expect(assetRule('198.51.0.100', ['198.51.100'])).toBeNull()
+    expect(assetRule('10.0.19041', [])).toBeNull()
+    expect(hasIocShape('1.2.3')).toBe(false)
+    expect(hasIocShape('10.0.19041')).toBe(false)
+    expect(assetRule('0.0.0.10', ['\uFF11\uFF10'])).toBeNull()
+    expect(assetRule('8.0.0.5', ['\uFF10\uFF11\uFF10.\uFF10.\uFF10.\uFF15'])).toBeNull()
+  })
+
   it('names every listed entry it cannot match, so nothing reads as cover', () => {
     expect(
       unmatchableAssetRules([

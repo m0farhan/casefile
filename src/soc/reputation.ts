@@ -1,5 +1,5 @@
 import type { IocType } from '../types'
-import { assetRule, refangIoc } from './ioc'
+import { assetRule, hasIocShape, refangIoc } from './ioc'
 
 /**
  * Live IOC reputation checks: pure request builders + response parsers, no
@@ -107,6 +107,10 @@ export function buildRequests(type: IocType, value: string, keys: RepKeys, owned
   // The one outbound gate: an indicator naming the org's own estate has no
   // request to send. Before any URL, header or key is assembled.
   if (assetRule(real, owned)) return []
+  // Nor does anything the boundary cannot read. A local path, a bracketed
+  // <addr@host> or a UNC form it does not reduce names an internal machine or
+  // a user and has no reputation to look up, so it fails closed here.
+  if (!hasIocShape(real)) return []
   const out: RepRequest[] = []
   const vt = keys.virustotal?.trim()
   const ab = keys.abuseipdb?.trim()
