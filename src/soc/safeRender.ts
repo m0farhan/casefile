@@ -1,4 +1,5 @@
-import { Notice } from 'obsidian'
+import { type App, Notice, parseLinktext } from 'obsidian'
+import { opensInApp } from './attachments'
 import { defangIoc } from './ioc'
 
 /**
@@ -44,17 +45,37 @@ export function scrubRemoteEmbeds(md: string): string {
 const REMOTE_REFERENCE =
   /(?:\b(?:src|srcset|href|background|poster|data|action|formaction|xlink:href|cite|longdesc|manifest)\s*=\s*["']?\s*|url\s*\(\s*["']?\s*)(?:(?:https?|ftp):)?\/\//i
 
-/** Capture-phase so Obsidian's own anchor handling never sees the click. */
-export function neutralizeExternalLinks(el: HTMLElement): void {
+/**
+ * Capture-phase so Obsidian's own anchor and embed handling never sees the
+ * click. With `app`, vault links and embeds are guarded too: a file Obsidian
+ * cannot show itself (see opensInApp) would go to the system's default app,
+ * so its path is copied instead. The generic file embed a dropped attachment
+ * renders as is not an `<a>`, and opens on click, which is why embeds count.
+ * Unresolved links and files Obsidian displays pass through untouched.
+ */
+export function neutralizeExternalLinks(el: HTMLElement, app?: App, sourcePath = ''): void {
   const handler = (e: MouseEvent) => {
     const target = e.target as HTMLElement | null
     const a = target?.closest?.('a') as HTMLAnchorElement | null
-    if (!a || a.classList.contains('internal-link')) return
+    if (a && !a.classList.contains('internal-link')) {
+      e.preventDefault()
+      e.stopPropagation()
+      const href = a.getAttribute('href') ?? a.href ?? ''
+      void navigator.clipboard.writeText(defangIoc(href, 'url'))
+      new Notice('Link copied defanged — case notes never open links')
+      return
+    }
+    const ref = target?.closest?.('a.internal-link, .internal-embed')
+    if (!app || !ref) return
+    const linktext = ref.getAttribute('data-href') || ref.getAttribute('href') || ref.getAttribute('src') || ''
+    const file = app.metadataCache.getFirstLinkpathDest(parseLinktext(linktext).path, sourcePath)
+    if (!file || opensInApp(file.extension)) return
     e.preventDefault()
     e.stopPropagation()
-    const href = a.getAttribute('href') ?? a.href ?? ''
-    void navigator.clipboard.writeText(defangIoc(href, 'url'))
-    new Notice('Link copied defanged — case notes never open links')
+    void navigator.clipboard.writeText(file.path)
+    new Notice(
+      `Path copied — .${file.extension} files are not opened from a case; Obsidian would hand them to the system's default app.`
+    )
   }
   el.addEventListener('click', handler, true)
   el.addEventListener('auxclick', handler, true)

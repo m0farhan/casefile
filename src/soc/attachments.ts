@@ -8,6 +8,47 @@
 /** Image extensions that get the 'image' icon in the evidence section. */
 export const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'])
 
+/**
+ * Extensions Obsidian shows in its own views (the lists in Obsidian 1.13.7's
+ * app bundle: images, audio, video, pdf, notes, canvases and bases). Opened
+ * from a case, anything else is handed to the operating system's default app:
+ * a dropped `.html` renders live in a browser and fetches, and `.lnk`, `.hta`
+ * or a macro document runs with no prompt. Evidence is dropped in under its
+ * own name, so the case views open only these and copy the path otherwise.
+ */
+// ponytail: a fixed list, because Obsidian's viewRegistry is private API. A
+// viewer another plugin registers is deliberately not trusted; add its
+// extension here if one is ever needed.
+export const OPENS_IN_OBSIDIAN = new Set([
+  ...IMAGE_EXTENSIONS,
+  'mp3',
+  'wav',
+  'm4a',
+  '3gp',
+  'flac',
+  'ogg',
+  'oga',
+  'opus',
+  'mp4',
+  'webm',
+  'ogv',
+  'mov',
+  'mkv',
+  'pdf',
+  'md',
+  'canvas',
+  'base'
+])
+
+/**
+ * Whether a vault file with this extension opens inside Obsidian. Pass the
+ * RESOLVED file's extension (TFile.extension), not one read off the link
+ * text: a note named "Phishing v1.final" is still a note.
+ */
+export function opensInApp(extension: string): boolean {
+  return OPENS_IN_OBSIDIAN.has(extension.toLowerCase())
+}
+
 /** File extension of a ref (lowercase, no dot), or '' when it has none. */
 export function refExtension(ref: string): string {
   const ext = ref.match(/\.([A-Za-z0-9]{1,10})$/)?.[1] ?? ''
