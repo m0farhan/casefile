@@ -2,8 +2,9 @@ import { Notice } from 'obsidian'
 import type PMPlugin from '../../main'
 import type { Project, Task } from '../../types'
 import { safeAsync } from '../../utils'
+import { parsePlainDate } from '../../dates'
 import type { TimelineCfg } from './TimelineConfig'
-import { xToDate, getSnapPoints, snapX } from './TimelineConfig'
+import { dateToX, xToDate, snapX } from './TimelineConfig'
 
 export interface DragState {
   isDragging: boolean
@@ -38,6 +39,7 @@ export function attachDragHandle(
   x: number,
   width: number,
   cfg: TimelineCfg,
+  snapPoints: number[],
   drag: DragState,
   plugin: PMPlugin,
   project: Project,
@@ -57,8 +59,13 @@ export function attachDragHandle(
     drag.dragInitialX = x
     drag.dragInitialW = width
 
-    const snapPoints = getSnapPoints(cfg)
     const snapThreshold = cfg.dayWidth * 0.4
+    // The left handle may carry start up to the due day and no further, so a
+    // drag can never save a start after the due date. A start-only task has no
+    // bound. The due day's x sits on a day boundary, so the snap on release
+    // leaves it alone and the saved start is exactly the due date.
+    const due = parsePlainDate(task.due)
+    const maxLeftX = due ? dateToX(cfg, due) : Infinity
 
     const onMove = (ev: MouseEvent) => {
       if (!drag.isDragging || !drag.dragBarEl) return
@@ -68,7 +75,7 @@ export function attachDragHandle(
       let newW: number
       if (drag.dragSide === 'left') {
         newX = Math.max(0, drag.dragInitialX + dx)
-        newX = snapX(newX, snapPoints, snapThreshold)
+        newX = Math.min(snapX(newX, snapPoints, snapThreshold), maxLeftX)
         newW = drag.dragInitialX + drag.dragInitialW - newX
       } else {
         newW = drag.dragInitialW + dx
@@ -159,6 +166,7 @@ export function attachBarMove(
   x: number,
   width: number,
   cfg: TimelineCfg,
+  snapPoints: number[],
   drag: DragState,
   plugin: PMPlugin,
   project: Project,
@@ -178,7 +186,6 @@ export function attachBarMove(
     drag.dragInitialX = x
     drag.dragInitialW = width
 
-    const snapPoints = getSnapPoints(cfg)
     const snapThreshold = cfg.dayWidth * 0.4
     let lastSnappedX = x
 

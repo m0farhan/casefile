@@ -2,6 +2,7 @@ import { Notice } from 'obsidian'
 import type PMPlugin from '../../main'
 import type { Project, Task } from '../../types'
 import { safeAsync } from '../../utils'
+import { wouldCreateCycle } from '../../store/Scheduler'
 
 export interface LinkState {
   active: boolean
@@ -81,10 +82,11 @@ export function handleLinkDotClick(
     return
   }
 
-  // Check for reverse (would create cycle)
-  const predecessor = allTasks.find((t) => t.id === predecessorId)
-  if (predecessor?.dependencies?.includes(successorId)) {
-    new Notice('Reverse dependency exists — would create a cycle.')
+  // Refuse any loop, direct or through other tasks (the same guard as the task
+  // form's dependency picker). A loop silently stops auto-scheduling for every
+  // task in it.
+  if (wouldCreateCycle(project.tasks, successorId, predecessorId)) {
+    new Notice('That link would create a dependency loop.')
     return
   }
 

@@ -15,6 +15,8 @@ export interface RendererContext {
   svgEl: SVGSVGElement
   headerSvgEl: SVGSVGElement
   cfg: TimelineCfg
+  /** Snap-point x positions for cfg, computed once per render pass and shared by every row and drag. */
+  snapPoints: number[]
   plugin: PMPlugin
   project: Project
   /** Status definitions in effect for this project, computed once per render pass. */

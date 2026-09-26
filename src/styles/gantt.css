@@ -30,9 +30,11 @@
   position: relative;
 }
 
-/* Left panel: task labels */
+/* Left panel: task labels. The inline width is the user's preference; the cap
+   keeps most of a phone screen for the timeline. */
 .pm-gantt-left {
   flex-shrink: 0;
+  max-width: 45%;
   display: flex;
   flex-direction: column;
   background: var(--background-secondary);
@@ -114,7 +116,14 @@
   flex-shrink: 0;
   position: relative;
   z-index: 6;
+  touch-action: none;
   transition: background 0.15s ease-out;
+}
+/* A wider invisible hit area, so a finger can grab the 4px handle. */
+.pm-gantt-resize-handle::before {
+  content: '';
+  position: absolute;
+  inset: 0 -6px;
 }
 .pm-gantt-resize-handle:hover,
 .pm-gantt-resize-handle:active {
@@ -226,6 +235,16 @@
 }
 .pm-gantt-row-hover:hover {
   fill: color-mix(in srgb, var(--interactive-accent) 3%, transparent);
+}
+
+/* A row whose date the chart range cannot show: the stored date, in text */
+.pm-gantt-out-of-range {
+  font-size: 11px;
+  fill: var(--text-muted);
+  dominant-baseline: central;
+}
+.pm-gantt-out-of-range:hover {
+  fill: var(--text-normal);
 }
 
 /* Empty row click-to-set-dates */
