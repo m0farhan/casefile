@@ -591,7 +591,18 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   if (!fields.length) notes.push('No headers found in this paste.')
   if (!received.length) notes.push('No Received headers — the delivery path is not recorded.')
   if (!auth.length) notes.push('No Authentication-Results or Received-SPF — SPF, DKIM and DMARC are not recorded.')
-  if (!returnAddr) notes.push('No Return-Path — the envelope sender is not recorded.')
+  // A Return-Path that is there but names no address is not an absent one.
+  // `<>` is the null sender a bounce or delivery notice carries, and the lure
+  // shaped like one; it is said only when the bytes are exactly that.
+  const returnRaw = rawOf('return-path')
+  if (!returnRaw) notes.push('No Return-Path — the envelope sender is not recorded.')
+  else if (!returnAddr) {
+    notes.push(
+      /^\s*<\s*>\s*$/.test(returnRaw)
+        ? 'Return-Path is <>, a null envelope sender (the form RFC 5321 gives bounces and delivery notices), so there is no envelope domain to compare with From.'
+        : 'Return-Path names no address, so there is no envelope domain to compare with From.'
+    )
+  }
   if (hops.some((h) => !h.at)) notes.push('One or more hops stated no time, so those gaps are not measurable.')
 
   return { identities, auth, hops, observations, notes, fromAddress: fromAddr }

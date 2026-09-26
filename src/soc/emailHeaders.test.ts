@@ -559,3 +559,20 @@ describe('quoted-printable over text already read as UTF-8', () => {
     expect(new TextDecoder().decode(quotedPrintableBytes('a=3Db=C3=A9=zz='))).toBe('a=bé=zz=')
   })
 })
+
+describe('a Return-Path that names no address', () => {
+  it('says a null sender is null, not absent', () => {
+    const bounce = analyseHeaders('Return-Path: <>\nFrom: Mailer <postmaster@bank.test>\nSubject: Undeliverable')
+    expect(bounce.notes).not.toContain('No Return-Path — the envelope sender is not recorded.')
+    expect(bounce.notes).toContain(
+      'Return-Path is <>, a null envelope sender (the form RFC 5321 gives bounces and delivery notices), ' +
+        'so there is no envelope domain to compare with From.'
+    )
+  })
+
+  it('says a Return-Path of only a comment names no address', () => {
+    expect(analyseHeaders('Return-Path: (none given)\nFrom: a@b.test').notes).toContain(
+      'Return-Path names no address, so there is no envelope domain to compare with From.'
+    )
+  })
+})
