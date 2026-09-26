@@ -94,13 +94,24 @@ export class BacklogView implements SubView {
           due.createSpan({ text: relativeDue(task.due)?.text ?? task.due })
         }
 
-        row.addEventListener('click', () => {
+        const open = (): void =>
           openTaskModal(this.plugin, this.project, {
             task,
             onSave: async () => {
               await this.onRefresh()
             }
           })
+        row.addEventListener('click', open)
+        // Keyboard access, the KanbanCard pattern: the row is a focusable
+        // button, and the target check leaves the status badge its own keys.
+        row.setAttribute('role', 'button')
+        row.setAttribute('tabindex', '0')
+        row.addEventListener('keydown', (e) => {
+          if (e.target !== row) return
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            open()
+          }
         })
         row.addEventListener('contextmenu', (e) => {
           e.preventDefault()
