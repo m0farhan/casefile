@@ -3,6 +3,7 @@ import { zip } from '../../test/zip'
 import { analysePhishing, formatPhishReport, linksSection } from '../soc/phish'
 import { PhishAnalysisView } from './PhishAnalysisView'
 import { openProjectPicker } from '../ui/ModalFactory'
+import { TITLE_REFUSAL } from '../modals/TaskModal'
 
 // -- Minimal fake DOM -------------------------------------------------------
 // The suite runs in plain node (no jsdom in this repo), so this models only
@@ -105,8 +106,18 @@ class FakeEl {
 
 // -- Obsidian and the modules around the view ---------------------------------
 
+// Notices and opened pickers are captured so a test can read what the analyst saw.
+const h = vi.hoisted(() => ({ notices: [] as string[], pickers: [] as unknown[] }))
+
 vi.mock('obsidian', async (importOriginal) => ({
   ...(await importOriginal<object>()),
+  Modal: vi.fn<() => void>(),
+  Notice: class {
+    constructor(message: unknown) {
+      h.notices.push(String(message))
+    }
+    hide(): void {}
+  },
   ItemView: class {
     app: unknown
     contentEl = new FakeEl('div')
@@ -141,7 +152,10 @@ vi.mock('obsidian', async (importOriginal) => ({
     }
   },
   SuggestModal: class {
-    open(): void {}
+    setPlaceholder(): void {}
+    open(): void {
+      h.pickers.push(this)
+    }
   },
   setTooltip: (): void => {}
 }))
@@ -168,10 +182,16 @@ vi.stubGlobal('window', {
 const insertTask =
   vi.fn<(project: unknown, task: { title: string; description: string; iocs: { value: string }[] }) => Promise<void>>()
 
+const vault = {
+  files: [] as unknown[],
+  getFiles: (): unknown[] => vault.files,
+  cachedRead: vi.fn<() => Promise<string>>()
+}
+
 async function openView(
   phishBrands: string[] = []
 ): Promise<{ view: PhishAnalysisView; root: FakeEl; titleEl: FakeEl }> {
-  const leaf = { app: {}, updateHeader: (): void => {} }
+  const leaf = { app: { vault }, updateHeader: (): void => {} }
   const plugin = {
     settings: { ownedAssets: [], phishBrands, projectsFolder: 'Boards' },
     store: {
@@ -233,6 +253,10 @@ beforeEach(() => {
   focus.active = null
   insertTask.mockReset()
   vi.mocked(openProjectPicker).mockReset()
+  h.notices.length = 0
+  h.pickers.length = 0
+  vault.files = []
+  vault.cachedRead.mockReset()
 })
 afterEach(() => vi.clearAllMocks())
 
@@ -337,6 +361,35 @@ describe('PhishAnalysisView: the old report cannot be acted on once the message 
   })
 })
 
+describe('PhishAnalysisView: a refusal after the picker says why', () => {
+  it('a subject no file name can keep gets the store’s reason, not silence', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('...', 'Pay at https://alpha-evil.test/a'), 'a.eml (1 bytes)')
+    await showing(view, '...')
+    insertTask.mockRejectedValue(new Error(`${TITLE_REFUSAL} at least one character that can go in a file name.`))
+    button(root, 'Create case').fire('click')
+    await vi.waitFor(() => expect(openProjectPicker).toHaveBeenCalled())
+    vi.mocked(openProjectPicker).mock.calls[0][2]({ id: 'board' } as never)
+    await vi.waitFor(() =>
+      expect(h.notices).toEqual([
+        'Case not created. A case title needs at least one character that can go in a file name.'
+      ])
+    )
+  })
+
+  it('a .eml that cannot be read once picked says something went wrong', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vault.files = [{ name: 'a.eml', path: 'a.eml', extension: 'eml', parent: { path: '/' }, stat: { size: 1 } }]
+    vault.cachedRead.mockRejectedValue(new Error('gone'))
+    const { root } = await openView()
+    button(root, 'Load .eml').fire('click')
+    await vi.waitFor(() => expect(h.pickers).toHaveLength(1))
+    ;(h.pickers[0] as { onChooseSuggestion(f: unknown): void }).onChooseSuggestion(vault.files[0])
+    await vi.waitFor(() => expect(h.notices).toEqual(['Something went wrong. Check the console for details.']))
+    quiet.mockRestore()
+  })
+})
+
 describe('PhishAnalysisView: sender text is drawn escaped', () => {
   // U+202E in the From domain (as an encoded word), the Subject, a Received
   // host and an undecodable part's name; a soft hyphen in a link host.
@@ -379,6 +432,42 @@ Content-Transfer-Encoding: base64
     const drawn = (root.querySelector('.pm-headers-panel') as FakeEl).texts()
     expect(drawn.filter((t) => CF.test(t))).toEqual([])
     expect(drawn.some((t) => t.includes('Invoice<U+202E>fdp.exe'))).toBe(true)
+  })
+
+  it('the .eml picker draws a file name the sender wrote escaped, and still filters on it', async () => {
+    // A mail client saves a message under its Subject.
+    const file = {
+      name: 'Invoice \u202egpj.exe.eml',
+      path: 'Mail\u202ex/Invoice \u202egpj.exe.eml',
+      extension: 'eml',
+      parent: { path: 'Mail\u202ex' },
+      stat: { size: 3 }
+    }
+    vault.files = [file]
+    const { root } = await openView()
+    button(root, 'Load .eml').fire('click')
+    await vi.waitFor(() => expect(h.pickers).toHaveLength(1))
+    const picker = h.pickers[0] as {
+      renderSuggestion(f: unknown, el: unknown): void
+      getSuggestions(q: string): unknown[]
+    }
+    const row = new FakeEl('div')
+    picker.renderSuggestion(file, row)
+    expect(row.texts()).toEqual(['Invoice <U+202E>gpj.exe.eml', 'Mail<U+202E>x'])
+    expect(picker.getSuggestions('\u202egpj')).toEqual([file])
+  })
+
+  it('a long subject is cut without leaving half an emoji in the case title', async () => {
+    // Half a surrogate is saved as U+FFFD: a character the sender never wrote.
+    const { view, root } = await openView()
+    const subject = `${'a'.repeat(119)}\u{1F3A3} tail`
+    view.analyse(mail(subject, 'Pay at https://alpha-evil.test/a'), 'a.eml (1 bytes)')
+    await showing(view, subject)
+    button(root, 'Create case').fire('click')
+    await vi.waitFor(() => expect(openProjectPicker).toHaveBeenCalled())
+    vi.mocked(openProjectPicker).mock.calls[0][2]({ id: 'board' } as never)
+    await vi.waitFor(() => expect(insertTask).toHaveBeenCalled())
+    expect(insertTask.mock.calls[0][1].title).toBe('a'.repeat(119))
   })
 
   it('a case titled from the subject carries it escaped', async () => {
@@ -548,7 +637,7 @@ ${btoa('bytes')}
     button(root, 'Links').fire('click')
     const words = linksSection(report(view) as NonNullable<ReturnType<typeof report>>)
     expect(words.notes).toContain(
-      'Anything found inside an attachment is listed with that attachment, under Attachments.'
+      'Anything found inside an attachment or an inline image is listed with that file, under Attachments or Inline images.'
     )
     expect(sections(root).get(words.heading)).toEqual([words.none, ...words.notes])
   })

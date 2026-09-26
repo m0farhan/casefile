@@ -1798,11 +1798,13 @@ function utf16Runs(bytes: Uint8Array, cutStart: boolean, cutEnd: boolean): strin
  *
  * Scoped to the message text, because that is all extractLinks reads: a mail
  * whose only lure is a PDF /URI said "Links: None found." above an Attachments
- * section listing it. The pointer to Attachments is there whenever there are
- * attachments, whatever the readers found, because a note that appears only
- * sometimes reads as "none" when it is missing.
+ * section listing it. The pointer is there whenever there are attachments or
+ * inline images, whatever the readers found, because a note that appears only
+ * sometimes reads as "none" when it is missing — and an inline logo can carry
+ * a beacon URL as surely as a PDF can. It names both sections, because the
+ * report heads inline images apart and "under Attachments" pointed at "None."
  */
-export function linksSection(report: Pick<PhishReport, 'links' | 'attachments'>): {
+export function linksSection(report: Pick<PhishReport, 'links' | 'attachments' | 'inlineImages'>): {
   heading: string
   none: string
   notes: string[]
@@ -1816,8 +1818,10 @@ export function linksSection(report: Pick<PhishReport, 'links' | 'attachments'>)
             'Derived domain = the host’s last two labels, or three under a two-label suffix; no public suffix list is consulted, so under a hosting platform (pages.dev, github.io) it names the platform, not the site’s owner.'
           ]
         : []),
-      ...(report.attachments.length
-        ? ['Anything found inside an attachment is listed with that attachment, under Attachments.']
+      ...(report.attachments.length || report.inlineImages.length
+        ? [
+            'Anything found inside an attachment or an inline image is listed with that file, under Attachments or Inline images.'
+          ]
         : [])
     ]
   }
