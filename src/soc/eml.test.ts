@@ -140,6 +140,40 @@ describe('parser evasions that used to hide content from the analyst', () => {
     expect(parseEml(mail).attachments[0].filename).toBe('invoice.exe')
   })
 
+  it('reads the boundary a client reads, not one hidden inside another parameter', () => {
+    const mail =
+      'Content-Type: multipart/mixed; boundary=real; x="; boundary="fake"\n\n' +
+      '--fake\nContent-Type: text/plain\n\ndecoy\n--fake--\n' +
+      '--real\nContent-Type: application/octet-stream\nContent-Disposition: attachment; filename="p.exe"\n\nMZ\n--real--\n'
+    expect(parseEml(mail).attachments.map((a) => a.filename)).toEqual(['p.exe'])
+  })
+
+  const named = (disposition: string): string =>
+    parseEml(`Content-Type: application/octet-stream\nContent-Disposition: attachment; ${disposition}\n\nx`)
+      .attachments[0].filename
+
+  it('reads a filename a client reads, not one hidden inside another parameter', () => {
+    expect(named('filename=payload.exe; x="; filename="invoice.pdf"')).toBe('payload.exe')
+    expect(named('filename="payload.exe"; x="; filename*=UTF-8\'\'invoice.pdf"')).toBe('payload.exe')
+  })
+
+  it('unescapes a quoted-pair instead of stopping at it', () => {
+    expect(named('filename="Invoice\\".pdf.exe"')).toBe('Invoice".pdf.exe')
+  })
+
+  it('takes the first of two plain parameters of one name, quoted or not', () => {
+    expect(named('filename=payload.exe; filename="invoice.pdf"')).toBe('payload.exe')
+  })
+
+  it('reads a header of 100,000 parameters, or one 20 MB quoted value, without stalling or throwing', () => {
+    const many = Array.from({ length: 100_000 }, (_, i) => `x${i}="v;${i}"`).join('; ')
+    const started = performance.now()
+    expect(named(`${many}; filename="late.exe"`)).toBe('late.exe')
+    expect(performance.now() - started).toBeLessThan(1000)
+    // Ten million quoted-pairs: a regex walking the quoted-string overflows V8's stack here.
+    expect(named(`filename="${'\\a'.repeat(10_000_000)}"`)).toHaveLength(10_000_000)
+  })
+
   it('opens a forwarded message and finds the payload inside it', () => {
     // Forward-as-attachment is how most reported phish reaches a SOC.
     const inner =

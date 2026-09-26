@@ -66,8 +66,57 @@ function headerValue(headers: HeaderField[], name: string): string {
   return headers.find((h) => h.name.toLowerCase() === name)?.value ?? ''
 }
 
+interface Param {
+  name: string
+  value: string
+}
+
 /**
- * A parameter out of a Content-Type / Content-Disposition line.
+ * A Content-Type / Content-Disposition value's parameters, in order, names
+ * lower-cased. One forward pass that consumes each quoted-string whole, with
+ * its quoted-pairs unescaped, so a `;` or a `boundary=` written INSIDE another
+ * parameter's quotes is never read as a parameter of its own. Scanning the
+ * whole line for `boundary=` let `boundary=real; x="; boundary="fake"` choose
+ * the split, and every part behind `real` — an attachment included — vanished.
+ */
+function params(value: string): Param[] {
+  const out: Param[] = []
+  const head = /;\s*([^\s=;"]+)\s*=\s*/g
+  const plain = /[^"\\]*/y
+  const bare = /[^;\s]*/y
+  for (let m = head.exec(value); m; m = head.exec(value)) {
+    let at = head.lastIndex
+    let text = ''
+    if (value[at] === '"') {
+      // By hand, not `"((?:[^"\\]|\\.)*)"`: that regex pushes a backtrack entry
+      // per character and overflows V8's stack on a 20 MB header, which the
+      // scan it replaced never did. A quote left open runs to the end.
+      at++
+      for (;;) {
+        plain.lastIndex = at
+        plain.test(value)
+        text += value.slice(at, plain.lastIndex)
+        at = plain.lastIndex
+        if (value[at] !== '\\' || at + 1 >= value.length) break
+        text += value[at + 1]
+        at += 2
+      }
+      if (value[at] === '"') at++
+    } else {
+      bare.lastIndex = at
+      bare.test(value)
+      text = value.slice(at, bare.lastIndex)
+      at = bare.lastIndex
+    }
+    out.push({ name: m[1].toLowerCase(), value: text })
+    head.lastIndex = at
+  }
+  return out
+}
+
+/**
+ * A parameter out of a Content-Type / Content-Disposition line; the first one
+ * of that name, as Python's email package reads it.
  *
  * RFC 2231 first, because that is what decides the name the victim's client
  * shows. `filename="invoice.pdf"; filename*=UTF-8''invoice.pdf.exe` is a real
@@ -78,24 +127,22 @@ function headerValue(headers: HeaderField[], name: string): string {
  * across lines and is reassembled in order.
  */
 function param(value: string, key: string): string {
-  const extended = extendedParam(value, key)
-  if (extended) return extended
-  const quoted = new RegExp(`;\\s*${key}\\s*=\\s*"([^"]*)"`, 'i').exec(value)
-  if (quoted) return quoted[1]
-  const bare = new RegExp(`;\\s*${key}\\s*=\\s*([^;\\s]+)`, 'i').exec(value)
-  return bare ? bare[1] : ''
+  const all = params(value)
+  return extendedParam(all, key) || (all.find((p) => p.name === key)?.value ?? '')
 }
 
-function extendedParam(value: string, key: string): string {
+function extendedParam(all: Param[], key: string): string {
   const pieces: { index: number; text: string; encoded: boolean }[] = []
-  const re = new RegExp(`;\\s*${key}\\*(\\d+)?(\\*)?\\s*=\\s*(?:"([^"]*)"|([^;]+))`, 'gi')
-  for (const m of value.matchAll(re)) {
+  const pieceName = new RegExp(`^${key}\\*(\\d+)?(\\*)?$`)
+  for (const p of all) {
+    const m = pieceName.exec(p.name)
+    if (!m) continue
     pieces.push({
       index: m[1] ? Number(m[1]) : 0,
       // A continuation piece is percent-encoded only when its own name ends
       // with `*`; an unmarked piece is literal and must not be decoded.
       encoded: Boolean(m[2]) || m[1] === undefined,
-      text: (m[3] ?? m[4] ?? '').trim()
+      text: p.value.trim()
     })
   }
   if (!pieces.length) return ''
