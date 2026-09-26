@@ -24,6 +24,13 @@ export function makeInlineEdit(opts: InlineEditOpts): void {
   const save = safeAsync(async () => {
     if (saved) return
     saved = true
+    // A date with one segment half-typed or half-cleared reads '' just as a
+    // full clear does, but reports badInput. That is an edit left unfinished,
+    // not a clear: only emptying every segment clears the date.
+    if (inputType === 'date' && input.validity.badInput) {
+      input.replaceWith(display)
+      return
+    }
     const newVal = input.value.trim()
     if (newVal !== initial) {
       await onSave(newVal)
