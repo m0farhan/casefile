@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { diffTaskPatch } from './TaskDetailView'
+import { FakeEl, fakeEvent } from '../../test/fakeDom'
+import { diffTaskPatch, renderActivitySection } from './TaskDetailView'
 import { makeTask } from '../types'
 import type { Task } from '../types'
 
@@ -68,5 +69,56 @@ describe('diffTaskPatch', () => {
   it('identical clones diff to an empty patch (autosave becomes a no-op)', () => {
     const snapshot = makeTask({})
     expect(diffTaskPatch(snapshot, clone(snapshot))).toEqual({})
+  })
+})
+
+describe('renderActivitySection', () => {
+  const task = makeTask({
+    activity: [{ at: '2026-09-26T10:00:00.000Z', field: 'iocs', from: '', to: 'http://evil.example/login' }]
+  })
+  const mount = (collapsed = true) => {
+    const root = FakeEl.root()
+    const state = { collapsed }
+    renderActivitySection(root as unknown as HTMLElement, task, state)
+    return { root, state, header: root.find('.pm-activity-header'), list: root.find('.pm-activity-list') }
+  }
+
+  it('prints an indicator defanged, as it shows everywhere else', () => {
+    const text = mount().list.textContent
+    expect(text).toContain('hxxp://evil[.]example/login')
+    expect(text).not.toContain('http://evil.example')
+  })
+
+  it('the header is the one button: Enter or Space opens and closes the log', () => {
+    const { header, list, state } = mount()
+    const toggle = header.find('.pm-collapse-toggle')
+    expect(header.getAttribute('role')).toBe('button')
+    expect(header.getAttribute('tabindex')).toBe('0')
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    // One tab stop: the triangle inside is only a picture of the state.
+    expect(toggle.hasAttribute('tabindex')).toBe(false)
+    expect(toggle.getAttribute('aria-hidden')).toBe('true')
+
+    const enter = fakeEvent('keydown', { key: 'Enter' })
+    header.dispatchEvent(enter)
+    expect(enter.defaultPrevented).toBe(true)
+    expect(enter.propagationStopped).toBe(true)
+    expect(state.collapsed).toBe(false)
+    expect(list.hidden).toBe(false)
+    expect(header.getAttribute('aria-expanded')).toBe('true')
+
+    header.dispatchEvent(fakeEvent('keydown', { key: ' ' }))
+    expect(list.hidden).toBe(true)
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('a triangle click toggles once, and Shift+Enter is left to the modal save', () => {
+    const { header, list } = mount()
+    header.find('.pm-collapse-toggle').click()
+    expect(list.hidden).toBe(false)
+    const shiftEnter = fakeEvent('keydown', { key: 'Enter', shiftKey: true })
+    header.dispatchEvent(shiftEnter)
+    expect(shiftEnter.propagationStopped).toBe(false)
+    expect(list.hidden).toBe(false)
   })
 })

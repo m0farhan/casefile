@@ -1,5 +1,5 @@
 import { ItemView, Notice, WorkspaceLeaf, TFile, setIcon } from 'obsidian'
-import { iocSightings } from '../soc/ioc'
+import { activityValue, iocSightings } from '../soc/ioc'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from '../modals/DescriptionEditor'
@@ -34,19 +34,39 @@ export function renderActivitySection(
   state: { collapsed: boolean } = { collapsed: true }
 ): void {
   const section = container.createDiv('pm-modal-section pm-activity-section')
-  const header = section.createDiv('pm-modal-section-header pm-activity-header')
+  // The whole header is the one button: one tab stop, named by its heading.
+  const header = section.createDiv({
+    cls: 'pm-modal-section-header pm-activity-header',
+    attr: { role: 'button', tabindex: '0', 'aria-expanded': String(!state.collapsed) }
+  })
   // The toggle's own click bubbles to the header handler below — its onToggle
-  // stays a no-op so a triangle click doesn't toggle twice.
+  // stays a no-op so a triangle click doesn't toggle twice. It is only the
+  // picture of the state, so it leaves the tab order and the accessibility tree.
   const toggle = new CollapseToggle(header, { collapsed: state.collapsed, onToggle: () => {} })
+  toggle.el.removeAttribute('tabindex')
+  toggle.el.removeAttribute('role')
+  toggle.el.removeAttribute('aria-expanded')
+  toggle.el.setAttr('aria-hidden', 'true')
   toggle.el.setAttr('aria-label', state.collapsed ? 'Expand activity' : 'Collapse activity')
   header.createEl('h4', { text: `Activity (${task.activity.length})`, cls: 'pm-modal-section-title' })
   const list = section.createDiv('pm-activity-list')
   list.hidden = state.collapsed
-  header.addEventListener('click', () => {
+  const flip = () => {
     state.collapsed = !state.collapsed
+    header.setAttr('aria-expanded', String(!state.collapsed))
     toggle.el.toggleClass('is-collapsed', state.collapsed)
     toggle.el.setAttr('aria-label', state.collapsed ? 'Expand activity' : 'Collapse activity')
     list.hidden = state.collapsed
+  }
+  header.addEventListener('click', flip)
+  header.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    // A modified Enter belongs to whatever owns that shortcut (the modal's Shift+Enter save).
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+    e.preventDefault()
+    // Stops the board's own Enter, which would open the selected row as well.
+    e.stopPropagation()
+    flip()
   })
 
   if (!task.activity.length) {
@@ -59,7 +79,8 @@ export function renderActivitySection(
     row.createSpan({ cls: 'pm-activity-at', text: isoToLocalInput(e.at).replace('T', ' ') || e.at })
     const change = row.createSpan({ cls: 'pm-activity-change' })
     change.createSpan({ cls: 'pm-activity-field', text: `${e.field}:` })
-    change.appendText(` ${e.from || '—'} → ${e.to || '—'}`)
+    // Indicator values show defanged, as everywhere else; the log keeps them as recorded.
+    change.appendText(` ${activityValue(e.field, e.from) || '—'} → ${activityValue(e.field, e.to) || '—'}`)
   }
 }
 
@@ -315,7 +336,9 @@ export class TaskDetailView extends ItemView {
     const socBoard = config.boardType !== 'plain'
     renderSeverityBadge(
       header,
-      config.severities.find((s) => s.id === task.severity)
+      config.severities.find((s) => s.id === task.severity),
+      'solid',
+      task.severity
     )
     if (socBoard && task.issueType === 'incident') {
       // Registered chips unregister themselves: the shared 30s tick drops any
@@ -333,7 +356,8 @@ export class TaskDetailView extends ItemView {
     header.createDiv('pm-td-header-spacer')
     if (task.filePath) {
       const filePath = task.filePath
-      const noteBtn = header.createSpan({ cls: 'pm-td-note-btn' })
+      // A real button, so it takes focus and Enter/Space; clickable-icon keeps it an icon.
+      const noteBtn = header.createEl('button', { cls: 'pm-td-note-btn clickable-icon' })
       setIcon(noteBtn, 'file-text')
       noteBtn.setAttribute('aria-label', 'Open as note')
       noteBtn.addEventListener('click', () => {

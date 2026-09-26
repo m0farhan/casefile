@@ -299,7 +299,7 @@ export class TaskModal extends Modal {
     }
     // Severity shows on any task type; the SLA chip stays incident-only
     // (slaState also gates on issueType, so this is belt and braces).
-    renderSeverityBadge(crumb, sev)
+    renderSeverityBadge(crumb, sev, 'solid', this.task.severity)
     if (this.task.issueType === 'incident') {
       // Registered chips unregister themselves: the shared 30s tick drops any
       // chip whose element left the DOM, and both onClose and every render()
