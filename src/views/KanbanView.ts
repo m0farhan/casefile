@@ -3,7 +3,7 @@ import type PMPlugin from '../main'
 import type { Project, Task, TaskStatus, FilterState, ResolvedProjectConfig } from '../types'
 import { makeTask } from '../types'
 import { flattenTasks, totalLoggedHours } from '../store/TaskTreeOps'
-import { findEpicAncestor, findParentId } from '../store/TaskIndex'
+import { findEpicAncestor, findParentId, findTaskById } from '../store/TaskIndex'
 import { matchesFilter } from '../store/TaskFilter'
 import type { QueryCtx } from '../store/QueryParser'
 import { dueUrgency, getDefaultPriorityId, isTerminalStatus, safeAsync } from '../utils'
@@ -59,12 +59,35 @@ export function laneCreatePatch(groupBy: KanbanLaneGroup, laneKey: string): Part
   }
 }
 
+/**
+ * The card's plain-text description preview (240 characters at most).
+ * Fences are stripped over the whole text first: that pass is linear, and a
+ * quarantined alert paste must never be cut open mid-fence. Only then is the
+ * text cut down for the remaining passes.
+ * ponytail: 2000 characters bound the link regex, which is quadratic on a
+ * hostile run of '[' or '](' (a 120 KB alert paste took seconds per card).
+ */
+export function previewText(description: string): string | undefined {
+  const text = description
+    .replace(/```[\s\S]*?```/g, ' ')
+    .slice(0, 2000)
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!?\[([^[\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^[ \t]*[#>\-*+]+[ \t]+/gm, '')
+    .replace(/[*~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return text ? text.slice(0, 240) : undefined
+}
+
 export class KanbanView implements SubView {
   private dragTask: Task | null = null
   /** True while handleDrop is persisting, so dragend's snap-back render skips. */
   private dropInFlight = false
   /** Configuration in effect for this project, computed once per board render. */
   private config!: ResolvedProjectConfig
+  /** Set when ProjectView replaces this view: a body load finishing later must not paint over the next one. */
+  private destroyed = false
 
   constructor(
     private container: HTMLElement,
@@ -81,7 +104,14 @@ export class KanbanView implements SubView {
     }
   }
 
+  destroy(): void {
+    this.destroyed = true
+  }
+
   private renderBoard(): void {
+    // Every async path (body hydration, collapse, lanes, drop snap-backs)
+    // repaints through here, so one check covers them all.
+    if (this.destroyed) return
     this.config = this.plugin.store.configFor(this.project)
     setKanbanSocConfig({
       severities: this.config.severities,
@@ -107,10 +137,13 @@ export class KanbanView implements SubView {
     this.container.toggleClass('pm-kanban-view--lanes', groupBy !== 'none')
     this.renderLanesBar(groupBy)
 
-    const lanes = computeLanes(this.visibleTasks(), groupBy, {
-      epicOf: (id) => findEpicAncestor(this.project, id),
-      severities: this.config.severities
-    })
+    const lanes = computeLanes(this.visibleTasks(), groupBy, this.laneOpts())
+    // WIP limits count the whole status, not one lane's filtered slice: four
+    // cases split two and two across lanes still breach a limit of three.
+    const statusTotals = new Map<string, number>()
+    for (const t of this.candidateTasks()) {
+      if (!t.archived) statusTotals.set(t.status, (statusTotals.get(t.status) ?? 0) + 1)
+    }
 
     let lastBoard: HTMLElement | null = null
     for (const lane of lanes) {
@@ -144,6 +177,7 @@ export class KanbanView implements SubView {
         new KanbanColumn(board, {
           status,
           cards,
+          wipCount: statusTotals.get(status.id) ?? 0,
           collapsed: this.plugin.isKanbanColumnCollapsed(this.project, status.id),
           onToggleCollapse: safeAsync(async () => {
             await this.plugin.toggleKanbanColumnCollapsed(this.project, status.id)
@@ -166,7 +200,7 @@ export class KanbanView implements SubView {
             // the destination is exactly the gs-landed no-jump contract.
             if (!this.dropInFlight) this.renderBoard()
           },
-          onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before),
+          onDrop: (taskId, newStatus, before) => this.handleDrop(taskId, newStatus, before, lane.key),
           onInlineCreate: lanePatch
             ? (title) => this.handleInlineCreate(status.id, title, lanePatch, draftKey)
             : undefined,
@@ -265,6 +299,10 @@ export class KanbanView implements SubView {
     menu.showAtPosition({ x: activeWindow.innerWidth / 2 - 80, y: activeWindow.innerHeight / 3 })
   }
 
+  private laneOpts(): Parameters<typeof computeLanes>[2] {
+    return { epicOf: (id) => findEpicAncestor(this.project, id), severities: this.config.severities }
+  }
+
   /** Persisted per project alongside the filter, in settings.projectFilters. */
   private laneGroup(): KanbanLaneGroup {
     const v = this.plugin.settings.projectFilters[this.project.filePath]?.kanbanLane
@@ -343,18 +381,8 @@ export class KanbanView implements SubView {
   }
 
   private buildCardData(task: Task, showEpic: boolean): KanbanCardData {
-    let descriptionPreview: string | undefined
-    if (this.config.kanbanShowDescriptionPreview && task.description.trim()) {
-      const text = task.description
-        .replace(/```[\s\S]*?```/g, ' ')
-        .replace(/`([^`]*)`/g, '$1')
-        .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-        .replace(/^[ \t]*[#>\-*+]+[ \t]+/gm, '')
-        .replace(/[*~]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-      descriptionPreview = text ? text.slice(0, 240) : undefined
-    }
+    const descriptionPreview =
+      this.config.kanbanShowDescriptionPreview && task.description.trim() ? previewText(task.description) : undefined
 
     let parentTitle: string | undefined
     let parentKey: string | undefined
@@ -399,11 +427,8 @@ export class KanbanView implements SubView {
   }
 
   private findParentTask(taskId: string): Task | null {
-    for (const ft of flattenTasks(this.project.tasks)) {
-      const parent = ft.task
-      if (parent.subtasks.some((s) => s.id === taskId)) return parent
-    }
-    return null
+    const parentId = findParentId(this.project, taskId)
+    return parentId ? findTaskById(this.project, parentId) : null
   }
 
   private openTask(task: Task): void {
@@ -421,10 +446,23 @@ export class KanbanView implements SubView {
     menu.showAtMouseEvent(e)
   }
 
-  private async handleDrop(taskId: string, newStatus: TaskStatus, before: DropNeighbor | null): Promise<void> {
+  /**
+   * `laneKey` is the swimlane the drop landed in (absent for the Archive
+   * column). Lanes follow a field (severity, assignee, bucket, epic) and a
+   * drop never writes it: severity drives SLA clocks, and a stray drag must
+   * not re-rate, reassign or reparent a case.
+   */
+  private async handleDrop(
+    taskId: string,
+    newStatus: TaskStatus,
+    before: DropNeighbor | null,
+    laneKey?: string
+  ): Promise<void> {
     if (!this.dragTask || this.dragTask.id !== taskId) return
     // Capture now — dragend nulls this.dragTask before the guard's modal settles.
     const task = this.dragTask
+    const groupBy = this.laneGroup()
+    const crossLane = laneKey !== undefined && computeLanes([task], groupBy, this.laneOpts())[0]?.key !== laneKey
     // drop fires before dragend, so the flag is up before the snap-back check.
     this.dropInFlight = true
     try {
@@ -452,10 +490,16 @@ export class KanbanView implements SubView {
           this.renderBoard() // cancelled: snap the live-moved card back
           return
         }
-        // Captured before the write, for the undo below. ponytail: only status
-        // is restored — the drop path tracks no prior order position, and a
-        // reorder is a same-column drop that shows no notice anyway.
-        const prevStatus = task.status
+        const patch: Partial<Task> = { status: newStatus, ...extra }
+        // Captured before the write, for the undo below: every field the drop
+        // changes, including the verdict the guard added and the stamps the
+        // store sets beside a status change (completion date, incident
+        // response and resolution times) — an undone close must not leave the
+        // SLA clock stopped. ponytail: the order position is not restored —
+        // the drop path tracks no prior position, and a reorder is a
+        // same-column drop that shows no notice anyway.
+        const keys = [...Object.keys(patch), 'completed', 'respondedAt', 'resolvedAt'] as (keyof Task)[]
+        const prev: Partial<Task> = Object.fromEntries(keys.map((k) => [k, task[k]]))
         const wasArchived = task.archived
         // Drop out of Archive: unarchive first (the guard already passed), then
         // apply the target status through the normal path.
@@ -463,12 +507,12 @@ export class KanbanView implements SubView {
           await this.plugin.store.unarchiveTask(this.project, taskId)
           new Notice('Task unarchived')
         }
-        await this.plugin.store.updateTask(this.project, taskId, { status: newStatus, ...extra })
+        await this.plugin.store.updateTask(this.project, taskId, patch)
         const label = this.config.statuses.find((s) => s.id === newStatus)?.label ?? newStatus
         showUndoNotice(`Moved to ${label}`, async () => {
           // Same store path as the drop itself. Moving OUT of a terminal status
           // is already unguarded, so the verdict guard never re-prompts here.
-          await this.plugin.store.updateTask(this.project, taskId, { status: prevStatus })
+          await this.plugin.store.updateTask(this.project, taskId, prev)
           if (wasArchived) await this.plugin.store.archiveTask(this.project, taskId)
           await this.onRefresh()
         })
@@ -483,7 +527,12 @@ export class KanbanView implements SubView {
       // can't be persisted — skip the reorder, keeping the status change, and
       // say why the card snapped back instead of discarding the drop silently.
       // With subtasks hidden both cards are top-level, so the parents match (null).
-      if (before) {
+      if (crossLane) {
+        // The status change stands; the card returns to the lane its field
+        // puts it in, so the neighbour it was dropped beside is not its own.
+        const label = LANE_GROUPS.find((g) => g.id === groupBy)?.label ?? groupBy
+        new Notice(`Lanes follow the task's ${label.toLowerCase()} — edit the task to move it`)
+      } else if (before) {
         if (findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
           await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
         } else {

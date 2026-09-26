@@ -40,6 +40,9 @@ export interface DropNeighbor {
 export interface KanbanColumnProps {
   status: KanbanColumnStatus
   cards: KanbanCardData[]
+  /** Cards in this status across the whole board (every lane, no filter), checked
+   *  against the WIP limit. Absent = the column's own card count. */
+  wipCount?: number
   collapsed: boolean
   onToggleCollapse: () => void
   onCardClick: (task: Task) => void
@@ -83,7 +86,7 @@ export class KanbanColumn {
     badge.appendText(props.status.label)
 
     const headerRight = titleRow.createDiv('pm-kanban-col-header-right')
-    renderCount(headerRight, props.cards.length, props.status.wipLimit)
+    renderCount(headerRight, props.cards.length, props.status.wipLimit, props.wipCount)
     new IconButton(headerRight)
       .setIcon('chevron-left')
       .setTooltip('Collapse column')
@@ -240,7 +243,7 @@ export class KanbanColumn {
 
     const label = col.createSpan({ text: props.status.label, cls: 'pm-kanban-col-collapsed-label' })
     label.setCssStyles({ color: props.status.color })
-    renderCount(col, props.cards.length, props.status.wipLimit)
+    renderCount(col, props.cards.length, props.status.wipLimit, props.wipCount)
 
     col.addEventListener('click', () => props.onToggleCollapse())
     col.addEventListener('keydown', (e) => {
@@ -272,13 +275,23 @@ export class KanbanColumn {
   }
 }
 
-function renderCount(parent: HTMLElement, count: number, wipLimit: number | undefined): void {
-  const over = wipLimit !== undefined && count > wipLimit
-  const el = parent.createSpan({
-    text: over ? `${count} / ${wipLimit}` : String(count),
-    cls: 'pm-kanban-col-count'
-  })
-  if (over) el.addClass('pm-kanban-col-count--over')
+/**
+ * The column's card count, and the WIP limit when the whole status is over it.
+ * The first number is always the cards in this column, so it never contradicts
+ * what the lane shows; the status total rides beside it only when it differs.
+ */
+function renderCount(parent: HTMLElement, visible: number, wipLimit: number | undefined, wipCount = visible): void {
+  const over = wipLimit !== undefined && wipCount > wipLimit
+  const text = !over
+    ? String(visible)
+    : wipCount === visible
+      ? `${visible} / ${wipLimit}`
+      : `${visible} · ${wipCount} / ${wipLimit}`
+  const el = parent.createSpan({ text, cls: 'pm-kanban-col-count' })
+  if (over) {
+    el.addClass('pm-kanban-col-count--over')
+    el.setAttr('title', `${wipCount} in this status across the board (all lanes, no filter) — WIP limit ${wipLimit}`)
+  }
 }
 
 /**
