@@ -669,19 +669,38 @@ button.pm-verdict-cancel:hover {
 .pm-phish-view .pm-att-image {
   max-height: 60vh;
 }
+/* Wraps in a narrow pane. The five buttons need about 520px, and a row that
+   does not wrap spills past its START edge, which no scroll can reach: below
+   that width Reset and Load .eml were off the pane and could not be clicked. */
 .pm-phish-view > .pm-modal-btn-row {
   flex: 0 0 auto;
+  flex-wrap: wrap;
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--gs-hairline);
 }
+/* Which file is being analysed while the paste box is empty; nothing when the
+   box holds the message. A file name with no spaces breaks rather than
+   running under the pane's hidden overflow. */
+.pm-phish-view > .pm-phish-loaded {
+  flex: 0 0 auto;
+  overflow-wrap: break-word;
+}
+.pm-phish-view > .pm-phish-loaded:empty {
+  display: none;
+}
 
-/* The analysis is what gets read; the paste box is a doorway. */
+/* The analysis is what gets read; the paste box is a doorway.
+   A long unbroken value — a hash, a defanged host, an asserting server's name
+   — breaks rather than running past the card and the pane's edge, where it
+   was cut off. break-word, not anywhere: anywhere also lets a flex row squeeze
+   fixed words like "no time recorded" until they break mid-word. */
 .pm-headers-out {
   max-height: 54vh;
   overflow-y: auto;
   margin-top: 8px;
   padding-right: 4px;
+  overflow-wrap: break-word;
 }
 /* The same voice as every other section heading in this plugin — small,
    uppercase, muted. They were bright indigo with a rule under each, which made
@@ -736,9 +755,12 @@ button.pm-verdict-cancel:hover {
    is chosen from a value (a result word, an alignment boolean), never from the
    wording of a sentence. */
 /* Never broken inside itself. A result is one stated word, and a hop time is
-   one timestamp with its delay; in a narrow pane the ISO stamp used to split
-   at its hyphens into "2026-09-" over "21T09:18:40.000Z". The text beside it
-   is the thing that wraps now (min-width: 0 on the value lets it give way). */
+   one timestamp, with its delay when that is a few characters; in a narrow
+   pane the ISO stamp used to split at its hyphens into "2026-09-" over
+   "21T09:18:40.000Z". The text beside it is the thing that wraps now
+   (min-width: 0 on the value lets it give way). A hop that arrived EARLIER
+   than the one before carries a sentence, and that goes in .pm-hop-delay,
+   which wraps. */
 .pm-headers-result {
   color: var(--gs-ink-muted);
   font-family: var(--font-monospace);
@@ -752,6 +774,11 @@ button.pm-verdict-cancel:hover {
 }
 .pm-headers-warn {
   color: var(--gs-yellow);
+}
+.pm-hop-delay {
+  color: var(--gs-yellow);
+  font-size: var(--font-ui-smaller);
+  min-width: 0;
 }
 /* The line that differs is yellow AND ruled. The rule is what stops a run of
    them reading as one undifferentiated block — it gives each line a left edge

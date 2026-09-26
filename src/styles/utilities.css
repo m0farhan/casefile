@@ -1,7 +1,9 @@
 /* -- Focus ring (single scoped rule; DS focus = ring, no outline) ---------- */
-.pm-root :is(button, [role='button'], a, input, select, textarea, [tabindex]):focus-visible,
-.pm-modal :is(button, [role='button'], a, input, select, textarea, [tabindex]):focus-visible,
-.pm-pop :is(button, [role='button'], a, input, select, textarea, [tabindex]):focus-visible {
+/* summary is here because Obsidian's `:focus { outline: none }` leaves a
+   disclosure that takes focus with no mark at all. */
+.pm-root :is(button, [role='button'], a, input, select, textarea, summary, [tabindex]):focus-visible,
+.pm-modal :is(button, [role='button'], a, input, select, textarea, summary, [tabindex]):focus-visible,
+.pm-pop :is(button, [role='button'], a, input, select, textarea, summary, [tabindex]):focus-visible {
   outline: none;
   box-shadow: var(--gs-focus-ring);
 }
