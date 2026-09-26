@@ -114,7 +114,7 @@ export class StyleguideView extends ItemView {
     const sec = this.section('Responder tokens', 'tokens')
     const swatchRows: [string, string[]][] = [
       ['surface ladder', ['--gs-canvas', '--gs-surface-1', '--gs-surface-2', '--gs-surface-3', '--gs-surface-4']],
-      ['ink scale', ['--gs-ink', '--gs-ink-muted', '--gs-ink-subtle', '--gs-ink-tertiary']],
+      ['ink scale', ['--gs-ink', '--gs-ink-muted', '--gs-ink-subtle', '--gs-ink-faint', '--gs-ink-tertiary']],
       ['hairlines', ['--gs-hairline', '--gs-hairline-strong', '--gs-hairline-3']],
       ['accent states', ['--gs-accent', '--gs-accent-hover', '--gs-accent-press', '--gs-accent-tint']]
     ]
@@ -168,6 +168,7 @@ export class StyleguideView extends ItemView {
     const pairs: [string, string, number][] = [
       ['--gs-ink', '--gs-surface-1', 4.5],
       ['--gs-ink-subtle', '--gs-surface-1', 4.5],
+      ['--gs-ink-faint', '--gs-surface-4', 4.5], // faintest text on the lightest surface
       ['--gs-accent-hover', '--gs-surface-1', 4.5], // accent TEXT color
       ['--gs-sev1', '--gs-surface-1', 4.5],
       ['--gs-sev2', '--gs-surface-1', 4.5],

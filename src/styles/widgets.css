@@ -202,16 +202,14 @@
   margin-bottom: 0;
 }
 .pm-modal-desc-preview a {
-  color: var(--interactive-accent);
+  color: var(--interactive-accent-hover);
   text-decoration: underline;
   cursor: pointer;
   transition: color 0.15s ease-out;
 }
+/* The accent is already the text colour, so hover steps up to full ink. */
 .pm-modal-desc-preview a:hover {
-  color: var(--interactive-accent-hover);
-}
-.pm-modal-desc-preview a.external-link {
-  color: var(--interactive-accent);
+  color: var(--gs-ink);
 }
 
 /* -- Note link suggest dropdown ------------------------------------- */
@@ -506,7 +504,7 @@ button.pm-comment-add:hover {
   text-anchor: middle;
 }
 .pm-report-week {
-  fill: var(--gs-ink-tertiary);
+  fill: var(--gs-ink-faint);
   font-size: 8px;
 }
 .pm-report-legend {
@@ -581,7 +579,7 @@ button.pm-comment-add:hover {
 }
 .pm-report-tile-detail {
   font-size: 11px;
-  color: var(--gs-ink-tertiary);
+  color: var(--gs-ink-faint);
 }
 .pm-report-empty {
   font-size: 12px;
@@ -627,13 +625,13 @@ button.pm-comment-add:hover {
 }
 .pm-evidence-size {
   font-size: 11px;
-  color: var(--gs-ink-tertiary);
+  color: var(--gs-ink-faint);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 .pm-evidence-missing {
   font-size: 11px;
-  color: var(--gs-ink-tertiary);
+  color: var(--gs-ink-faint);
   font-style: italic;
   flex-shrink: 0;
 }

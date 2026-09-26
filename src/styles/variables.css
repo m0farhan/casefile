@@ -45,6 +45,7 @@
   --gs-ink: #f7f8f8;
   --gs-ink-muted: #d0d6e0;
   --gs-ink-subtle: #8a8f98;
+  --gs-ink-faint: #7e828a; /* 4.52:1 on surface-4, more on the rest — the faintest TEXT ink */
   --gs-ink-tertiary: #62666d; /* 3.30:1 on surface-1 — decorative/disabled only */
   --gs-accent: #5e6ad2; /* 4.05:1 — fills/borders/focus only, never small text */
   --gs-accent-hover: #828fff; /* 6.64:1 — the accent for TEXT */
@@ -112,7 +113,7 @@
   --background-modifier-error: var(--gs-red-tint);
   --text-normal: var(--gs-ink);
   --text-muted: var(--gs-ink-subtle);
-  --text-faint: var(--gs-ink-tertiary);
+  --text-faint: var(--gs-ink-faint);
   --text-accent: var(--gs-accent-hover);
   --text-accent-hover: var(--gs-accent-hover);
   --text-on-accent: #ffffff;

@@ -47,7 +47,7 @@
 .pm-bulk-bar-count {
   font-size: 12px;
   font-weight: 600;
-  color: var(--interactive-accent);
+  color: var(--interactive-accent-hover);
   padding-right: 4px;
 }
 
@@ -212,7 +212,7 @@ button.pm-chip-btn--active:hover {
   line-height: 1.4;
 }
 .pm-task-title-text:hover {
-  color: var(--interactive-accent);
+  color: var(--interactive-accent-hover);
 }
 
 .pm-table-tags {
