@@ -3,10 +3,21 @@ import type PMPlugin from './main'
 import { type PMSettings, type Project, type SlaPolicy, type StatusConfig, DEFAULT_SETTINGS, makeId } from './types'
 import { flattenTasks } from './store/TaskTreeOps'
 import { getTaskNotesApi, importTaskNotesPalettes, isTaskNotesInstalled } from './integrations/tasknotes'
-import { renderPriorityListEditor, renderStatusListEditor, statusFallback } from './ui/PaletteListEditor'
+import {
+  moveItem,
+  renderPriorityListEditor,
+  renderStatusListEditor,
+  statusFallback,
+  wireRowDragReorder
+} from './ui/PaletteListEditor'
 import { confirmDialog } from './ui/ModalFactory'
 import { IconButton } from './ui/primitives/IconButton'
+import { IconPickerModal, iconLabel } from './ui/IconPickerModal'
+import { setAlertKindDerivation } from './ui/composites/issueMeta'
+import { categoryForTags, missingBuiltInKinds } from './soc/alertCategory'
 import { unmatchableAssetRules } from './soc/ioc'
+import { safeColor } from './store'
+import { safeAsync } from './utils'
 
 export type { PMSettings }
 export { DEFAULT_SETTINGS }
@@ -355,6 +366,73 @@ export class PMSettingTab extends PluginSettingTab {
           this.renderVerdictList(verdictContainer)
         })
     )
+
+    // ── Alert kinds ───────────────────────────────────────────────────────────
+    new Setting(containerEl).setName('Alert kinds').setHeading()
+    containerEl.createEl('p', {
+      cls: 'pm-settings-desc',
+      text:
+        'What kind of alert an incident is, shown as its icon on the board, in the table and on the case. A ' +
+        'case records its kind as a tag: the tag ID, the label or any match word. The list order is ' +
+        'precedence: when a case matches several kinds, the first one wins. Changing a tag ID or deleting a ' +
+        'kind never edits a case: its tags stay, and a tag no kind answers to any more just stops counting as one.'
+    })
+
+    new Setting(containerEl)
+      .setName('Derive the alert kind from the title')
+      .setDesc(
+        'An incident with no kind tag shows the kind its title names, faded and ringed with a dashed line, ' +
+          'and its tooltip gives the word that matched. Nothing is written to the case: set its alert kind to ' +
+          'record one.'
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.deriveAlertKind).onChange(async (v) => {
+          this.plugin.settings.deriveAlertKind = v
+          setAlertKindDerivation(v)
+          await this.plugin.saveSettings()
+          this.plugin.refreshProjectViews()
+        })
+      )
+
+    const kindsContainer = containerEl.createDiv('pm-settings-statuses')
+    this.renderAlertKindList(kindsContainer)
+
+    new Setting(containerEl).addButton((btn) =>
+      btn
+        .setButtonText('+ add kind')
+        .setCta()
+        .onClick(() => {
+          this.plugin.settings.alertCategories.push({
+            id: 'kind-' + makeId().slice(0, 6),
+            label: 'New kind',
+            color: '#8a94a0',
+            icon: 'tag',
+            match: []
+          })
+          this.kindsChanged()
+          this.renderAlertKindList(kindsContainer)
+        })
+    )
+
+    new Setting(containerEl)
+      .setName('Add missing built-in kinds')
+      .setDesc(
+        'Adds each kind the plugin ships that your list lacks, such as one added in an update, at the end of ' +
+          'the list. Kinds already in the list are left exactly as they are.'
+      )
+      .addButton((btn) =>
+        btn.setButtonText('Add missing kinds').onClick(() => {
+          const missing = missingBuiltInKinds(this.plugin.settings.alertCategories)
+          if (!missing.length) {
+            new Notice('Every built-in kind is already in the list.')
+            return
+          }
+          this.plugin.settings.alertCategories.push(...missing)
+          this.kindsChanged()
+          this.renderAlertKindList(kindsContainer)
+          new Notice(`Added at the end of the list: ${missing.map((c) => c.label).join(', ')}.`)
+        })
+      )
 
     // ── Incident response targets (SLA policies) ──────────────────────────────
     new Setting(containerEl).setName('Incident response targets').setHeading()
@@ -841,6 +919,149 @@ export class PMSettingTab extends PluginSettingTab {
       onChanged: () => void this.plugin.saveSettings(),
       confirmDelete: (item) => this.confirmPaletteDelete('verdict', item),
       onDeleted: (deleted) => void this.remapOrphanTasks('verdict', deleted)
+    })
+  }
+
+  /** Kinds change what every board draws, so the open boards are redrawn too. */
+  private kindsChanged(): void {
+    void this.plugin.saveSettings()
+    this.plugin.refreshProjectViews()
+  }
+
+  /**
+   * One card per alert kind: drag handle, icon, label, tag ID, colour, move
+   * up/down (the order is match precedence) and delete, with the match words
+   * on a line of their own. Edits save on commit (change), like the palettes.
+   */
+  private renderAlertKindList(container: HTMLElement): void {
+    container.empty()
+    const kinds = this.plugin.settings.alertCategories
+    const rerender = (): void => this.renderAlertKindList(container)
+    kinds.forEach((kind, i) => {
+      const card = container.createDiv('pm-settings-template')
+      const head = card.createDiv('pm-settings-status-row')
+      wireRowDragReorder(head, i, kinds, () => {
+        this.kindsChanged()
+        rerender()
+      })
+
+      const icon = new IconButton(head)
+        .setIcon(kind.icon)
+        .setTooltip(`Icon: ${iconLabel(kind.icon) || 'none'}. Choose another`)
+        .onClick(() =>
+          new IconPickerModal(this.app, (id) => {
+            kind.icon = id
+            this.kindsChanged()
+            rerender()
+          }).open()
+        )
+      icon.el.setCssStyles({ color: kind.color })
+
+      const label = head.createEl('input', {
+        type: 'text',
+        value: kind.label,
+        cls: 'pm-settings-status-label',
+        attr: { 'aria-label': 'Label' }
+      })
+      label.addEventListener('change', () => {
+        const next = label.value.trim()
+        if (!next) {
+          label.value = kind.label
+          return
+        }
+        kind.label = next
+        this.kindsChanged()
+      })
+
+      const id = head.createEl('input', {
+        type: 'text',
+        value: kind.id,
+        cls: 'pm-settings-status-label',
+        attr: { 'aria-label': 'Tag ID, written on a case when you set this kind' }
+      })
+      id.addEventListener('change', () => {
+        // The id is the tag written on the case, so it must be one: no spaces,
+        // no leading #. Nor a word another kind answers to (its id, label or a
+        // match word): the tag would then read as whichever kind comes first,
+        // and picking this kind could show the other.
+        const next = id.value.trim().replace(/^#+/, '')
+        const other = categoryForTags(
+          [next],
+          kinds.filter((k) => k !== kind)
+        )
+        if (!next || /\s/.test(next) || other) {
+          id.value = kind.id
+          new Notice(
+            other
+              ? `Not saved: the kind "${other.label}" already answers to "${next}".`
+              : 'Not saved: a tag ID needs at least one character and no spaces.'
+          )
+          return
+        }
+        kind.id = next
+        id.value = next
+        this.kindsChanged()
+      })
+
+      const color = head.createEl('input', { type: 'color', value: kind.color, attr: { 'aria-label': 'Colour' } })
+      color.addEventListener('change', () => {
+        kind.color = safeColor(color.value, '#8a94a0')
+        this.kindsChanged()
+        rerender()
+      })
+
+      // Drag is mouse-only; these are the keyboard and touch route to the same move.
+      for (const [glyph, tip, to] of [
+        ['chevron-up', 'Move up', i - 1],
+        ['chevron-down', 'Move down', i + 1]
+      ] as const) {
+        const btn = new IconButton(head)
+          .setIcon(glyph)
+          .setTooltip(tip)
+          .onClick(() => {
+            if (!moveItem(kinds, i, to)) return
+            this.kindsChanged()
+            rerender()
+          })
+        // Hidden, not left out, so the columns stay lined up at the ends.
+        if (to < 0 || to >= kinds.length) btn.el.setCssStyles({ visibility: 'hidden' })
+      }
+
+      new IconButton(head)
+        .setIcon('x')
+        .setTooltip('Remove')
+        .onClick(
+          safeAsync(async () => {
+            const ok = await confirmDialog(
+              this.app,
+              `Delete the "${kind.label}" kind? No case is edited: cases tagged "${kind.id}" keep the tag and ` +
+                'stop showing its icon, and titles are no longer read for its words.'
+            )
+            // Found again: the list may have changed while the question was open.
+            const at = kinds.indexOf(kind)
+            if (!ok || at < 0) return
+            kinds.splice(at, 1)
+            this.kindsChanged()
+            rerender()
+          })
+        )
+
+      const matchRow = card.createDiv('pm-settings-member-row')
+      matchRow.createSpan({ cls: 'pm-settings-complete-text', text: 'Match words' })
+      const match = matchRow.createEl('input', {
+        type: 'text',
+        value: kind.match.join(', '),
+        attr: { 'aria-label': 'Match words, comma separated' }
+      })
+      match.placeholder = 'Comma separated'
+      match.addEventListener('change', () => {
+        kind.match = match.value
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean)
+        match.value = kind.match.join(', ')
+        this.kindsChanged()
+      })
     })
   }
 

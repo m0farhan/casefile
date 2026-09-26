@@ -1,12 +1,13 @@
 import type { App } from 'obsidian'
 import { TFile } from 'obsidian'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeFakeApp, type FakeVault } from '../test/fakeVault'
 import type PMPlugin from './main'
 import { PMSettingTab } from './settings'
 import { ProjectStore } from './store'
 import { parseFrontmatter } from './store/YamlParser'
-import { DEFAULT_SETTINGS, makeTask, type PMSettings, type StatusConfig } from './types'
+import { DEFAULT_ALERT_CATEGORIES, DEFAULT_SETTINGS, makeTask, type PMSettings, type StatusConfig } from './types'
+import { setAlertKindDerivation, shownAlertKind } from './ui/composites/issueMeta'
 import { confirmDialog } from './ui/ModalFactory'
 
 const notices: string[] = []
@@ -28,6 +29,12 @@ vi.mock('obsidian', async (importOriginal) => {
           }
         }
         if (p === 'getValue') return () => t.value
+        if (p === 'onClick') {
+          return (fn: unknown) => {
+            t.clicked = fn
+            return proxy
+          }
+        }
         if (p === 'onChange') {
           return (fn: unknown) => {
             t.changed = fn
@@ -79,7 +86,10 @@ vi.mock('obsidian', async (importOriginal) => {
   class AbstractInputSuggest {
     onSelect(): void {}
   }
-  return { ...real, Setting, PluginSettingTab, Notice, AbstractInputSuggest, getIconIds: () => [] }
+  class FuzzySuggestModal {
+    setPlaceholder(): void {}
+  }
+  return { ...real, Setting, PluginSettingTab, Notice, AbstractInputSuggest, FuzzySuggestModal, getIconIds: () => [] }
 })
 vi.mock('./ui/ModalFactory', () => ({ confirmDialog: vi.fn<() => Promise<boolean>>() }))
 
@@ -154,6 +164,7 @@ function makeTab(settings: PMSettings): { tab: PMSettingTab; store: ProjectStore
     settings,
     store,
     saveSettings: vi.fn<() => Promise<void>>(async () => {}),
+    refreshProjectViews: vi.fn<() => void>(),
     getSecret: () => ''
   } as unknown as PMPlugin
   return { tab: new PMSettingTab(app as unknown as App, plugin), store, vault }
@@ -161,6 +172,7 @@ function makeTab(settings: PMSettings): { tab: PMSettingTab; store: ProjectStore
 
 type Private = {
   renderStatusList(el: HTMLElement): void
+  renderAlertKindList(el: HTMLElement): void
   renderSlaRows(): void
   slaContainer: HTMLElement | null
 }
@@ -284,5 +296,102 @@ describe('auto-archive days', () => {
     field.value = '30'
     input.on.change?.()
     expect(settings.autoArchiveDays).toBe(30)
+  })
+})
+
+describe('alert kinds', () => {
+  const kinds = () => DEFAULT_ALERT_CATEGORIES.map((c) => ({ ...c, match: [...c.match] }))
+  const setting = (name: string): Record<string, unknown> => {
+    const found = built.find((b) => b.name === name)?.comp
+    if (!found) throw new Error(`no ${name} setting`)
+    return found
+  }
+
+  afterEach(() => setAlertKindDerivation(true))
+
+  it("adds only the missing built-in kinds, and keeps the analyst's edits", () => {
+    const own = kinds().filter((c) => c.id !== 'suspicious-connection')
+    own[0].icon = 'mail-warning'
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: own }
+    const { tab } = makeTab(settings)
+    tab.display()
+    const add = setting('Add missing built-in kinds').clicked as () => void
+    add()
+    expect(settings.alertCategories.map((c) => c.id)).toEqual(DEFAULT_ALERT_CATEGORIES.map((c) => c.id))
+    expect(settings.alertCategories[0].icon).toBe('mail-warning')
+    expect(notices).toEqual(['Added at the end of the list: Suspicious connection.'])
+    add()
+    expect(settings.alertCategories).toHaveLength(DEFAULT_ALERT_CATEGORIES.length)
+    expect(notices[1]).toBe('Every built-in kind is already in the list.')
+  })
+
+  it('the derive toggle reaches every issue icon and redraws the boards', async () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: kinds() }
+    const { tab } = makeTab(settings)
+    tab.display()
+    const title = { tags: [], title: 'SOC138 - Detected Suspicious Xls File', categories: settings.alertCategories }
+    expect(shownAlertKind(title)?.derivedFrom).toBe('xls')
+    await (setting('Derive the alert kind from the title').changed as (v: boolean) => Promise<void>)(false)
+    expect(settings.deriveAlertKind).toBe(false)
+    expect(shownAlertKind(title)).toBeUndefined()
+    expect((tab as unknown as { plugin: Record<string, unknown> }).plugin.refreshProjectViews).toHaveBeenCalled()
+  })
+
+  it('refuses a tag id another kind uses, or one with a space, and keeps the old one', () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: kinds() }
+    const { tab } = makeTab(settings)
+    const list = fakeEl()
+    ;(tab as unknown as Private).renderAlertKindList(list)
+    const idInput = list.kids[1].kids[0].kids.filter((k) => k.className === 'pm-settings-status-label')[1]
+    expect(idInput.value).toBe('malware')
+    idInput.value = 'Phishing'
+    idInput.on.change()
+    expect(settings.alertCategories[1].id).toBe('malware')
+    expect(idInput.value).toBe('malware')
+    expect(notices).toEqual(['Not saved: the kind "Phishing" already answers to "Phishing".'])
+    // A match word counts too: a 'macro' tag would read as Suspicious file.
+    idInput.value = 'macro'
+    idInput.on.change()
+    expect(settings.alertCategories[1].id).toBe('malware')
+    idInput.value = 'bad tag'
+    idInput.on.change()
+    expect(settings.alertCategories[1].id).toBe('malware')
+    idInput.value = '#malicious-code'
+    idInput.on.change()
+    expect(settings.alertCategories[1].id).toBe('malicious-code')
+  })
+
+  it('reads match words as a comma-separated list', () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: kinds() }
+    const { tab } = makeTab(settings)
+    const list = fakeEl()
+    ;(tab as unknown as Private).renderAlertKindList(list)
+    const match = list.kids[0].kids[1].kids[1]
+    match.value = ' lure ,, Spoofed Sender,'
+    match.on.change()
+    expect(settings.alertCategories[0].match).toEqual(['lure', 'Spoofed Sender'])
+  })
+
+  it('deletes a kind only once confirmed, and edits no case', async () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, alertCategories: kinds() }
+    const { tab, store } = makeTab(settings)
+    const board = await store.createProject('Queue', '')
+    await store.insertTask(board, makeTask({ title: 'Mail', issueType: 'incident', tags: ['phishing'] }))
+    const updateTasks = vi.spyOn(store, 'updateTasks')
+    const updateTask = vi.spyOn(store, 'updateTask')
+    ;(tab as unknown as Private).renderAlertKindList(fakeEl())
+    const remove = () => buttons.filter((b) => b.tip === 'Remove')[0].click()
+
+    vi.mocked(confirmDialog).mockResolvedValue(false)
+    remove()
+    await vi.waitFor(() => expect(confirmDialog).toHaveBeenCalledOnce())
+    expect(settings.alertCategories[0].id).toBe('phishing')
+
+    vi.mocked(confirmDialog).mockResolvedValue(true)
+    remove()
+    await vi.waitFor(() => expect(settings.alertCategories[0].id).toBe('malware'))
+    expect(vi.mocked(confirmDialog).mock.calls[1][1]).toMatch(/^Delete the "Phishing" kind\? No case is edited/)
+    expect(updateTasks).not.toHaveBeenCalled()
+    expect(updateTask).not.toHaveBeenCalled()
   })
 })
