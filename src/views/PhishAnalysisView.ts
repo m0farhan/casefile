@@ -5,14 +5,19 @@ import { IMAGE_CAP, hexDump, imageDataUrl, previewKind, previewText } from '../s
 import {
   type EmbeddedImage,
   type PhishReport,
+  STRUCTURE_LIST_CAP,
   analysePhishing,
+  caseIocs,
+  entriesRead,
+  flaggedEntries,
+  flaggedOleEntries,
   formatPhishReport,
+  innerFileFacts,
   relationshipType
 } from '../soc/phish'
-import { defangIoc, extractIocsFromText } from '../soc/ioc'
-import { entryNote } from '../soc/ooxml'
+import { defangIoc, visibleName } from '../soc/ioc'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
-import { type Ioc, makeTask } from '../types'
+import { makeTask } from '../types'
 import { TaskFileNameConflictError } from '../store/ProjectStore'
 import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
 
@@ -68,8 +73,13 @@ export class PhishAnalysisView extends ItemView {
     return PHISH_VIEW_TYPE
   }
 
+  /**
+   * Titled from the subject once there is one: every analyser tab used to be
+   * "Phishing analysis", so two open side by side could not be told apart.
+   */
   getDisplayText(): string {
-    return 'Phishing analysis'
+    const subject = this.report ? subjectOf(this.report) : ''
+    return subject ? `Phish: ${tabTitle(subject)}` : 'Phishing analysis'
   }
 
   getIcon(): string {
@@ -124,6 +134,11 @@ export class PhishAnalysisView extends ItemView {
       caseBtn.setDisabled(!report)
       iocBtn.setDisabled(!report?.indicators.length)
       this.render(out)
+      // Re-reads getDisplayText, so the tab takes the new subject — or goes
+      // back to "Phishing analysis" after Reset. obsidian.d.ts does not declare
+      // updateHeader, so it is looked for rather than assumed: on a build
+      // without it the tab keeps the title it had instead of the call throwing.
+      ;(this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.()
     })
     this.input = input
     this.refresh = refresh
@@ -200,25 +215,10 @@ export class PhishAnalysisView extends ItemView {
       new Notice('No boards yet. Create a board first.')
       return
     }
-    const subject = this.report.headers.identities.find((i) => i.label === 'Subject')?.value ?? ''
-    const title = subject && subject !== 'not recorded' ? subject : 'Reported phishing email'
-    // Built from the PARSED message, not the raw paste — the same set the
-    // Indicators panel and the copy button show, so the three cannot diverge.
-    const headerBlock = this.raw.split(/\n\s*\n/)[0] ?? ''
-    const iocs: Ioc[] = extractIocsFromText(`${headerBlock}\n${this.report.text}`, [])
-    const seen = new Set(iocs.map((i) => i.value.toLowerCase()))
-    for (const link of this.report.links) {
-      if (link.target && !seen.has(link.target.toLowerCase())) {
-        seen.add(link.target.toLowerCase())
-        iocs.push({ type: 'url', value: link.target, note: link.wrappedBy ? `unwrapped from ${link.wrappedBy}` : '' })
-      }
-    }
-    for (const attachment of this.report.attachments) {
-      if (attachment.sha256 && !seen.has(attachment.sha256)) {
-        seen.add(attachment.sha256)
-        iocs.push({ type: 'hash', value: attachment.sha256, note: `${attachment.filename} (hashed here)` })
-      }
-    }
+    const title = subjectOf(this.report) || 'Reported phishing email'
+    // Built from the PARSED message by the same code as the Indicators tab,
+    // so a lure a structure reader found inside a PDF is on the case too.
+    const iocs = caseIocs(this.report, this.raw)
     openProjectPicker(this.plugin, projects, (project) => {
       void (async () => {
         const config = this.plugin.store.configFor(project)
@@ -271,7 +271,7 @@ export class PhishAnalysisView extends ItemView {
       { id: 'links', label: `Links (${report.links.length})` },
       {
         id: 'attachments',
-        label: `Attachments (${report.attachments.length}${report.inlineImages.length ? `+${report.inlineImages.length}` : ''})`
+        label: `Attachments (${report.attachments.length}${report.inlineImages.length ? `, ${report.inlineImages.length} inline` : ''})`
       },
       { id: 'body', label: 'Body' },
       { id: 'indicators', label: `Indicators (${report.indicators.length})` }
@@ -373,9 +373,15 @@ export class PhishAnalysisView extends ItemView {
       for (const link of report.links) {
         const line = links.createDiv('pm-headers-link')
         // Defanged and inert: this is a phishing link and it is never clickable.
-        line.createDiv({ cls: 'pm-headers-ioc', text: link.target.replace(/\./g, '[.]') })
+        // The same defang as the report and the Indicators tab — bracketing only
+        // the dots left `http` live and the colon on any other scheme, so a
+        // link copied off this pane was not the inert string the report gives.
+        line.createDiv({ cls: 'pm-headers-ioc', text: visibleName(defangIoc(link.target, 'url')) })
         if (link.apexDomain && link.apexDomain !== link.host) {
-          line.createDiv({ cls: 'pm-headers-note', text: `domain ${link.apexDomain}` })
+          line.createDiv({
+            cls: 'pm-headers-note',
+            text: `domain ${visibleName(defangIoc(link.apexDomain, 'domain'))}`
+          })
         }
         if (link.wrappedBy) line.createDiv({ cls: 'pm-headers-note', text: `unwrapped from ${link.wrappedBy}` })
         for (const flag of link.flags) line.createDiv({ cls: 'pm-headers-flag', text: flag })
@@ -392,9 +398,12 @@ export class PhishAnalysisView extends ItemView {
     if (this.tab === 'attachments') {
       this.renderAttachments(section('Attachments'), report.attachments)
       // Apart from the real attachments: a signature logo among four files
-      // makes the mail read as heavier than it is.
+      // makes the mail read as heavier than it is. Only drawable pictures land
+      // here; a PDF sent inline is an attachment, so "inline" in the tab label
+      // always means an image. Nothing checks that the body uses them, so the
+      // heading says only what their own headers say.
       if (report.inlineImages.length) {
-        this.renderAttachments(section('Inline images — referenced by the body'), report.inlineImages)
+        this.renderAttachments(section('Inline images — marked inline by their own headers'), report.inlineImages)
       }
       return
     }
@@ -440,6 +449,11 @@ export class PhishAnalysisView extends ItemView {
   /**
    * Each attachment, with what it is and — where it is safe — what it looks like.
    *
+   * The card reads top down in the order the questions come: what it is (its
+   * declared type beside what its bytes begin as), what is odd about it, the
+   * hashes to look it up by, what was found inside it, and last whatever the
+   * readers drew or listed — which can run to screens.
+   *
    * A raster image is drawn from its own bytes as a data URL, which reaches
    * nothing and runs nothing. Everything else is read: SVG and HTML are shown
    * as source because they are documents a browser would execute, and anything
@@ -452,55 +466,71 @@ export class PhishAnalysisView extends ItemView {
     }
     for (const attachment of list) {
       const card = host.createDiv('pm-att-card')
-      card.createDiv({ cls: 'pm-att-name', text: attachment.filename })
-      card.createDiv({
-        cls: 'pm-headers-note',
-        text: `${attachment.contentType} · ${attachment.sha256 ? `${attachment.size.toLocaleString()} bytes` : 'size not recorded'}`
-      })
-      if (attachment.sha256) {
-        card.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${attachment.sha256}` })
-        card.createDiv({ cls: 'pm-headers-ioc', text: `SHA-1   ${attachment.sha1}` })
-        card.createDiv({ cls: 'pm-headers-note', text: 'hashes computed here, from the bytes in the file' })
-      } else {
-        card.createDiv({ cls: 'pm-headers-note', text: 'hashes not recorded — this part could not be decoded' })
-      }
-      if (attachment.sniffed) card.createDiv({ cls: 'pm-headers-note', text: `bytes begin as ${attachment.sniffed}` })
-      for (const fact of attachment.facts) card.createDiv({ cls: 'pm-headers-flag', text: fact })
-      for (const found of attachment.inside) {
-        card.createDiv({ cls: 'pm-headers-flag', text: `found inside the file: ${found}` })
-      }
+      card.createDiv({ cls: 'pm-att-name', text: visibleName(attachment.filename) })
+      // An undecoded part has no size and no first bytes, and its own fact says
+      // why, so the line shows neither rather than a "0 bytes" it never had.
+      const begins = attachment.sniffed ? ` · bytes begin as ${attachment.sniffed}` : ''
+      const size = attachment.sha256 ? `${attachment.size.toLocaleString()} bytes` : 'size not recorded'
+      card.createDiv({ cls: 'pm-headers-note', text: `${visibleName(attachment.contentType)}${begins} · ${size}` })
       if (isMessage(attachment)) {
         // The forwarded message's own headers — its Received chain, its
         // authentication results — are only analysed as headers in a tab of
         // their own. Nothing is fetched: the bytes are already in memory.
-        new ButtonComponent(card)
+        const open = new ButtonComponent(card)
           .setButtonText('Analyse this message in a new tab')
           .setClass('pm-att-open')
           .onClick(() => openPhishAnalysis(this.plugin, new TextDecoder().decode(attachment.bytes)))
+        setTooltip(
+          open.buttonEl,
+          'Open the attached message in its own analyser tab: its own headers, path, links and attachments. Nothing is fetched.'
+        )
       }
+      // Facts can quote the sender's own words (a declared type), so they are
+      // escaped as names are.
+      for (const fact of attachment.facts) card.createDiv({ cls: 'pm-headers-flag', text: visibleName(fact) })
+      if (attachment.sha256) {
+        hashRow(card, 'SHA-256', attachment.sha256)
+        hashRow(card, 'SHA-1', attachment.sha1)
+        hashRow(card, 'MD5', attachment.md5)
+        card.createDiv({ cls: 'pm-headers-note', text: 'hashes computed here, from the bytes in the file' })
+      }
+      // After the hashes: this list can hold a hundred lines, and it must never
+      // push the hashes off the screen.
+      cappedRows(
+        card,
+        attachment.inside.map((found) => ({
+          cls: 'pm-headers-flag',
+          text: `found inside the file: ${visibleName(found)}`
+        }))
+      )
       if (!this.renderStructure(card, attachment)) this.renderPreview(card, attachment)
     }
   }
 
   /**
-   * What the PDF or Office reader found, in the order an analyst needs it: the
-   * pictures the document shows the victim, then where it links, then what it
-   * holds. False when neither reader ran, so the caller falls back to the plain
-   * preview.
+   * What the PDF, ZIP or compound-file reader found, in the order the copied
+   * report prints it: what the reader found — names, links, flagged entries,
+   * external targets, the files inside — then the pictures the document shows
+   * the victim, then the reader's own notes. The pictures used to come first,
+   * and at up to 60vh each they pushed /OpenAction and the remote template
+   * below the fold. False when no reader ran, so the caller falls back to the
+   * plain preview.
+   *
+   * Every name here was written by the sender and is shown through
+   * visibleName, so a right-to-left override cannot reverse the sentence
+   * around it and a newline cannot draw a row for an entry that does not exist.
    */
   private renderStructure(card: HTMLElement, attachment: PhishReport['attachments'][number]): boolean {
-    const { pdf, office } = attachment
-    if (!pdf && !office) return false
+    const { pdf, office, ole } = attachment
+    if (!pdf && !office && !ole) return false
     const box = card.createDiv('pm-att-structure')
-    const images = pdf?.images ?? office?.images ?? []
-    for (const image of images) this.renderEmbedded(box, image)
-    if (!images.length) {
-      box.createDiv({ cls: 'pm-headers-note', text: 'No whole picture was found in this file to draw.' })
-    }
     if (pdf) {
+      // The report's words. /Encrypt is a name the scan matched in the bytes,
+      // not a resolved fact about the file; the reader's note below says what
+      // it may hide.
       box.createDiv({
         cls: 'pm-headers-note',
-        text: `PDF ${pdf.version || 'version not recorded'}${pdf.encrypted ? ' · /Encrypt present, so the scan below sees only what is outside the encryption' : ''}`
+        text: `PDF ${pdf.version || 'version not recorded'}${pdf.encrypted ? ' · /Encrypt present' : ''}`
       })
       if (pdf.markers.length) {
         box.createDiv({
@@ -508,51 +538,80 @@ export class PhishAnalysisView extends ItemView {
           text: `Names found: ${pdf.markers.map((m) => `${m.name} ×${m.count}`).join(', ')}`
         })
       }
-      for (const uri of pdf.uris) box.createDiv({ cls: 'pm-headers-ioc', text: `link (/URI) ${defangIoc(uri, 'url')}` })
+      cappedRows(
+        box,
+        pdf.uris.map((uri) => ({ cls: 'pm-headers-ioc', text: `link (/URI) ${visibleName(defangIoc(uri, 'url'))}` }))
+      )
     }
     if (office) {
-      for (const target of office.externalTargets) {
-        box.createDiv({
+      entryList(
+        box,
+        entriesRead(office.entries.length),
+        // Encryption sits with the method, before the name: the sender's text
+        // always ends the row, so nothing it writes can pass for a column.
+        office.entries.map(
+          (e) => `${sizeText(e.size)}\t${e.method}${e.encrypted ? ', encrypted' : ''}\t${visibleName(e.name)}`
+        )
+      )
+      cappedRows(
+        box,
+        flaggedEntries(office).map((f) => ({
           cls: 'pm-headers-flag',
-          text: `External target ${defangIoc(target.target, 'url')} — ${relationshipType(target.type)}, declared in ${target.from}`
-        })
-      }
-      for (const entry of office.entries) {
-        const note = entryNote(entry.name)
-        if (note) box.createDiv({ cls: 'pm-headers-flag', text: `${entry.name} — ${note}` })
-        if (entry.encrypted) {
-          box.createDiv({ cls: 'pm-headers-flag', text: `${entry.name} — encrypted, not readable here` })
-        }
-      }
-      // Native disclosure: the full list is there to check, but a .docx holds
-      // twenty ordinary parts and they should not push the findings off screen.
-      const all = box.createEl('details', { cls: 'pm-att-entries' })
-      all.createEl('summary', { text: `All ${office.entries.length} entries in the ZIP directory` })
-      all.createEl('pre', {
-        cls: 'pm-headers-pre',
-        text: office.entries
-          .map(
-            (e) =>
-              `${e.size === null ? 'size not recorded' : `${e.size.toLocaleString()} bytes`}\t${e.method}\t${e.name}`
-          )
-          .join('\n')
-      })
+          text: `${visibleName(f.name)} — ${f.why.join('; ')}`
+        }))
+      )
+      cappedRows(
+        box,
+        office.externalTargets.map((t) => ({
+          cls: 'pm-headers-flag',
+          text: `External target ${visibleName(defangIoc(t.target, 'url'))} — ${visibleName(relationshipType(t.type))}, declared in ${visibleName(t.from)}`
+        }))
+      )
+      // Flagged only where the bytes disagree with the name; a plain hash is a note.
+      cappedRows(
+        box,
+        office.files.map((f) => ({
+          cls: f.mismatch ? 'pm-headers-flag' : 'pm-headers-note',
+          text: `${visibleName(f.name)} — ${innerFileFacts(f)}`
+        }))
+      )
     }
-    for (const note of (pdf ?? office)?.notes ?? []) box.createDiv({ cls: 'pm-headers-note', text: note })
+    if (ole) {
+      entryList(
+        box,
+        entriesRead(ole.entries.length, 'the compound-file directory'),
+        ole.entries.map((e) => `${sizeText(e.size)}\t${e.type}\t${visibleName(e.name)}`)
+      )
+      cappedRows(
+        box,
+        flaggedOleEntries(ole).map((f) => ({
+          cls: 'pm-headers-flag',
+          text: `${visibleName(f.name)} (${f.type}) — ${f.why.join('; ')}`
+        }))
+      )
+    }
+    // Never for the compound-file reader: it lists names and opens no stream,
+    // so it has no pictures to draw — and no line saying it found none.
+    for (const image of pdf?.images ?? office?.images ?? []) this.renderEmbedded(box, image)
+    // A reader's note can name an entry, so it is escaped as a name is.
+    for (const note of [...(pdf?.notes ?? []), ...(office?.notes ?? []), ...(ole?.notes ?? [])]) {
+      box.createDiv({ cls: 'pm-headers-note', text: visibleName(note) })
+    }
     return true
   }
 
   /** One picture from inside a document — drawn only when its own bytes say it is a raster image. */
   private renderEmbedded(host: HTMLElement, image: EmbeddedImage): void {
+    const where = visibleName(image.where)
     host.createDiv({
       cls: 'pm-headers-note',
-      text: `Picture at ${image.where} · ${image.bytes.length.toLocaleString()} bytes`
+      text: `Picture at ${where} · ${image.bytes.length.toLocaleString()} bytes`
     })
-    host.createDiv({ cls: 'pm-headers-ioc', text: `SHA-256 ${image.sha256}` })
+    hashRow(host, 'SHA-256', image.sha256)
     const url =
       previewKind('', '', image.sniffed, image.bytes) === 'image' ? imageDataUrl(image.bytes, image.sniffed) : null
     if (url) {
-      host.createEl('img', { cls: 'pm-att-image', attr: { src: url, alt: `Picture at ${image.where}` } })
+      host.createEl('img', { cls: 'pm-att-image', attr: { src: url, alt: `Picture at ${where}` } })
       return
     }
     host.createDiv({
@@ -575,7 +634,7 @@ export class PhishAnalysisView extends ItemView {
       }
       card.createEl('img', {
         cls: 'pm-att-image',
-        attr: { src: url, alt: `Attachment ${attachment.filename}` }
+        attr: { src: url, alt: `Attachment ${visibleName(attachment.filename)}` }
       })
       // Said out loud, because "nothing is rendered" is this screen's promise
       // and an image on it looks like an exception to that promise.
@@ -670,4 +729,66 @@ export function openPhishAnalysis(plugin: PMPlugin, text?: string): void {
 /** A forwarded message, by its declared type or its name — the button only re-analyses bytes already here. */
 function isMessage(a: PhishReport['attachments'][number]): boolean {
   return a.bytes.length > 0 && (/^message\/rfc822$/i.test(a.contentType) || /\.eml$/i.test(a.filename))
+}
+
+/** The message's own Subject, or '' when it has none. */
+function subjectOf(report: PhishReport): string {
+  const subject = report.headers.identities.find((i) => i.label === 'Subject')?.value ?? ''
+  return subject === 'not recorded' ? '' : subject
+}
+
+/**
+ * A subject short enough for a tab: escaped, because the sender wrote it, and
+ * cut by code point, because a phishing subject often opens with an emoji and
+ * cutting by UTF-16 unit leaves half of one. Only the first 80 units are
+ * looked at: they hold at least 40 code points, and a subject can be megabytes.
+ */
+function tabTitle(subject: string): string {
+  const chars = Array.from(visibleName(subject.slice(0, 80)))
+  return chars.length > 40 ? `${chars.slice(0, 39).join('')}…` : chars.join('')
+}
+
+/**
+ * One hash per row, its label in a span that cannot be selected, so copying
+ * the row — or double-clicking the value — takes the hash and not the word
+ * in front of it.
+ */
+function hashRow(host: HTMLElement, label: string, value: string): void {
+  const row = host.createDiv('pm-headers-ioc')
+  row.createSpan({ cls: 'pm-att-hash-label', text: label })
+  row.createSpan({ text: value })
+}
+
+/**
+ * The first STRUCTURE_LIST_CAP rows, and the rest behind a native disclosure.
+ * Uncapped, a ZIP of two hundred encrypted programs was four hundred flagged
+ * lines and put the next attachment twenty-six screens down. Nothing is
+ * dropped: the rest is one click away.
+ */
+function cappedRows(host: HTMLElement, rows: { cls: string; text: string }[]): void {
+  for (const row of rows.slice(0, STRUCTURE_LIST_CAP)) host.createDiv(row)
+  if (rows.length <= STRUCTURE_LIST_CAP) return
+  const more = host.createEl('details', { cls: 'pm-att-entries' })
+  more.createEl('summary', { text: `${(rows.length - STRUCTURE_LIST_CAP).toLocaleString()} more` })
+  for (const row of rows.slice(STRUCTURE_LIST_CAP)) more.createDiv(row)
+}
+
+/**
+ * A directory's listing behind a native disclosure, headed by how many entries
+ * were READ from it — which is not how many it declares, when the listing
+ * stopped early; the reader's own note says why. A .docx holds twenty ordinary
+ * parts and they should not push the findings off screen. Nothing is drawn
+ * when nothing was read, rather than an empty list that looks like an empty
+ * archive.
+ */
+function entryList(host: HTMLElement, summary: string, rows: string[]): void {
+  if (!rows.length) return
+  const all = host.createEl('details', { cls: 'pm-att-entries' })
+  all.createEl('summary', { text: summary })
+  all.createEl('pre', { cls: 'pm-headers-pre', text: rows.join('\n') })
+}
+
+/** A declared size, or the words for its absence — never a made-up number. */
+function sizeText(size: number | null): string {
+  return size === null ? 'size not recorded' : `${size.toLocaleString()} bytes`
 }

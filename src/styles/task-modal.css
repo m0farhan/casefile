@@ -439,9 +439,16 @@
 }
 
 /* Modal buttons (footer + ModalFactory button rows). Secondary is the default;
-   .mod-cta (Obsidian's primary marker) gets the accent fill. */
+   .mod-cta (Obsidian's primary marker) gets the accent fill. The analyser's
+   "Analyse this message in a new tab" sits inside an attachment card, and on
+   core chrome alone it read as plain text: core fills a button with
+   --interactive-normal, which the token layer maps to --gs-surface-2 — the
+   card's own fill — and draws its edge with Obsidian's --input-shadow, which
+   the token layer leaves alone and which is near-invisible on this dark
+   surface. The hairline border here is what gives it an edge. */
 .pm-modal-footer button,
-.pm-modal-btn-row button {
+.pm-modal-btn-row button,
+button.pm-att-open {
   border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-m);
   background: var(--gs-surface-1);
@@ -455,7 +462,8 @@
     border-color 150ms ease-out;
 }
 .pm-modal-footer button:hover,
-.pm-modal-btn-row button:hover {
+.pm-modal-btn-row button:hover,
+button.pm-att-open:hover {
   border-color: var(--gs-hairline-strong);
 }
 .pm-modal-footer button.mod-cta,
@@ -930,7 +938,15 @@ button.pm-verdict-cancel:hover {
   font-size: var(--font-ui-smaller);
 }
 .pm-att-open {
-  margin-top: 8px;
+  margin: 8px 0 4px;
+}
+/* The hash label is furniture: fixed width so the three values line up, and
+   unselectable so copying a row copies the hash alone. */
+.pm-att-hash-label {
+  display: inline-block;
+  width: 8ch;
+  color: var(--gs-ink-subtle);
+  user-select: none;
 }
 .pm-att-hex {
   font-size: 11px;

@@ -49,26 +49,174 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ### Added — see inside an attachment without opening it
 
-- A PDF attachment shows the pictures it carries, drawn from their own bytes
-  only when those bytes say they are a JPEG, PNG or GIF. The QR-code PDF
-  phish is one page-sized picture with nothing else in it; it is now on
-  screen. Alongside it: the links the PDF declares (`/URI`, defanged), a count
-  of the action names in it (`/JavaScript`, `/OpenAction`, …), and where the
-  scan is blind, said in words.
-- A Word, Excel or PowerPoint attachment shows the pictures under `media/` —
-  the "enable content to view this document" banner is a picture — plus every
-  external target its relationships declare (a remote template, a linked
-  object), and any entry named like a macro project, an OLE object, an
-  external workbook link, an ActiveX control or an executable. The full entry
-  list sits behind a disclosure.
-- Links found this way reach the Indicators tab, Copy indicators and the case,
-  not only the attachment's card. A remote-template URL lives in a compressed
-  part, where the plain text scan never saw it.
+- A PDF attachment shows the JPEG pictures it carries, drawn from their own
+  bytes. A QR-code phish whose code is a JPEG is one page-sized picture with
+  nothing else in it; it is now on screen. Only JPEG (`/DCTDecode`) and
+  JPEG 2000 (`/JPXDecode`) image streams are lifted out, and a JPEG 2000
+  picture is listed and hashed but not drawn. A picture stored any other way —
+  `/FlateDecode`, which is how most PNG-sourced pictures are stored — is not
+  read, and when nothing was lifted out the card says which streams are, so an
+  empty space is not taken for a PDF without pictures. Alongside the pictures:
+  the links the PDF declares (`/URI`, escapes and hex strings decoded, then
+  defanged), a count of the action names in it (`/JavaScript`,
+  `/OpenAction`, …), and where the scan is blind, said in words.
+- A PDF with bytes in front of its `%PDF` header — a space, a byte-order mark —
+  is read as a PDF when the header is within its first kilobyte, as Acrobat
+  reads it. Its actions and hex-written links went unread before, with no
+  note; the card now says where the header is.
+- A Word, Excel or PowerPoint file, or any other ZIP, shows the PNG, JPEG and
+  GIF pictures it holds, wherever they sit in the archive — the "enable content
+  to view this document" banner is a picture. Alongside them: the external
+  targets its relationships declare (a remote template, a linked object), and
+  any entry named like a macro project, an OLE object, an external workbook
+  link, an ActiveX control, an embedded file, a program or script, a disk
+  image, or a web page, SVG or OneNote file. The entry list sits behind a
+  disclosure headed by how many entries were read from the ZIP directory — not
+  how many it declares, because a listing that stopped early is not the
+  archive's whole contents — and each entry says whether it is encrypted.
+- The other files inside a ZIP — in a plain archive every file that is not a
+  picture, in an Office document every part that is not XML, such as
+  `vbaProject.bin` — are typed from their own first bytes and, when read
+  whole, hashed. A program named `Invoice.pdf` inside `files.zip` is caught by
+  its bytes: "named .pdf but the bytes begin as Windows executable (MZ)". A
+  file too large to read whole gets what its first bytes are and no hash,
+  because a hash of part of a file is not that file's hash. Archives inside
+  archives are not opened.
+- The ZIP reader opens at most 24 entries and reads at most 32 MB out of one
+  file, and one message's attachments share 64 MB between them, read in order.
+  What it did not read is counted in a note that says why.
+- A legacy `.doc`, `.xls`, `.ppt` or `.msg` lists what its compound-file
+  directory holds, storages and streams, and names the entries that say what
+  they are: `Macros`, `VBA`, `_VBA_PROJECT`, `_VBA_PROJECT_CUR` and `PROJECT`
+  as VBA macro storage, `\x01Ole10Native` as an embedded OLE package,
+  `ObjectPool` as embedded objects. No stream is opened. The card used to show
+  only the 512-byte header, where no name ever appears.
+- A Windows shortcut, a OneNote file and a cabinet are recognised by their
+  headers, so a shortcut named `Invoice.pdf` says "named .pdf but the bytes
+  begin as Windows shortcut (LNK)". JPEG 2000 is recognised too, and named JP2
+  or J2K rather than JPEG, which it is not. A file whose name promises a
+  format (`.pdf`, `.docx`, `.jpg` and the rest), or whose declared type is a
+  PDF, and whose first bytes match no signature this knows, now says so
+  instead of saying nothing.
+- Plain ASCII text stored as UTF-16 — a shortcut's command line, the text of a
+  `.msg` or a OneNote file — is scanned for indicators too, even when it starts
+  at an odd byte.
+- Every attachment is scanned for indicators whole up to 2,000,000 bytes, and
+  past that at both ends — at most the first and the last 1,000,000 — with a
+  fact giving the exact bytes read and skipped. An HTML smuggling page puts a
+  megabyte of base64 first and its script last, and only the head used to be
+  read. A file read as text also gets a count of any script and markup names
+  in it —
+  `<script`, `atob(`, `new Blob`, `createObjectURL`, `.download`,
+  `window.location`, … — counted as text, not parsed, and the line says so.
+- The list of what was found inside a file stops at 100 and says how many more
+  there were, so the hundredth line is not read as the last.
+- A disk image (`.iso`, `.img`, `.vhd`, `.vhdx`) is called a disk image whose
+  files are not listed, not an executable. A `.zip` whose entries were listed
+  no longer also says its contents are not visible.
 - A forwarded message attached as `.eml` has "Analyse this message in a new
   tab", so its own Received chain and authentication results are read as
   headers rather than as body text.
 - Reset clears the message and its analysis to start another. Nothing is
   asked first: nothing here was saved, and a loaded `.eml` is untouched.
+
+### Changed — the attachment card
+
+- The card reads top down in the order the questions come: the name; the
+  declared type beside what the bytes begin as, and the size; the button to
+  analyse an attached message; the facts; SHA-256, SHA-1 and MD5, each on its
+  own row; what was found inside the file; then what the reader found, then
+  the pictures, then the reader's own notes. The pictures used to come first,
+  and at up to 60% of the window's height each they pushed `/OpenAction` and
+  the remote template out of view.
+- A hash's label cannot be selected, so copying a row copies the hash alone.
+  MD5 is on the card now, as it already was in the report.
+- Flagged entries, PDF links, external targets and inner files stop at 50
+  lines, on the card and in the copied report: the card keeps the rest behind
+  "N more", and the report counts them. The found-inside list does the same on
+  the card. A ZIP of 200 encrypted programs was some four hundred flagged
+  lines, and the next attachment was screens away.
+- The PDF line says "/Encrypt present", as the report does. It used to turn one
+  matched name into a claim about what the scan could see.
+- "No whole picture was found in this file to draw" is gone. It appeared on
+  files whose pictures the readers never look for, and headed every ZIP card
+  that had none. Each reader now says in its own terms what it reads.
+- Names the sender wrote — the attachment's own, entry and inner-file names,
+  relationship sources, picture locations — are shown with control, format
+  and direction characters written out as `<U+XXXX>`, on the card and in the
+  copied report. A right-to-left override could reverse the tool's own
+  sentence around a name, and a newline in an entry name drew a row for an
+  entry that does not exist.
+- "Analyse this message in a new tab" sits under the type line, has a
+  tooltip, and looks like a button. It was filled in the card's own colour
+  with no visible edge, so it read as plain text.
+- The tab is titled "Phish: " and the subject — escaped, and cut to 40
+  characters — so two analyses open side by side can be told apart. It goes
+  back to "Phishing analysis" after Reset.
+- The Attachments tab counts inline images in words — "Attachments (3,
+  1 inline)", not "(3+1)" — and their heading says only what is known: "Inline
+  images — marked inline by their own headers".
+
+### Fixed — evidence that never reached Indicators or the case
+
+- A PDF or Office file marked inline — Gmail gives ordinary attachments a
+  Content-ID, and Apple Mail sends a PDF as `inline; filename=` — was filed as
+  an inline image. Its lure reached neither Indicators, the report nor the
+  case, and when it was the only attachment the report's Attachments section
+  said None. Only a part whose own bytes are a picture this draws is an inline
+  image now. Anything else marked inline is an attachment, and says it was
+  "marked inline or given a Content-ID by its own headers". A part that would
+  not decode is an attachment too, and says "size not recorded", never
+  "0 bytes".
+- Create case carries the same indicators as the Indicators tab: the links the
+  PDF and Office readers found, and the hashes of inline parts and of the files
+  inside archives, each with a note naming the attachment it came from. It
+  used to leave out everything a structure reader found.
+- A remote template written as a UNC or `file://` path —
+  `\\files.corp-share.app@SSL\DavWWWRoot\t.dotm` — puts its host in
+  Indicators and the case. A path to a local or single-label name adds nothing.
+- A URL a PDF or Office reader found is no longer printed a second time on the
+  card as "found inside the file".
+
+### Fixed — reads that ran away or said the wrong thing
+
+- A 12 MB PDF built so that each failed search for `endstream` searched again
+  froze the analyser for tens of seconds. All the searches together are now one
+  pass over the file.
+- A small `.docx` whose directory points thousands of times at one compressed
+  stream froze it for tens of seconds, because pictures the reader threw away
+  were never charged to its budget. Every inflate now counts, kept or not.
+- A mail under 1 MB could make the archive reader hold 640 MB of pictures. That
+  is the 64 MB per message above, and a card whose pictures did not fit says
+  the budget was used up by what was read before it.
+- A picture inside a ZIP was judged whole by its last bytes: a broken stream
+  that happened to end like a GIF or a JPEG was drawn and hashed as the
+  picture, and a whole JPEG with bytes after its end was dropped. It is kept
+  now only when the bytes read match the size the directory declares.
+- The ZIP reader's skip notes gave the wrong reason and a wrong "first 24 of
+  N". A picture that did not fit the budget is said to be that, not damaged.
+- A JPEG 2000 stream found by searching for `endstream` was accepted on its
+  first bytes. It now has to begin and end as one.
+- The report said "the ZIP directory lists N entries" when no directory had
+  been found or the listing had stopped early. It says how many were read.
+
+### Changed — defanging, scanning and previews
+
+- Every scheme except http, https and ftp loses its colon when defanged —
+  `ms-msdt[:]`, `search-ms[:]`, `ms-word[:]` — where a list of six names used
+  to decide. An IPv6 address keeps its colons. A leading UNC `\\` becomes
+  `[\\]`, so a dotless `\\fileserver\share` is inert too. Refanging reverses
+  both.
+- The Links tab shows each link, and its domain, in the same defanged form as
+  the report and the Indicators tab — `hxxps://`, and `[:]` for the colon of
+  any other scheme. It only bracketed the dots.
+- An indicator scan stops a URL at a control character, `{`, `}` and a
+  backslash, so an RTF template `{\*\template http://evil.example/t.dotm}`
+  yields exactly that URL, and NUL padding no longer rides along on the end.
+- An RTF file or a script with a `#!` line previews as text when it is text,
+  not as a hex dump.
+- Reading a large paste does less work: the header reader no longer scans the
+  whole raw message for a list of indicators nothing used.
 
 ### Fixed
 
@@ -112,9 +260,9 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   only the ASCII dot, so `paypal。com.evil。co` — which Chromium resolves as
   paypal.com.evil.co — came back with the decoy marked and the real apex
   looking untouched. It now treats the ideographic, fullwidth and halfwidth
-  full stops as separators, strips bidi overrides and isolates, and
-  neutralises `javascript:`, `data:`, `vbscript:`, `file:`, `blob:` and `jar:`
-  by name. `data:text/html,<script>…</script>` previously passed through
+  full stops as separators, strips bidi overrides and isolates, and takes the
+  colon off `javascript:`, `data:` and every other scheme that is not a web
+  one. `data:text/html,<script>…</script>` previously passed through
   completely unchanged.
 - Remote-content scrubbing was a nine-tag list, and lists are what get
   bypassed: `<div style="background-image:url(…)">`, `<image>`, `<input
