@@ -311,18 +311,40 @@ export const TASK_SLUG_MAX_LENGTH = 60
  * Requested URL.md") — only filesystem-invalid characters are replaced and
  * trailing dots/spaces trimmed. Wikilink-hostile characters (#^[]|) are also
  * replaced so links to the note always resolve.
+ *
+ * The cap counts UTF-16 code units, as it always has, so an existing name never
+ * changes; only a cut that would split an emoji in half drops the dangling
+ * half, which the file system would otherwise store as U+FFFD under a name
+ * the vault never finds again.
+ *
+ * Two titles never get their exact name: "Archive" and "attachments" (in any
+ * case) would make the task's own folder the board's Archive or its parent's
+ * attachments folder, so deleting or renaming the task would take every
+ * archived case or the parent's evidence with it. They get " (task)"; the
+ * title itself is unchanged.
  */
 function taskFileName(title: string): string {
-  return sanitizeFileName(title)
-    .replace(/[#^[\]|]/g, '-')
-    .trim()
-    .slice(0, TASK_SLUG_MAX_LENGTH)
-    .replace(/[. ]+$/, '')
+  const name = dropHalfSurrogate(
+    sanitizeFileName(title)
+      .replace(/[#^[\]|]/g, '-')
+      .trim()
+      .slice(0, TASK_SLUG_MAX_LENGTH)
+  ).replace(/[. ]+$/, '')
+  return isReservedTaskName(name) ? `${name} (task)` : name
+}
+
+/** A basename that names a folder the plugin itself owns inside a task tree. */
+export function isReservedTaskName(basename: string): boolean {
+  return /^(?:archive|attachments)$/i.test(basename)
+}
+
+function dropHalfSurrogate(s: string): string {
+  return s.replace(/[\uD800-\uDBFF]$/, '')
 }
 
 /** The pre-2.3 lowercase-dashed form; resolveTaskPath uses it to leave old files in place. */
 export function taskSlugLegacy(title: string): string {
-  return sanitizeFileName(title).toLowerCase().replace(/\s+/g, '-').slice(0, TASK_SLUG_MAX_LENGTH)
+  return dropHalfSurrogate(sanitizeFileName(title).toLowerCase().replace(/\s+/g, '-').slice(0, TASK_SLUG_MAX_LENGTH))
 }
 
 /** Build the file path for a task .md file */

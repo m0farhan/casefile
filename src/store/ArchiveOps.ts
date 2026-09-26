@@ -29,7 +29,7 @@ export async function archiveTask(app: App, project: Project, taskId: string): P
   if (file instanceof TFile) {
     const oldPath = task.filePath
     await app.vault.rename(file, newPath)
-    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath)
+    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath, projectTaskFolder(project))
     // ponytail: nested subtask files ride along with the folder — archiving a
     // parent carries its subtree into Archive (cascade-archive on next load).
     if (carried) repointDescendantFiles(task, carried.from, carried.to)
@@ -59,7 +59,7 @@ export async function unarchiveTask(app: App, project: Project, taskId: string):
   if (file instanceof TFile) {
     const oldPath = task.filePath
     await app.vault.rename(file, newPath)
-    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath)
+    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath, projectTaskFolder(project))
     if (carried) repointDescendantFiles(task, carried.from, carried.to)
     task.filePath = newPath
     task.archived = false

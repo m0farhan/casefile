@@ -721,3 +721,23 @@ describe('a note that does not record when the case was created', () => {
     expect(hydrateProjectFromFrontmatter({ 'pm-project': true }, '', 'P/P.md', 'P').createdAt).toBe('')
   })
 })
+
+describe('task file names', () => {
+  it('never cut an emoji in half at the length cap', () => {
+    expect(taskFilePath('x'.repeat(59) + '\u{1F512} tail', 'Cases')).toBe(`Cases/${'x'.repeat(59)}.md`)
+    // A cut that falls between two emoji keeps the whole first one.
+    expect(taskFilePath('x'.repeat(58) + '\u{1F512}\u{1F512}', 'Cases')).toBe(`Cases/${'x'.repeat(58)}\u{1F512}.md`)
+  })
+
+  it('turn a tab or a line break into a space', () => {
+    expect(taskFilePath('a\tb', 'C')).toBe('C/a b.md')
+    expect(taskFilePath('Mid\nline', 'C')).toBe('C/Mid line.md')
+  })
+
+  it('never name a task after a folder the plugin owns, in any case', () => {
+    expect(taskFilePath('Archive', 'T')).toBe('T/Archive (task).md')
+    expect(taskFilePath('archive', 'T')).toBe('T/archive (task).md')
+    expect(taskFilePath('attachments', 'T')).toBe('T/attachments (task).md')
+    expect(taskFilePath('Archive notes', 'T')).toBe('T/Archive notes.md')
+  })
+})

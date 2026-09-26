@@ -2101,3 +2101,60 @@ describe('ProjectStore hand-edited frontmatter types', () => {
     expect((await store2.loadAllProjects('Projects')).map((p) => p.title)).toEqual(['2026', 'Alpha', 'Zeta'])
   })
 })
+
+describe('ProjectStore task titles that name a shared folder', () => {
+  it('a title with a line break gets a file name with a space', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Lines', 'Projects')
+    const task = await addNamed(store, project, 'Mid\nline')
+    expect(task.filePath).toBe('Projects/Lines/Tasks/Mid line.md')
+  })
+
+  it('renaming or deleting a root task named "Archive" leaves the archived cases archived', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Arch', 'Projects')
+    const closed = await addNamed(store, project, 'Closed case')
+    await store.archiveTask(project, closed.id)
+    const closedPath = 'Projects/Arch/Tasks/Archive/Closed case.md'
+    expect(closed.filePath).toBe(closedPath)
+
+    // A new task titled Archive never owns the Archive folder.
+    const fresh = await addNamed(store, project, 'Archive')
+    expect(fresh.filePath).toBe('Projects/Arch/Tasks/Archive (task).md')
+    await store.deleteTask(project, fresh.id)
+    expect(vault.getAbstractFileByPath(closedPath)).toBeInstanceOf(TFile)
+
+    // One written before the name was reserved: rename it, then delete it.
+    await vault.create(
+      'Projects/Arch/Tasks/Archive.md',
+      '---\npm-task: true\nid: "old-archive"\ntitle: "Archive"\n---\n'
+    )
+    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const reloaded = expectDefined(await store2.loadProject(pf))
+    await store2.updateTask(reloaded, 'old-archive', { title: 'Renamed' })
+    expect(vault.getAbstractFileByPath(closedPath)).toBeInstanceOf(TFile)
+    await store2.deleteTask(reloaded, 'old-archive')
+    expect(vault.getAbstractFileByPath(closedPath)).toBeInstanceOf(TFile)
+
+    const again = expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(pf))
+    expect(findTask(again.tasks, closed.id)?.archived).toBe(true)
+  })
+
+  it('deleting a subtask named "attachments" keeps its parent evidence', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Att', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await store.saveTaskAttachment(project, parent, 'pic.png', new ArrayBuffer(1))
+    const pic = 'Projects/Att/Tasks/Parent/attachments/pic.png'
+    await vault.create(
+      'Projects/Att/Tasks/Parent/attachments.md',
+      `---\npm-task: true\nid: "att"\ntitle: "attachments"\nparentId: "${parent.id}"\n---\n`
+    )
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const reloaded = expectDefined(await store2.loadProject(vault.getAbstractFileByPath(project.filePath) as TFile))
+    expect(findTask(reloaded.tasks, 'att')).not.toBeNull()
+    await store2.deleteTask(reloaded, 'att')
+    expect(vault.getAbstractFileByPath(pic)).toBeInstanceOf(TFile)
+  })
+})

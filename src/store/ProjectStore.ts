@@ -40,10 +40,11 @@ import {
   serializeProject,
   serializeTask,
   taskFilePath,
+  isReservedTaskName,
   taskSlugLegacy,
   TASK_SLUG_MAX_LENGTH
 } from './YamlSerializer'
-import { ensureFolder, moveTaskAttachmentFolder } from './vaultFs'
+import { ensureFolder, isSharedTaskFolder, moveTaskAttachmentFolder } from './vaultFs'
 import { caseFilePath, projectFileName, projectFolderForProjectPath, taskFolderForProjectPath } from './layout'
 import type { ImportNoteOptions, TaskSource } from './TaskSource'
 
@@ -93,6 +94,9 @@ function resolveTaskPath(task: Task, folder: string, previousPath: string | unde
   const previousBasename = previousPath.slice(previousPath.lastIndexOf('/') + 1).replace(/\.md$/, '')
   if (previousFolder !== folder) return desired
   if (previousBasename === desiredBasename) return previousPath
+  // A name written before "Archive" and "attachments" were reserved moves to
+  // the safe name on its next save instead of being kept.
+  if (isReservedTaskName(previousBasename)) return desired
   const oldSlug = taskSlugLegacy(task.title)
   if (previousBasename === oldSlug) return previousPath
   if (previousBasename === `${oldSlug}-${task.id.slice(0, 8)}`) return previousPath
@@ -802,7 +806,12 @@ export class ProjectStore implements TaskSource {
         // with the renamed note.
         this.markSelfWrite(this.taskFolder(previousPath))
         this.markSelfWrite(this.taskFolder(filePath))
-        const carried = await moveTaskAttachmentFolder(this.app, previousPath, filePath)
+        const carried = await moveTaskAttachmentFolder(
+          this.app,
+          previousPath,
+          filePath,
+          this.projectTaskFolder(project)
+        )
         if (carried) {
           // The folder move physically carried every descendant file — re-point
           // their in-memory paths, or the next save writes duplicates.
@@ -1254,7 +1263,7 @@ export class ProjectStore implements TaskSource {
       // The flat snapshot already lists every descendant, so trash this file only.
       // (Trashing a file also trashes its own folder, so a removed subtask's
       // nested descendants go with it; their later iterations no-op.)
-      if (removed.filePath) await this.deleteTaskFiles({ ...removed, subtasks: [] })
+      if (removed.filePath) await this.deleteTaskFiles(project, { ...removed, subtasks: [] })
     }
   }
 
@@ -1393,7 +1402,7 @@ export class ProjectStore implements TaskSource {
       task.filePath = dest
       this.markSelfWrite(this.taskFolder(oldPath))
       this.markSelfWrite(this.taskFolder(dest))
-      const carried = await moveTaskAttachmentFolder(this.app, oldPath, dest)
+      const carried = await moveTaskAttachmentFolder(this.app, oldPath, dest, this.projectTaskFolder(project))
       if (carried) {
         // A partially nested vault: this task's own folder carried its nested
         // descendants — re-point them before their own iterations run.
@@ -1572,7 +1581,7 @@ export class ProjectStore implements TaskSource {
       if (parentId) dirtyParents.add(parentId)
       const task = findTaskById(project, id)
       if (task) {
-        await this.deleteTaskFiles(task)
+        await this.deleteTaskFiles(project, task)
         indexRemoveSubtree(project, task)
       }
       deleteTaskFromTree(project.tasks, id)
@@ -1625,7 +1634,7 @@ export class ProjectStore implements TaskSource {
     const parentId = findParentId(project, taskId)
     const task = findTaskById(project, taskId)
     if (task) {
-      await this.deleteTaskFiles(task)
+      await this.deleteTaskFiles(project, task)
       indexRemoveSubtree(project, task)
     }
     deleteTaskFromTree(project.tasks, taskId)
@@ -1634,9 +1643,9 @@ export class ProjectStore implements TaskSource {
     await this.saveProject(project)
   }
 
-  private async deleteTaskFiles(task: Task): Promise<void> {
+  private async deleteTaskFiles(project: Project, task: Task): Promise<void> {
     for (const sub of task.subtasks) {
-      await this.deleteTaskFiles(sub)
+      await this.deleteTaskFiles(project, sub)
     }
     if (task.filePath) {
       const file = this.app.vault.getAbstractFileByPath(task.filePath)
@@ -1644,9 +1653,12 @@ export class ProjectStore implements TaskSource {
         this.markSelfWrite(task.filePath)
         await this.app.fileManager.trashFile(file)
       }
-      // Trash the task's own folder (its attachments) alongside the note.
-      const taskDir = this.app.vault.getAbstractFileByPath(this.taskFolder(task.filePath))
-      if (taskDir instanceof TFolder) {
+      // Trash the task's own folder (its attachments) alongside the note —
+      // unless that folder is shared: the board's Archive or a parent's
+      // attachments. Leaving a few files behind is the worst case of skipping.
+      const dir = this.taskFolder(task.filePath)
+      const taskDir = this.app.vault.getAbstractFileByPath(dir)
+      if (taskDir instanceof TFolder && !isSharedTaskFolder(this.app, this.projectTaskFolder(project), dir)) {
         await this.deleteFolderRecursive(taskDir)
       }
     }

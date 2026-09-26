@@ -104,9 +104,14 @@ export function truncateTitle(title: string, maxLen = 20): string {
   return title.slice(0, maxLen - 1) + '…'
 }
 
-/** Replace characters illegal in file names */
+/**
+ * Replace characters illegal in file names. Control characters (a tab or a
+ * line break pasted into a title) become a space, as in Obsidian's own rename:
+ * Windows refuses them in a file name, and a name with a line break cannot be
+ * linked to.
+ */
 export function sanitizeFileName(title: string): string {
-  return title.replace(/[\\/:*?"<>|]/g, '-')
+  return title.replace(/[\\/:*?"<>|]/g, '-').replace(/\p{Cc}/gu, ' ')
 }
 
 /** Look up a status config by id */
