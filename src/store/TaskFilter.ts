@@ -53,9 +53,11 @@ export function matchesFilter(
     }
     if (!evaluateQuery(compiled, task, ctx)) return false
   }
-  // Free-text words (non-field terms) keep the original substring semantics below.
-  const q = compiled.freeText.toLowerCase()
-  if (q) {
+  // Free-text words (non-field terms) are AND-ed like the terms: every word
+  // must hit some field on its own, so 'triage beacon' finds a case titled
+  // "Beacon triage". A quoted phrase arrives as one word and matches as one.
+  for (const word of compiled.freeWords) {
+    const q = word.toLowerCase()
     // Refanged on both sides so a pasted defanged indicator still hits the stored value.
     const iocQ = refangIoc(q)
     if (
@@ -137,8 +139,8 @@ function matchDueDateFilter(task: Task, filter: DueDateFilter, statuses: StatusC
     case 'overdue':
       return Temporal.PlainDate.compare(due, now) < 0 && !isTerminalStatus(task.status, statuses)
     case 'this-week': {
-      const daysToEnd = 7 - (now.dayOfWeek % 7)
-      const endOfWeek = now.add({ days: daysToEnd })
+      // dayOfWeek is 1 (Mon) … 7 (Sun), so on a Sunday the window is today alone.
+      const endOfWeek = now.add({ days: 7 - now.dayOfWeek })
       return Temporal.PlainDate.compare(due, now) >= 0 && Temporal.PlainDate.compare(due, endOfWeek) <= 0
     }
     case 'this-month':

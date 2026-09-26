@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Temporal } from '../dates'
 import {
   DEFAULT_PRIORITIES,
@@ -125,6 +125,19 @@ describe('matchesFilter', () => {
   it('treats no-date dueDateFilter correctly', () => {
     expect(matchesFilter(task({ id: 'a', due: '' }), filter({ dueDateFilter: 'no-date' }))).toBe(true)
     expect(matchesFilter(task({ id: 'b', due: '2026-01-01' }), filter({ dueDateFilter: 'no-date' }))).toBe(false)
+  })
+
+  it('"This week" on a Sunday is that Sunday alone, not the week after', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      // Local noon, so the date is Sunday 2026-08-02 in any time zone the suite runs in.
+      vi.setSystemTime(new Date(2026, 7, 2, 12))
+      const thisWeek = filter({ dueDateFilter: 'this-week' })
+      expect(matchesFilter(task({ id: 'a', due: '2026-08-02' }), thisWeek)).toBe(true)
+      expect(matchesFilter(task({ id: 'b', due: '2026-08-03' }), thisWeek)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -291,6 +304,20 @@ describe('query bar (JQL-lite) end to end', () => {
   it('free text alone still matches by title substring (regression)', () => {
     expect(match('beacon', incident)).toBe(true)
     expect(match('unrelated', incident)).toBe(false)
+  })
+
+  it('free words each match on their own, in any field and any order', () => {
+    expect(match('triage beacon', incident)).toBe(true)
+    expect(match('alice beacon', incident)).toBe(true)
+    expect(match('beacon unrelated', incident)).toBe(false)
+    // Quotes keep a phrase together: 'triage beacon' is not in the title as written.
+    expect(match('"triage beacon"', incident)).toBe(false)
+    expect(match('"beacon triage"', incident)).toBe(true)
+  })
+
+  it('constructor: is free text, not a field that matches everything', () => {
+    expect(match('constructor:zzz', incident)).toBe(false)
+    expect(match('constructor:!zzz', incident)).toBe(false)
   })
 
   it('resolves assignee:me through queryCtx.currentUser', () => {

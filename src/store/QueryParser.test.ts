@@ -23,15 +23,19 @@ function matches(query: string, overrides: Partial<Task>, c: QueryCtx = ctx()): 
 
 describe('parseQuery', () => {
   it('returns an empty query for empty and whitespace-only input', () => {
-    expect(parseQuery('')).toEqual({ terms: [], freeText: '' })
-    expect(parseQuery('   \n ')).toEqual({ terms: [], freeText: '' })
+    expect(parseQuery('')).toEqual({ terms: [], freeWords: [] })
+    expect(parseQuery('   \n ')).toEqual({ terms: [], freeWords: [] })
   })
 
-  it('parses field terms and collects the rest as free text', () => {
+  it('parses field terms and collects the rest as separate free words', () => {
     expect(parseQuery('status:done beacon triage')).toEqual({
       terms: [{ field: 'status', op: '=', value: 'done' }],
-      freeText: 'beacon triage'
+      freeWords: ['beacon', 'triage']
     })
+  })
+
+  it('keeps a quoted phrase as one free word', () => {
+    expect(parseQuery('"beacon triage" host').freeWords).toEqual(['beacon triage', 'host'])
   })
 
   it('parses negation and every comparison operator', () => {
@@ -46,7 +50,7 @@ describe('parseQuery', () => {
     expect(parseQuery('assignee:"John Smith" beacon').terms).toEqual([
       { field: 'assignee', op: '=', value: 'john smith' }
     ])
-    expect(parseQuery('assignee:"John Smith" beacon').freeText).toBe('beacon')
+    expect(parseQuery('assignee:"John Smith" beacon').freeWords).toEqual(['beacon'])
     expect(parseQuery('assignee:!"John Smith"').terms).toEqual([{ field: 'assignee', op: '!', value: 'john smith' }])
   })
 
@@ -61,16 +65,21 @@ describe('parseQuery', () => {
   it('treats an unknown field as free text (whole term)', () => {
     expect(parseQuery('flavor:sour status:done')).toEqual({
       terms: [{ field: 'status', op: '=', value: 'done' }],
-      freeText: 'flavor:sour'
+      freeWords: ['flavor:sour']
     })
+  })
+
+  it('never takes an inherited Object property for a field', () => {
+    expect(parseQuery('constructor:zzz')).toEqual({ terms: [], freeWords: ['constructor:zzz'] })
+    expect(parseQuery('toString:!zzz').terms).toEqual([])
   })
 
   it('never throws on garbage: lone colons, dangling ops, unclosed quotes', () => {
     expect(() => parseQuery(':')).not.toThrow()
     expect(() => parseQuery('::: a:b: !>=< "')).not.toThrow()
-    expect(parseQuery(':').freeText).toBe(':')
-    expect(parseQuery('status:').freeText).toBe('status:')
-    expect(parseQuery('status:!').freeText).toBe('status:!')
+    expect(parseQuery(':').freeWords).toEqual([':'])
+    expect(parseQuery('status:').freeWords).toEqual(['status:'])
+    expect(parseQuery('status:!').freeWords).toEqual(['status:!'])
     expect(parseQuery('assignee:"John').terms).toEqual([{ field: 'assignee', op: '=', value: 'john' }])
   })
 
@@ -245,6 +254,13 @@ describe('field matchers', () => {
     expect(matches('due:this-month', { due: '2026-08-01' })).toBe(false)
   })
 
+  it('due: this-week on a Sunday is that Sunday alone, not the week after', () => {
+    const sunday = ctx({ today: Temporal.PlainDate.from('2026-08-02') })
+    expect(matches('due:this-week', { due: '2026-08-02' }, sunday)).toBe(true)
+    expect(matches('due:this-week', { due: '2026-08-03' }, sunday)).toBe(false)
+    expect(matches('due:this-week', { due: '2026-08-05' }, sunday)).toBe(false)
+  })
+
   it('due: relative comparisons in d/w/m from ctx.today', () => {
     expect(matches('due:<7d', { due: '2026-08-05' })).toBe(true)
     expect(matches('due:<7d', { due: '2026-08-06' })).toBe(false)
@@ -268,6 +284,15 @@ describe('field matchers', () => {
     expect(matches('due:<7d', { due: '' })).toBe(false)
     expect(matches('due:garbage', { due: '2026-08-01' })).toBe(false)
     expect(matches('due:<garbage', { due: '2026-08-01' })).toBe(false)
+  })
+
+  it('due: an undated task is "not that date", like sev:! and due:!overdue', () => {
+    expect(matches('due:!2026-08-15', { due: '' })).toBe(true)
+    expect(matches('due:!7d', { due: '' })).toBe(true)
+    // Garbage still never matches, negated or not.
+    expect(matches('due:!garbage', { due: '' })).toBe(false)
+    expect(matches('due:!garbage', { due: '2026-08-01' })).toBe(false)
+    expect(matches('due:2026-08-15', { due: '' })).toBe(false)
   })
 
   it('flag: matches the impediment marker as boolean-as-string', () => {

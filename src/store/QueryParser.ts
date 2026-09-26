@@ -14,7 +14,8 @@ import { isTerminalStatus } from '../utils'
  *   atom  := '"' chars '"' | run of non-space chars
  *
  * Pure module — no Obsidian imports. Free-text words are NOT evaluated here;
- * they fall through to TaskFilter's existing substring matcher.
+ * they fall through to TaskFilter's substring matcher, which requires every
+ * word to match on its own (a quoted phrase stays one word).
  */
 
 export type Op = '=' | '!' | '>' | '>=' | '<' | '<='
@@ -28,7 +29,8 @@ export interface StructuredTerm {
 
 export interface CompiledQuery {
   terms: StructuredTerm[]
-  freeText: string
+  /** Non-field words, quotes stripped: a quoted phrase is one word. Each is AND-ed like a term. */
+  freeWords: string[]
 }
 
 export interface QueryCtx {
@@ -121,7 +123,8 @@ function dueKeyword(task: Task, value: string, ctx: QueryCtx): boolean | null {
     case 'this-week': {
       // Same window as matchDueDateFilter: from today through the end of the ISO week.
       if (!due) return false
-      const end = ctx.today.add({ days: 7 - (ctx.today.dayOfWeek % 7) })
+      // dayOfWeek is 1 (Mon) … 7 (Sun), so on a Sunday the window is today alone.
+      const end = ctx.today.add({ days: 7 - ctx.today.dayOfWeek })
       return Temporal.PlainDate.compare(due, ctx.today) >= 0 && Temporal.PlainDate.compare(due, end) <= 0
     }
     case 'this-month':
@@ -190,9 +193,12 @@ export const FIELD_MATCHERS: Record<string, FieldMatcher> = {
       const kw = dueKeyword(task, value, ctx)
       if (kw !== null) return withNeg(op, kw)
     }
-    const due = parsePlainDate(task.due)
+    // Garbage never matches, on any op. An undated task is "not <date>", the
+    // way sev:! and due:!overdue treat an empty field.
     const target = dueTarget(value, ctx.today)
-    if (!due || !target) return false
+    if (!target) return false
+    const due = parsePlainDate(task.due)
+    if (!due) return op === '!'
     return compareDates(op, due, target)
   },
   // Note: matchesFilter's early `task.archived && !filter.showArchived` gate still
@@ -309,7 +315,8 @@ function compile(text: string): CompiledQuery {
   for (const token of tokenize(text.trim())) {
     const m = /^([A-Za-z]+):(.+)$/s.exec(token)
     const field = m ? m[1].toLowerCase() : ''
-    if (m && FIELD_MATCHERS[field]) {
+    // Own keys only: `constructor:` must not resolve to Object's prototype.
+    if (m && Object.hasOwn(FIELD_MATCHERS, field)) {
       const { op, value } = parseValue(m[2])
       if (value) {
         terms.push({ field, op, value: value.toLowerCase() })
@@ -320,7 +327,7 @@ function compile(text: string): CompiledQuery {
     const word = stripQuotes(token)
     if (word) free.push(word)
   }
-  return { terms, freeText: free.join(' ') }
+  return { terms, freeWords: free }
 }
 
 // ponytail: single-entry memo — matchesFilter parses the same string once per task per render.
@@ -333,7 +340,7 @@ export function parseQuery(text: string): CompiledQuery {
   return query
 }
 
-/** AND over the structured terms only — free text is evaluated by TaskFilter's substring matcher. */
+/** AND over the structured terms only — free words are evaluated by TaskFilter's substring matcher. */
 export function evaluateQuery(compiled: CompiledQuery, task: Task, ctx: QueryCtx): boolean {
   return compiled.terms.every((t) => FIELD_MATCHERS[t.field]?.(task, t.op, t.value, ctx) ?? false)
 }
