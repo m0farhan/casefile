@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 // asks for. The hover colour matches the table's `.pm-task-title-text:hover`.
 describe('gantt.css', () => {
   it('colours a hovered task title with the text-safe accent', () => {
-    const css = readFileSync(new URL('./gantt.css', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('../src/styles/gantt.css', import.meta.url), 'utf8')
     const at = css.indexOf('.pm-gantt-label-title:hover {')
     expect(at).toBeGreaterThanOrEqual(0)
     const rule = css.slice(at, css.indexOf('}', at))
