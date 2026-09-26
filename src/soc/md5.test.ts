@@ -31,4 +31,29 @@ describe('md5 against RFC 1321 appendix A.5', () => {
     expect(md5(Uint8Array.from([0x00, 0xff, 0x10]))).toMatch(/^[0-9a-f]{32}$/)
     expect(md5(new Uint8Array(0))).toBe('d41d8cd98f00b204e9800998ecf8427e')
   })
+
+  it('matches an independent MD5 on a large buffer and on a view into the middle of one', () => {
+    // The expected values were computed over these same bytes by Node's
+    // crypto.createHash('md5') and by macOS md5(1), not by this file. A seeded
+    // generator makes the bytes the same on every run.
+    const big = new Uint8Array(3_000_001)
+    let seed = 0x2545f491
+    for (let i = 0; i < big.length; i++) {
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      big[i] = seed & 0xff
+    }
+    expect(md5(big)).toBe('c3de7e5216bdd583051064a105c21ca3')
+    // A subarray whose bytes start mid-buffer: every read must count from the
+    // view, not from the start of the buffer beneath it.
+    expect(md5(big.subarray(12_345, 12_345 + 1_000_003))).toBe('696a83ec9563f46c36ed2bf01e8ca137')
+    // Short views either side of the one- and two-block tails.
+    const at = (n: number): string => md5(big.subarray(7, 7 + n))
+    expect(at(63)).toBe('4f33e8cdb80277315671a8115d887248')
+    expect(at(65)).toBe('70bcf2037d56d5150ab3fcdbae0c4b3b')
+    expect(at(119)).toBe('a154cb6a983a29c7b55c61cab6d89d81')
+    expect(at(120)).toBe('6e5a77464ce8dc5f942a2ad2f2bda738')
+    expect(at(128)).toBe('e2bac00203f114d7a2a4040c654c650d')
+  })
 })
