@@ -1251,7 +1251,17 @@ export class ProjectStore implements TaskSource {
     'flagged',
     'assignees',
     'due',
-    'bucket'
+    'bucket',
+    // The lifecycle stamps and the issue type decide the SLA outcome (a moved
+    // detectedAt can turn a breach into a met), so a hand edit to any of them
+    // is recorded. The store's own auto-stamps are applied after this diff, so
+    // they are never logged as edits.
+    'issueType',
+    'occurredAt',
+    'detectedAt',
+    'respondedAt',
+    'containedAt',
+    'resolvedAt'
   ] as const
 
   /**
@@ -1288,11 +1298,19 @@ export class ProjectStore implements TaskSource {
     // Incident lifecycle auto-stamps (manual edits in the patch always win).
     const issueType = patch.issueType ?? task.issueType
     if (issueType === 'incident' && patch.status !== undefined && patch.status !== task.status) {
+      const statuses = this.statusesFor(project)
       const manualResponded = patch.respondedAt !== undefined && patch.respondedAt !== task.respondedAt
       if (!manualResponded && !task.respondedAt) patch.respondedAt = at
       const manualResolved = patch.resolvedAt !== undefined && patch.resolvedAt !== task.resolvedAt
-      if (!manualResolved && !task.resolvedAt && isTerminalStatus(patch.status, this.statusesFor(project))) {
+      const nowTerminal = isTerminalStatus(patch.status, statuses)
+      if (!manualResolved && !task.resolvedAt && nowTerminal) {
         patch.resolvedAt = at
+      } else if (!manualResolved && task.resolvedAt && !nowTerminal && isTerminalStatus(task.status, statuses)) {
+        // Reopened: the case is no longer resolved, so its clock runs again
+        // and can breach. A kept stamp froze it as met for good. The first
+        // resolution stays in the log, and the next close stamps afresh.
+        entries.push({ at, field: 'resolvedAt', from: task.resolvedAt, to: '' })
+        patch.resolvedAt = ''
       }
     }
 

@@ -2,7 +2,16 @@ import type { App } from 'obsidian'
 import { TFile, TFolder } from 'obsidian'
 import { describe, expect, it, vi } from 'vitest'
 import { makeFakeApp, type FakeVault } from '../../test/fakeVault'
-import { DEFAULT_SETTINGS, makeTask, type PMSettings, type Project, type StatusConfig, type Task } from '../types'
+import { slaState } from '../soc/sla'
+import {
+  DEFAULT_SETTINGS,
+  DEFAULT_SLA_POLICIES,
+  makeTask,
+  type PMSettings,
+  type Project,
+  type StatusConfig,
+  type Task
+} from '../types'
 import { inferIssueKeyPrefix, ProjectStore } from './ProjectStore'
 import { parseFrontmatter } from './YamlParser'
 import { buildTaskIndex } from './TaskIndex'
@@ -1447,6 +1456,48 @@ describe('activity log + incident lifecycle stamps', () => {
     const manual = '2026-07-30T00:00:00.000Z'
     await store.updateTask(project, inc.id, { status: 'in-progress', respondedAt: manual })
     expect(inc.respondedAt).toBe(manual)
+  })
+
+  it('logs a hand edit to a lifecycle stamp or the issue type, but never an auto-stamp', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Stamps', 'Projects')
+    const inc = makeTask({ title: 'Inc', issueType: 'incident', detectedAt: '2026-09-01T00:00:00.000Z' })
+    await store.insertTask(project, inc, null)
+    await store.updateTask(project, inc.id, { status: 'in-progress' })
+    expect(inc.respondedAt).not.toBe('')
+    expect(inc.activity.map((a) => a.field)).toEqual(['status'])
+
+    await store.updateTask(project, inc.id, { detectedAt: '2026-09-02T00:00:00.000Z' })
+    await store.updateTask(project, inc.id, { issueType: 'task' })
+    expect(inc.activity.slice(1).map((a) => [a.field, a.from, a.to])).toEqual([
+      ['detectedAt', '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z'],
+      ['issueType', 'incident', 'task']
+    ])
+  })
+
+  it('reopening an incident clears resolvedAt, logs the old value, and its clock can breach again', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Reopen', 'Projects')
+    const t0 = Date.parse('2026-09-01T00:00:00.000Z')
+    const inc = makeTask({
+      title: 'Inc',
+      issueType: 'incident',
+      severity: 'sev1',
+      detectedAt: new Date(t0).toISOString()
+    })
+    await store.insertTask(project, inc, null)
+    await store.updateTask(project, inc.id, { status: 'done' })
+    const first = inc.resolvedAt
+    expect(first).not.toBe('')
+
+    await store.updateTask(project, inc.id, { status: 'todo' })
+    expect(inc.resolvedAt).toBe('')
+    expect(inc.activity.at(-1)).toMatchObject({ field: 'resolvedAt', from: first, to: '' })
+    const state = expectDefined(slaState(inc, DEFAULT_SLA_POLICIES, t0 + 11 * 3600_000))
+    expect([state.done, state.breached]).toEqual([false, true])
+
+    await store.updateTask(project, inc.id, { status: 'done' })
+    expect(inc.resolvedAt).not.toBe('')
   })
 
   it('auto-stamps resolvedAt when an incident enters a terminal status', async () => {
