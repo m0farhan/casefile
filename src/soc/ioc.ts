@@ -91,20 +91,27 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 
 /**
  * Undo the common defang forms so pasted report indicators are stored real:
- * hxxp→http, [.]/(.)→., [at]/(at)/[@]→@, [:]→:, a leading [\\]→\\. Inverse of
- * defangIoc plus the variants seen in vendor reports. Idempotent on
+ * hxxp→http, [://]→://, [.]/(.)/[dot]/(dot)→., [at]/(at)/[@]→@, [:]→:, a
+ * leading [\\]→\\. Inverse of defangIoc plus the variants seen in vendor
+ * reports (hxxps[://]host[.]tld is CyberChef's default). Idempotent on
  * already-real values.
  */
 // ponytail: covers the defang forms in real CTI reports; extend the map if a new one shows up
 export function refangIoc(value: string): string {
-  return value
-    .trim()
-    .replace(/^hxxp/i, (h) => (h === 'HXXP' ? 'HTTP' : 'http'))
-    .replace(/[[(]\.[\])]/g, '.')
-    .replace(/[[(]at[\])]/gi, '@')
-    .replace(/\[@\]/g, '@')
-    .replace(/\[:\]/g, ':')
-    .replace(/^\[\\\\\]/, '\\\\')
+  return (
+    value
+      .trim()
+      .replace(/^hxxp/i, (h) => (h === 'HXXP' ? 'HTTP' : 'http'))
+      .replace(/\[:\/\/\]/g, '://')
+      .replace(/[[(]\.[\])]/g, '.')
+      // The word form only between label characters: evil[dot]com is a host,
+      // while wiki/Foo_(dot) is a real path whose value must not change.
+      .replace(/([\p{L}\p{N}-])[[(]dot[\])](?=[\p{L}\p{N}-])/giu, '$1.')
+      .replace(/[[(]at[\])]/gi, '@')
+      .replace(/\[@\]/g, '@')
+      .replace(/\[:\]/g, ':')
+      .replace(/^\[\\\\\]/, '\\\\')
+  )
 }
 
 /**
@@ -253,14 +260,28 @@ export function detectIocType(value: string): IocType {
 }
 
 /** Defanged-or-real fragment patterns for prose scanning. */
-// A URL stops at a control character, a brace or a backslash. None is legal
-// unencoded in a URL, and without the stop an RTF `{\*\template http://x/t.dotm}`
-// or NUL padding after a link ran on into a URL that exists nowhere.
-const RE_URL = /\bh(?:xx|tt)ps?(?:\[:\]|:)\/\/[^\s\p{Cc}<>"'){}\\]+/giu
-const RE_IP = /\b\d{1,3}(?:(?:\[\.\]|\(\.\)|\.)\d{1,3}){3}\b/g
+// A URL stops at a control character, a brace, a backslash or U+FFFD. None is
+// legal unencoded in a URL, and without the stop an RTF
+// `{\*\template http://x/t.dotm}`, NUL padding, or the replacement characters
+// a binary decodes to ran on into a URL that exists nowhere. A `)` ends it
+// too, except inside a (.) or (dot) defang, which is part of the host.
+const RE_URL = /\bh(?:xx|tt)ps?(?:\[:\/\/\]|(?:\[:\]|:)\/\/)(?:\((?:\.|dot)\)|[^\s\p{Cc}<>"'){}\\\uFFFD])+/giu
+const RE_IP = /\b\d{1,3}(?:(?:\[(?:\.|dot)\]|\((?:\.|dot)\)|\.)\d{1,3}){3}\b/gi
 const RE_HASH = /\b[a-f0-9]{64}\b|\b[a-f0-9]{40}\b|\b[a-f0-9]{32}\b/gi
-const RE_EMAIL = /\b[\w.+-]+(?:@|\[at\]|\(at\))[\w-]+(?:(?:\[\.\]|\(\.\)|\.)[\w-]+)+\b/gi
-const RE_DEFANGED_DOMAIN = /\b[\w-]+(?:(?:\[\.\]|\(\.\))[\w-]+)+\b/g
+// The email and domain patterns start only at the beginning of a run of their
+// characters: they consume the one character before it and capture the value
+// in group 1. A bare `\b[\w-]+` can start at every hyphen of `a-a-a-…` or a
+// base64url blob, scan to the end and fail each time, which is quadratic; 160 KB
+// froze Obsidian for 40 s. A later start in the same run fails exactly as the
+// first one does, so nothing is lost by not trying it. No lookbehind: iOS before
+// 16.4 cannot compile one, and the plugin would not load there.
+// ponytail: one case is dropped, never invented. An address glued to the one
+// before it by '+', '.' or '-' (a@b.com+x@c.com) is not listed as an email,
+// where it used to come out as the malformed '+x@c.com'. Its domain is still
+// listed.
+const RE_EMAIL =
+  /(?:^|[^\w.+-])[.+-]*\b([\w.+-]+(?:@|\[at\]|\(at\))[\w-]+(?:(?:\[(?:\.|dot)\]|\((?:\.|dot)\)|\.)[\w-]+)+)\b/gi
+const RE_DEFANGED_DOMAIN = /(?:^|[^\w-])-*\b([\w-]+(?:(?:\[(?:\.|dot)\]|\((?:\.|dot)\))[\w-]+)+)\b/gi
 // ponytail: bare (non-defanged) domains in prose need a TLD gate or every
 // "file.js" becomes an indicator; extend the list when a real miss shows up.
 const BARE_DOMAIN_TLDS = new Set([
@@ -288,7 +309,7 @@ const BARE_DOMAIN_TLDS = new Set([
   'tk',
   'ws'
 ])
-const RE_BARE_DOMAIN = /\b[\w-]+(?:\.[\w-]+)+\b/g
+const RE_BARE_DOMAIN = /(?:^|[^\w-])-*\b([\w-]+(?:\.[\w-]+)+)\b/g
 
 function validIp(v: string): boolean {
   return v.split('.').every((o) => Number(o) <= 255)
@@ -296,20 +317,23 @@ function validIp(v: string): boolean {
 
 /**
  * Scan free prose (a case note) for indicators — defanged or real — and
- * return the NEW ones as typed rows, deduped against `existingValues` and
- * within the scan, in order of first appearance. Conservative by design:
- * bare domains must end in a known TLD; everything else matches by shape.
+ * return the NEW ones as typed rows, deduped by iocKey against
+ * `existingValues` and within the scan, in order of first appearance.
+ * Conservative by design: bare domains must end in a known TLD; everything
+ * else matches by shape.
  */
 export function extractIocsFromText(text: string, existingValues: string[]): Ioc[] {
-  const seen = new Set(existingValues.map((v) => refangIoc(v).toLowerCase()))
+  const keyOf = (value: string) => iocKey({ type: detectIocType(value), value })
+  const seen = new Set(existingValues.map((v) => keyOf(refangIoc(v))))
   const out: Ioc[] = []
   const found: { index: number; value: string }[] = []
   const collect = (re: RegExp, filter?: (v: string) => boolean) => {
     for (const m of text.matchAll(re)) {
-      const raw = m[0].replace(/[),.;:!?'"\]]+$/, '')
-      const value = refangIoc(raw)
+      // Group 1 where the pattern also consumed the character before the value.
+      const hit = m[1] ?? m[0]
+      const value = refangIoc(stripProseTail(hit))
       if (filter && !filter(value)) continue
-      found.push({ index: m.index ?? 0, value })
+      found.push({ index: (m.index ?? 0) + m[0].length - hit.length, value })
     }
   }
   collect(RE_URL)
@@ -323,7 +347,7 @@ export function extractIocsFromText(text: string, existingValues: string[]): Ioc
   })
   found.sort((a, b) => a.index - b.index)
   for (const f of found) {
-    const key = f.value.toLowerCase()
+    const key = keyOf(f.value)
     if (seen.has(key)) continue
     // Skip fragments of an already-captured longer indicator (ip inside url is
     // kept deliberately: both are real indicators with distinct values).

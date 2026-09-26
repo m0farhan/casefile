@@ -166,6 +166,19 @@ describe('parseIocPaste', () => {
     expect(parseIocPaste('', [])).toEqual([])
     expect(parseIocPaste('  \n\n , ,\t', [])).toEqual([])
   })
+
+  it('refangs [dot], (dot) and [://], the forms CyberChef and vendor reports use', () => {
+    expect(parseIocPaste('evil[dot]com hxxps[://]evil[.]com', [])).toEqual([
+      { type: 'domain', value: 'evil.com' },
+      { type: 'url', value: 'https://evil.com' }
+    ])
+    expect(parseIocPaste('EVIL(DOT)COM', [])).toEqual([{ type: 'domain', value: 'EVIL.COM' }])
+    expect(refangIoc('john(dot)smith(at)corp(dot)com')).toBe('john.smith@corp.com')
+    // Only between label characters: a real path keeps its value.
+    expect(parseIocPaste('https://en.wikipedia.org/wiki/Foo_(dot)', [])).toEqual([
+      { type: 'url', value: 'https://en.wikipedia.org/wiki/Foo_(dot)' }
+    ])
+  })
 })
 
 describe('formatIocLine', () => {
@@ -247,6 +260,82 @@ describe('extractIocsFromText', () => {
     expect(urls(rtf)).toEqual(['http://evil.example/t.dotm'])
     expect(urls('https://evil.example/a\\b')).toEqual(['https://evil.example/a'])
     expect(urls('see https://evil.example/a\u0000\u0000\u0000tail')).toEqual(['https://evil.example/a'])
+  })
+
+  it('ends a URL at a closing typographic quote and at U+FFFD', () => {
+    const urls = (text: string) =>
+      extractIocsFromText(text, [])
+        .filter((i) => i.type === 'url')
+        .map((i) => i.value)
+    // Word and Outlook autocorrect quotes; a block-list entry ending in ” matches nothing.
+    expect(urls('Please sign in at “https://login.evil-portal.com/verify” today.')).toEqual([
+      'https://login.evil-portal.com/verify'
+    ])
+    expect(urls('«https://a.evil.test/x»')).toEqual(['https://a.evil.test/x'])
+    expect(urls('‘https://b.evil.test/y’.')).toEqual(['https://b.evil.test/y'])
+    // FF FE after a link in a binary decodes to two replacement characters.
+    expect(urls('garbage http://evil.example.com/stage\uFFFD\uFFFDAB')).toEqual(['http://evil.example.com/stage'])
+  })
+
+  it('keeps two URLs that differ only in case, since a path is case-sensitive', () => {
+    const values = extractIocsFromText('https://bit.ly/3XkQ and later https://bit.ly/3xKq', []).map((i) => i.value)
+    expect(values).toContain('https://bit.ly/3XkQ')
+    expect(values).toContain('https://bit.ly/3xKq')
+    // Hashes and hosts still fold case, against the case and within the scan.
+    expect(extractIocsFromText('D41D8CD98F00B204E9800998ECF8427E', ['d41d8cd98f00b204e9800998ecf8427e'])).toEqual([])
+    expect(extractIocsFromText('EVIL.com and evil.COM', []).map((i) => i.value)).toEqual(['EVIL.com'])
+  })
+
+  it('reads the [dot], (dot) and [://] defang forms', () => {
+    const got = extractIocsFromText('see evil[dot]com and hxxps[://]bad[.]net/x, phish[at]bad[dot]ru', []).map(
+      (i) => i.value
+    )
+    expect(got).toContain('evil.com')
+    expect(got).toContain('https://bad.net/x')
+    expect(got).toContain('phish@bad.ru')
+    // A (.) or (dot) inside a URL is part of the host, not the end of the URL:
+    // the value used to be the fragment 'https://x(' that exists nowhere.
+    const urls = extractIocsFromText('hxxps://x[dot]net/a hxxps://y(dot)org/b hxxps://z(.)io/c', [])
+      .filter((i) => i.type === 'url')
+      .map((i) => i.value)
+    expect(urls).toEqual(['https://x.net/a', 'https://y.org/b', 'https://z.io/c'])
+  })
+})
+
+describe('extractIocsFromText — hostile text cannot freeze the scan', () => {
+  // Each of these took seconds to minutes: an unanchored `\b[\w-]+` restarted
+  // at every hyphen or dot of a run and rescanned to its end. Bounds are loose
+  // so a loaded machine does not flake; the fixed scan takes tens of ms.
+  const MB = 1024 * 1024
+  const base64url = 'QmFzZTY0-dXJs_YWxwaGFiZXQ-'
+  const shapes: [string, string][] = [
+    ["'a-' × 80,000", 'a-'.repeat(80_000)],
+    ['2 MB of a-', 'a-'.repeat(MB)],
+    ['2 MB of a.', 'a.'.repeat(MB)],
+    ['2 MB of base64url', base64url.repeat(Math.ceil((2 * MB) / base64url.length))],
+    ['a URL, 1 MB of dots, a letter', `https://x.example.com/${'.'.repeat(MB)}a`]
+  ]
+  for (const [name, text] of shapes) {
+    it(`scans ${name} in linear time`, () => {
+      const start = performance.now()
+      extractIocsFromText(text, [])
+      expect(performance.now() - start).toBeLessThan(1500)
+    })
+  }
+
+  it('still lists an over-long token whole, never a tail of it', () => {
+    // Bounding the repetitions instead would have listed a 63-character suffix
+    // that appears nowhere in the text as a host.
+    const host = `${'x-'.repeat(40)}y.com`
+    expect(extractIocsFromText(host, []).map((i) => i.value)).toEqual([host])
+    expect(extractIocsFromText(`--${host}`, []).map((i) => i.value)).toEqual([host])
+  })
+
+  it('does not list an address glued to the one before it as an email (documented)', () => {
+    const got = extractIocsFromText('a@b.com+x@c.com', [])
+    expect(got.filter((i) => i.type === 'email').map((i) => i.value)).toEqual(['a@b.com'])
+    // Its domain is still listed.
+    expect(got.map((i) => i.value)).toContain('c.com')
   })
 })
 
