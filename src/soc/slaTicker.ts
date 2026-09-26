@@ -86,12 +86,14 @@ function paint(chip: HTMLElement, view: SlaChipView): void {
   label.setText(view.text)
   // setAttr('title', …) is the repo's plain-element tooltip idiom (TableRenderer.ts:335)
   // — no obsidian import, no stub change, no layout or CSS change.
-  chip.setAttr(
-    'title',
+  // A running clock also says it never pauses: slaState ignores status, so a
+  // case parked in a waiting status keeps counting and can breach.
+  // ponytail: no pause-aware clock yet (SD-11); this states today's behaviour.
+  const from =
     view.from === 'detected'
       ? 'Clock runs from the detection time'
       : 'Clock runs from case creation — detection time not recorded'
-  )
+  chip.setAttr('title', view.live ? `${from} · it never pauses, whatever the status` : from)
   chip.toggleClass('pm-sla--warn', view.warn)
   chip.toggleClass('pm-sla--breach', view.breach)
   // Filled only while the clock is asking for something. A healthy countdown
