@@ -1135,13 +1135,16 @@ export class ProjectStore implements TaskSource {
   /**
    * Convert an arbitrary vault note into a top-level task file in the project's
    * tasks folder. The note body becomes the task description; notes that are
-   * already pm-tasks are skipped. The task is picked up on the next project
+   * already cases, and board notes, are skipped. The task is picked up on the next project
    * load via the orphan self-heal, matching how the tasks folder is scanned.
    */
   async importNoteAsTask(project: Project, file: TFile, opts: ImportNoteOptions): Promise<'imported' | 'skipped'> {
     const content = await this.app.vault.read(file)
     const { frontmatter, body } = parseFrontmatter(content)
-    if (frontmatter?.[TASK_FRONTMATTER_KEY] === true) return 'skipped'
+    // A board note is never a case: moving it would rewrite it as one, and its
+    // taskIds, team and config went with it while its cases were orphaned.
+    // Checked on the file itself, so a stale picker list cannot get past it.
+    if (frontmatter?.[TASK_FRONTMATTER_KEY] === true || frontmatter?.[FRONTMATTER_KEY] === true) return 'skipped'
 
     // The note's own properties come along: tags onto the case, everything
     // the case does not own as extra properties. A move rewrites the note in

@@ -1097,6 +1097,19 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(result).toBe('skipped')
     expect(await vault.read(existing)).toBe(before)
   })
+
+  it("skips another board's note, leaving that board where and as it was", async () => {
+    const { store, vault, project } = await importInto('copy')
+    const bravo = await store.createProject('Bravo', 'Projects')
+    await addNamed(store, bravo, 'Case 1')
+    const note = fileAt(vault, bravo.filePath)
+    const before = await vault.read(note)
+
+    const opts = { status: 'todo', priority: 'low', handling: 'move' } as const
+    expect(await store.importNoteAsTask(project, note, opts)).toBe('skipped')
+    expect(vault.getAbstractFileByPath(bravo.filePath)).toBe(note)
+    expect(await vault.read(note)).toBe(before)
+  })
 })
 
 describe('ProjectStore.importTaskForest', () => {
