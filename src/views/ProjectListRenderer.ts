@@ -3,8 +3,9 @@ import type PMPlugin from '../main'
 import type { Project, Task, StatusConfig } from '../types'
 import { safeAsync, isTerminalStatus } from '../utils'
 import { confirmDialog, openProjectModal, promptText } from '../ui/ModalFactory'
-import { parentFolderOf } from '../store/layout'
+import { parentFolderOf, projectFolderForProjectPath, taskFolderForProjectPath } from '../store/layout'
 import { flattenTasks } from '../store/TaskTreeOps'
+import { NestedBoardError } from '../store'
 import { EmptyState } from '../ui/primitives/EmptyState'
 import { ProjectCard } from '../ui/composites/ProjectCard'
 
@@ -18,7 +19,7 @@ export interface ProjectListContext {
 
 export function renderProjectListToolbar(ctx: ProjectListContext): void {
   ctx.toolbarEl.empty()
-  ctx.toolbarEl.createEl('h2', { text: 'Project manager', cls: 'pm-toolbar-title' })
+  ctx.toolbarEl.createEl('h2', { text: 'Boards', cls: 'pm-toolbar-title' })
 
   new ButtonComponent(ctx.toolbarEl)
     .setButtonText('+ new board')
@@ -26,9 +27,10 @@ export function renderProjectListToolbar(ctx: ProjectListContext): void {
     .onClick(() => openCreateProjectModal(ctx))
 }
 
-export async function renderProjectListContent(ctx: ProjectListContext): Promise<void> {
+/** Render the board cards; returns the boards drawn, so the pane knows which paths to watch. */
+export async function renderProjectListContent(ctx: ProjectListContext): Promise<Project[]> {
   const projects = await ctx.plugin.store.loadAllProjects(ctx.plugin.settings.projectsFolder)
-  if (ctx.isStale()) return
+  if (ctx.isStale()) return projects
   ctx.contentEl.empty()
 
   if (projects.length === 0) {
@@ -39,7 +41,7 @@ export async function renderProjectListContent(ctx: ProjectListContext): Promise
         'A board is a set of columns with its own cards. Make one for a case queue, an investigation, or a list of goals.'
       )
       .setAction('+ new board', () => openCreateProjectModal(ctx))
-    return
+    return projects
   }
 
   const grid = ctx.contentEl.createDiv('pm-project-grid')
@@ -59,9 +61,10 @@ export async function renderProjectListContent(ctx: ProjectListContext): Promise
         const file = ctx.plugin.app.vault.getAbstractFileByPath(project.filePath)
         if (file instanceof TFile) await ctx.openProjectFile(file)
       }),
-      onContextMenu: (e) => openProjectContextMenu(ctx, project, e)
+      onContextMenu: (at) => openProjectContextMenu(ctx, project, projects, at)
     })
   }
+  return projects
 }
 
 function openCreateProjectModal(ctx: ProjectListContext): void {
@@ -73,7 +76,12 @@ function openCreateProjectModal(ctx: ProjectListContext): void {
   })
 }
 
-function openProjectContextMenu(ctx: ProjectListContext, project: Project, e: MouseEvent): void {
+function openProjectContextMenu(
+  ctx: ProjectListContext,
+  project: Project,
+  boards: Project[],
+  at: { x: number; y: number }
+): void {
   const menu = new Menu()
   menu.addItem((item) =>
     item
@@ -117,16 +125,35 @@ function openProjectContextMenu(ctx: ProjectListContext, project: Project, e: Mo
       .setIcon('trash')
       .onClick(
         safeAsync(async () => {
+          // Trashes the whole board folder, and a board filed inside it would
+          // go too, unnamed by the confirm below: refuse first, naming it.
+          const folder = projectFolderForProjectPath(project.filePath) ?? taskFolderForProjectPath(project.filePath)
+          const nested = boards.filter((b) => b.filePath !== project.filePath && b.filePath.startsWith(`${folder}/`))
+          if (nested.length) {
+            const names = nested.map((b) => `"${b.title}"`).join(', ')
+            ctx.plugin.showNotice(
+              `Not deleting "${project.title}": ${names} ${nested.length === 1 ? 'is a board' : 'are boards'} filed inside its folder. Move ${nested.length === 1 ? 'it' : 'them'} out first.`,
+              8000
+            )
+            return
+          }
           // Trashes the whole case folder — confirm like every task delete does (UX-02).
           const n = flattenTasks(project.tasks).length
           const msg = `Delete "${project.title}" and its ${n} task${n === 1 ? '' : 's'}? Files go to the trash.`
           if (!(await confirmDialog(ctx.plugin.app, msg))) return
-          await ctx.plugin.store.deleteProject(project)
+          try {
+            await ctx.plugin.store.deleteProject(project)
+          } catch (e) {
+            // The store's own check, for a nested board this list did not show.
+            if (!(e instanceof NestedBoardError)) throw e
+            ctx.plugin.showNotice(e.message, 8000)
+            return
+          }
           await renderProjectListContent(ctx)
         })
       )
   )
-  menu.showAtMouseEvent(e)
+  menu.showAtPosition(at)
 }
 
 function countTasks(tasks: Task[], doneOnly: boolean, statuses: StatusConfig[]): number {
