@@ -11,6 +11,8 @@
  * up, and the text is treated as hostile throughout: it arrived in an email.
  */
 
+import { visibleName } from './ioc'
+
 export interface HeaderField {
   name: string
   value: string
@@ -63,6 +65,12 @@ export interface HeaderAnalysis {
   observations: Observation[]
   /** What this paste does not contain, said out loud. */
   notes: string[]
+  /**
+   * The From address read as written, encoded words left out (RFC 2047 allows
+   * none in an address). The sender checks read this, never the decoded From
+   * identity, whose decoded characters can pose as address syntax.
+   */
+  fromAddress: string
 }
 
 /**
@@ -89,44 +97,116 @@ export function parseHeaderBlock(raw: string): HeaderField[] {
   return out
 }
 
+/** One RFC 2047 encoded word: charset, B or Q, payload. */
+const ENCODED_WORD = /=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g
+
+/**
+ * Encoded words with only spaces or tabs between them. RFC 2047 §6.2 drops
+ * that whitespace, and mailers split a long subject or filename across words
+ * at any point, so `invoice.p` + `df.exe` read as "invoice.p df.exe" and the
+ * double extension the reader saw went unreported. Only a space or a tab: a
+ * no-break space between two words is a character the reader sees.
+ */
+const ENCODED_RUN = /=\?[^?]+\?[bBqQ]\?[^?]*\?=(?:[ \t]+=\?[^?]+\?[bBqQ]\?[^?]*\?=)*/g
+
 /**
  * Decode RFC 2047 encoded words (`=?utf-8?B?…?=`), which is how a display name
  * hides that it reads "PayPal Security" in Cyrillic lookalikes. An unknown
  * charset or malformed payload is left exactly as written rather than guessed.
  */
 export function decodeEncodedWords(value: string): string {
-  return value.replace(
-    /=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g,
-    (whole, charset: string, encoding: string, text: string) => {
-      try {
-        const bytes =
-          encoding.toLowerCase() === 'b'
-            ? Uint8Array.from(atob(text), (c) => c.charCodeAt(0))
-            : quotedPrintableBytes(text.replace(/_/g, ' '))
-        // Flattened: a header value is ONE logical line by definition (RFC
-        // 5322 unfolding), so a decoded one carrying CR/LF is malformed. Left
-        // in, a Subject could forge whole sections of the report and whole
-        // timestamped comments on the case note it lands in.
-        return new TextDecoder(charset).decode(bytes).replace(/[\r\n\u2028\u2029]+/g, ' ')
-      } catch {
-        return whole
+  return value.replace(ENCODED_RUN, (run) => {
+    const words = [...run.matchAll(ENCODED_WORD)].map((m) => ({
+      start: m.index ?? 0,
+      end: (m.index ?? 0) + m[0].length,
+      charset: m[1].toLowerCase(),
+      bytes: wordBytes(m[2], m[3])
+    }))
+    let out = ''
+    let end = 0
+    let decodedBefore = false
+    for (let i = 0; i < words.length;) {
+      // Neighbouring words in one charset decode as one byte string, so a
+      // character split across two words comes out whole rather than as two
+      // replacement characters where the look-alike was.
+      const chunks: Uint8Array[] = []
+      let j = i
+      for (; j < words.length; j++) {
+        const bytes = words[j].bytes
+        if (!bytes || words[j].charset !== words[i].charset) break
+        chunks.push(bytes)
       }
+      if (!chunks.length) j = i + 1 // a payload that did not decode stands alone
+      const text = chunks.length ? decodeCharset(words[i].charset, chunks) : null
+      // The gap is dropped only between two words that both decoded. Beside a
+      // word left as written, it is kept as written too.
+      if (text === null || !decodedBefore) out += run.slice(end, words[i].start)
+      out += text ?? run.slice(words[i].start, words[j - 1].end)
+      decodedBefore = text !== null
+      end = words[j - 1].end
+      i = j
     }
-  )
+    return out
+  })
 }
 
-/** `=XX` escapes to bytes. Shared with the MIME body decoder in eml.ts. */
+function wordBytes(encoding: string, payload: string): Uint8Array | null {
+  if (encoding.toLowerCase() === 'q') return quotedPrintableBytes(payload.replace(/_/g, ' '))
+  try {
+    return Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+  } catch {
+    return null
+  }
+}
+
+function decodeCharset(charset: string, chunks: Uint8Array[]): string | null {
+  const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+  let at = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, at)
+    at += chunk.length
+  }
+  try {
+    // Flattened: a header value is ONE logical line by definition (RFC
+    // 5322 unfolding), so a decoded one carrying CR/LF is malformed. Left
+    // in, a Subject could forge whole sections of the report and whole
+    // timestamped comments on the case note it lands in.
+    return new TextDecoder(charset).decode(bytes).replace(/[\r\n\u2028\u2029]+/g, ' ')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `=XX` escapes to bytes. Shared with the MIME body decoder in eml.ts.
+ *
+ * The text arrived already decoded from the file as UTF-8, so a raw character
+ * in it stands for its UTF-8 bytes. Cut to its low byte, a Cyrillic а (U+0430)
+ * became "0": a link to p0ypal, a domain nowhere in the mail, in place of the
+ * look-alike the reader saw. So the text is encoded first and the escapes are
+ * read at the byte level; `=` and hex digits are ASCII, the same bytes either way.
+ */
 export function quotedPrintableBytes(text: string): Uint8Array {
-  const bytes: number[] = []
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '=' && /^[0-9a-f]{2}$/i.test(text.slice(i + 1, i + 3))) {
-      bytes.push(Number.parseInt(text.slice(i + 1, i + 3), 16))
-      i += 2
+  const src = new TextEncoder().encode(text)
+  const out = new Uint8Array(src.length)
+  let n = 0
+  for (let i = 0; i < src.length; i++) {
+    const high = src[i] === 0x3d && i + 2 < src.length ? hexDigit(src[i + 1]) : -1
+    const low = high < 0 ? -1 : hexDigit(src[i + 2])
+    if (low < 0) {
+      out[n++] = src[i]
     } else {
-      bytes.push(text.charCodeAt(i) & 0xff)
+      out[n++] = high * 16 + low
+      i += 2
     }
   }
-  return Uint8Array.from(bytes)
+  return out.slice(0, n)
+}
+
+function hexDigit(byte: number): number {
+  if (byte >= 0x30 && byte <= 0x39) return byte - 0x30
+  const lower = byte | 0x20
+  return lower >= 0x61 && lower <= 0x66 ? lower - 0x57 : -1
 }
 
 /**
@@ -145,44 +225,124 @@ export function addressOf(value: string): string {
   // `From: (<bounce@mailer.test>) security@microsoft.com` used to be read as
   // the bouncer's domain, and the From/Return-Path panel reported alignment
   // on a mail that had none. Comments nest, so the strip runs to a fixed point.
-  let unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '')
-  for (let i = 0; i < 6; i++) {
-    const next = unquoted.replace(/\((?:[^()\\]|\\.)*\)/g, ' ')
-    if (next === unquoted) break
-    unquoted = next
+  const unquoted = stripComments(stripQuoted(value))
+  // The last `<…>` pair, found by walking forward from each `<` to the next
+  // `>`. A regex did the same, but retried from every `<` of a run with no `>`
+  // after it: quadratic, seconds on a From of 40,000 of them.
+  let angled: string | null = null
+  for (let open = unquoted.indexOf('<'); open >= 0;) {
+    const close = unquoted.indexOf('>', open + 1)
+    if (close < 0) break
+    angled = unquoted.slice(open + 1, close)
+    open = unquoted.indexOf('<', close + 1)
   }
-  const angled = [...unquoted.matchAll(/<([^>]*)>/g)]
-  const raw = (angled.length ? angled[angled.length - 1][1] : unquoted).trim()
-  return raw.replace(/^mailto:/i, '')
+  return (angled ?? unquoted).trim().replace(/^mailto:/i, '')
+}
+
+/**
+ * Remove every complete quoted string, in one pass: a `\` takes the next
+ * character with it, and an unterminated quote ends the scan with the rest
+ * kept as written. Nothing after it can close — every later `"` sits inside
+ * the same open run — which is what the regex this replaces found too, after
+ * retrying from each later quote: quadratic, seconds on 50,000 `\"`. The one
+ * difference: a `\` before a line terminator (U+2028 or U+2029, in a header
+ * value) escapes it here, where the regex's `.` refused it and paired the
+ * quotes after it differently.
+ */
+function stripQuoted(value: string): string {
+  let out = ''
+  let kept = 0
+  for (let open = value.indexOf('"'); open >= 0; open = value.indexOf('"', kept)) {
+    let i = open + 1
+    while (i < value.length && value[i] !== '"') i += value[i] === '\\' ? 2 : 1
+    if (i >= value.length) break
+    out += value.slice(kept, open)
+    kept = i + 1
+  }
+  return out + value.slice(kept)
+}
+
+/**
+ * Replace every RFC 5322 comment with a space, innermost first, to a fixed
+ * point: comments nest. Each pass is one left-to-right scan. A comment that
+ * meets another `(` before its `)` is not innermost, so the scan restarts
+ * there; one that reaches the end cannot close, and neither can anything
+ * after it. The regex this replaces gave the same answer, bar the same `\`
+ * before a line terminator as stripQuoted, but retried from every `(` of an
+ * unclosed run — seconds on 50,000 `\(`.
+ */
+function stripComments(value: string): string {
+  let text = value
+  // ponytail: six levels of nesting; deeper comments stay in the text.
+  for (let pass = 0; pass < 6; pass++) {
+    let out = ''
+    let kept = 0
+    let open = text.indexOf('(')
+    while (open >= 0) {
+      let i = open + 1
+      while (i < text.length && text[i] !== '(' && text[i] !== ')') i += text[i] === '\\' ? 2 : 1
+      if (i >= text.length) break
+      if (text[i] === '(') {
+        open = i
+        continue
+      }
+      out += text.slice(kept, open) + ' '
+      kept = i + 1
+      open = text.indexOf('(', kept)
+    }
+    const next = out + text.slice(kept)
+    if (next === text) break
+    text = next
+  }
+  return text
 }
 
 function domainOf(address: string): string {
   const at = address.lastIndexOf('@')
-  return at < 0
-    ? ''
-    : address
-        .slice(at + 1)
-        .toLowerCase()
-        .replace(/[>.]+$/, '')
+  if (at < 0) return ''
+  const domain = address.slice(at + 1).toLowerCase()
+  // Trailing `>` and `.` trimmed by walking back. The regex this replaces
+  // retried from every dot of a run: seconds on a domain of 80 KB of dots.
+  let end = domain.length
+  while (end > 0 && (domain[end - 1] === '>' || domain[end - 1] === '.')) end--
+  return domain.slice(0, end)
 }
 
+/**
+ * The from-clause as the receiving MTA wrote it: the name after `from` and
+ * the comment right after that, which is where the MTA records the address it
+ * saw. Neither half is labelled. Postfix, Sendmail and Gmail put the name the
+ * sender gave first; Exim and qmail put the address or reverse name first and
+ * the sender's HELO in the comment — a label right for one is false for the
+ * other. The comment may hold one nested comment, Sendmail's "(may be forged)".
+ */
+const FROM_CLAUSE = /\bfrom\s+([^\s;()]+)(\s*\((?:[^()\\]|\\.|\((?:[^()\\]|\\.)*\))*\))?/i
+
 function parseHop(value: string, n: number): Hop {
-  const bracketed = /\[([0-9a-f.:]+)\]/i.exec(value)
-  const fromName = /\bfrom\s+([^\s;()]+)/i.exec(value)
-  const by = /\bby\s+([^\s;()]+)/i.exec(value)
-  const via = /\bwith\s+([^\s;()]+)/i.exec(value)
-  const id = /\bid\s+([^\s;()]+)/i.exec(value)
-  const forWhom = /\bfor\s+<?([^\s;()<>]+)>?/i.exec(value)
+  // The clause words are read with comments removed. Comments are free text:
+  // Postfix writes "(using TLSv1.3 with cipher …)" before `by`, which read as
+  // the protocol "cipher", and its local pickup writes "(Postfix, from userid
+  // 1000)", which read as a hop from "userid".
+  const bare = stripComments(value)
+  // ponytail: a comment holding `from <word>` ahead of the real from-clause is
+  // still read as the clause; finding the one outside comments needs a
+  // position-keeping comment scan, worth it if a real MTA writes that.
+  const fromClause = /\bfrom\s/i.test(bare) ? FROM_CLAUSE.exec(value) : null
+  const by = /\bby\s+([^\s;()]+)/i.exec(bare)
+  const via = /\bwith\s+([^\s;()]+)/i.exec(bare)
+  const id = /\bid\s+([^\s;()]+)/i.exec(bare)
+  const forWhom = /\bfor\s+<?([^\s;()<>]+)>?/i.exec(bare)
   // The date is whatever follows the LAST semicolon: ids and `for` clauses can
-  // carry semicolons of their own, and the timestamp is always the tail.
-  const tail = value
-    .slice(value.lastIndexOf(';') + 1)
-    .replace(/\([^)]*\)\s*$/, '')
-    .trim()
+  // carry semicolons of their own, and the timestamp is always the tail. A
+  // trailing comment such as "(UTC)" is cut by index — from the first `(`
+  // after the `)` before it — where a regex retried from every `(`.
+  const trailing = value.slice(value.lastIndexOf(';') + 1).trimEnd()
+  const open = trailing.endsWith(')') ? trailing.indexOf('(', trailing.lastIndexOf(')', trailing.length - 2) + 1) : -1
+  const tail = (open < 0 ? trailing : trailing.slice(0, open)).trim()
   const ms = value.includes(';') ? Date.parse(tail) : Number.NaN
   return {
     n,
-    from: [fromName?.[1], bracketed ? `[${bracketed[1]}]` : ''].filter(Boolean).join(' ') || 'not recorded',
+    from: fromClause ? fromClause[1] + (fromClause[2] ?? '') : 'not recorded',
     by: by?.[1] ?? 'not recorded',
     via: via?.[1] ?? 'not recorded',
     id: id?.[1] ?? '',
@@ -192,17 +352,59 @@ function parseHop(value: string, n: number): Hop {
   }
 }
 
-function parseAuth(value: string, assertedBy = ''): AuthResult[] {
-  const segments = value.split(';')
-  const servid = assertedBy || segments[0].trim().split(/\s+/)[0] || 'not stated'
+/**
+ * An Authentication-Results value cut at its `;` — only those outside comments
+ * and quoted strings. Receivers copy the envelope sender into both, so a
+ * `"x;dkim=pass"@evil.test` split on every `;` gave a DKIM pass credited to
+ * the receiving host. `bare` has comment text blanked to spaces, the same
+ * length as `raw`, for matching; `raw` keeps "(sender IP is …)" for display.
+ * One pass, so a value of 160 KB of `\(` costs what its length costs.
+ */
+function authSegments(value: string): { raw: string; bare: string }[] {
+  const chars = value.split('')
+  const cuts = [-1]
+  let depth = 0
+  let quoted = false
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]
+    if (depth) chars[i] = ' '
+    if (c === '\\') {
+      if (depth && i + 1 < chars.length) chars[i + 1] = ' '
+      i++
+    } else if (quoted) {
+      quoted = c !== '"'
+    } else if (c === '(') {
+      depth++
+      chars[i] = ' '
+    } else if (c === ')') {
+      if (depth) depth--
+    } else if (!depth && c === '"') {
+      quoted = true
+    } else if (!depth && c === ';') {
+      cuts.push(i)
+    }
+  }
+  cuts.push(value.length)
+  const bare = chars.join('')
+  return cuts.slice(1).map((cut, k) => ({ raw: value.slice(cuts[k] + 1, cut), bare: bare.slice(cuts[k] + 1, cut) }))
+}
+
+function parseAuth(value: string, arc = false): AuthResult[] {
+  const segments = authSegments(value)
+  // ARC (RFC 8617) puts the instance, `i=1;`, ahead of the host.
+  if (arc && /^\s*i\s*=\s*\d+\s*$/i.test(segments[0].bare)) segments.shift()
+  // Microsoft 365 writes no host at all: the value opens with a result, and
+  // its first word, "spf=pass", was printed as the host that asserted it.
+  const head = segments[0]?.bare.trim() ?? ''
+  const servid = !head || /^[^\s=]+\s*=/.test(head) ? 'no asserting host stated' : head.split(/\s+/)[0]
   const out: AuthResult[] = []
-  for (const part of segments) {
-    const hit = /\b(spf|dkim|dmarc|arc|compauth)=(\w+)/i.exec(part)
+  for (const segment of segments) {
+    const hit = /^\s*(spf|dkim|dmarc|arc|compauth)\s*=\s*(\w+)/i.exec(segment.bare)
     if (!hit) continue
     out.push({
       mechanism: hit[1].toLowerCase(),
       result: hit[2].toLowerCase(),
-      detail: part.slice(hit.index + hit[0].length).trim(),
+      detail: segment.raw.slice(hit[0].length).trim(),
       assertedBy: servid
     })
   }
@@ -218,8 +420,15 @@ function parseAuth(value: string, assertedBy = ''): AuthResult[] {
  */
 export function analyseHeaders(raw: string): HeaderAnalysis {
   const fields = parseHeaderBlock(raw)
-  const first = (name: string): string =>
-    decodeEncodedWords(fields.find((f) => f.name.toLowerCase() === name)?.value ?? '')
+  const rawOf = (name: string): string => fields.find((f) => f.name.toLowerCase() === name)?.value ?? ''
+  // Decoded, for display. Never parsed for an address: see addressIn.
+  const first = (name: string): string => decodeEncodedWords(rawOf(name))
+  // RFC 2047 allows encoded words in a display name or a comment, never in
+  // the address, so they are blanked before the address is read. Decoded
+  // first, `<security@=?utf-8?q?paypal.test?=>` read as paypal.test and an
+  // encoded `=3Csecurity@paypal.test=3E` as a second address, and both were
+  // reported as aligned with a Return-Path at paypal.test.
+  const addressIn = (name: string): string => addressOf(rawOf(name).replace(ENCODED_WORD, ' '))
   const all = (name: string): string[] => fields.filter((f) => f.name.toLowerCase() === name).map((f) => f.value)
 
   const identities: { label: string; value: string }[] = []
@@ -262,7 +471,7 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   const auth = [
     ...all('authentication-results').flatMap((v) => parseAuth(v)),
     ...all('arc-authentication-results').flatMap((v) =>
-      parseAuth(v).map((r) => ({ ...r, assertedBy: `${r.assertedBy} (ARC — relayed claim)` }))
+      parseAuth(v, true).map((r) => ({ ...r, assertedBy: `${r.assertedBy} (ARC — relayed claim)` }))
     )
   ]
   const receivedSpf = first('received-spf')
@@ -278,10 +487,20 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
     }
   }
 
-  const fromAddr = addressOf(first('from'))
-  const returnAddr = addressOf(first('return-path'))
-  const replyAddr = addressOf(first('reply-to'))
+  const fromAddr = addressIn('from')
+  const returnAddr = addressIn('return-path')
+  const replyAddr = addressIn('reply-to')
   const observations: Observation[] = []
+  // What decoding does to the From address, stated both ways and nothing
+  // more: mail clients differ on whether they decode words there at all.
+  const decodedFrom = addressOf(first('from'))
+  if (decodedFrom !== fromAddr) {
+    const names = (address: string): string => (domainOf(address) ? `it is ${address}` : 'it names no complete address')
+    observations.push({
+      text: `Decoding the encoded words in From changes the address it names: read as written ${names(fromAddr)}; decoded ${names(decodedFrom)}.`,
+      aligned: false
+    })
+  }
   const compare = (aLabel: string, a: string, bLabel: string, b: string): void => {
     if (!a || !b) return
     const da = domainOf(a)
@@ -338,10 +557,16 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   // The display name is everything before the real address. An address hiding
   // in there is the oldest trick in the file — a client shows the display name
   // and the reader never sees the domain the mail actually came from.
-  const fromRaw = first('from')
+  // Split where the value as written puts its last `<`, then decode only the
+  // part before it: an encoded display name still gives up the address it
+  // hides, but decoding can no longer move the split.
+  const fromRaw = rawOf('from')
   const lastAngle = fromRaw.lastIndexOf('<')
-  const displayPart = lastAngle > 0 ? fromRaw.slice(0, lastAngle) : ''
-  const hidden = /([\w.+-]+@[\w.-]+)/.exec(displayPart)
+  const displayPart = lastAngle > 0 ? decodeEncodedWords(fromRaw.slice(0, lastAngle)) : ''
+  // A scan starts only where a run of address characters starts. Unanchored,
+  // it restarted at every character of a long run with no `@`: seconds on a
+  // 100 KB display name, even an innocent quoted one.
+  const hidden = /(?:^|[^\w.+-])([\w.+-]+@[\w.-]+)/.exec(displayPart)
   const hiddenDomain = hidden ? domainOf(hidden[1]) : ''
   if (hiddenDomain && hiddenDomain !== domainOf(fromAddr)) {
     observations.push({
@@ -368,10 +593,21 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   if (!fields.length) notes.push('No headers found in this paste.')
   if (!received.length) notes.push('No Received headers — the delivery path is not recorded.')
   if (!auth.length) notes.push('No Authentication-Results or Received-SPF — SPF, DKIM and DMARC are not recorded.')
-  if (!returnAddr) notes.push('No Return-Path — the envelope sender is not recorded.')
+  // A Return-Path that is there but names no address is not an absent one.
+  // `<>` is the null sender a bounce or delivery notice carries, and the lure
+  // shaped like one; it is said only when the bytes are exactly that.
+  const returnRaw = rawOf('return-path')
+  if (!returnRaw) notes.push('No Return-Path — the envelope sender is not recorded.')
+  else if (!returnAddr) {
+    notes.push(
+      /^\s*<\s*>\s*$/.test(returnRaw)
+        ? 'Return-Path is <>, a null envelope sender (the form RFC 5321 gives bounces and delivery notices), so there is no envelope domain to compare with From.'
+        : 'Return-Path names no address, so there is no envelope domain to compare with From.'
+    )
+  }
   if (hops.some((h) => !h.at)) notes.push('One or more hops stated no time, so those gaps are not measurable.')
 
-  return { identities, auth, hops, observations, notes }
+  return { identities, auth, hops, observations, notes, fromAddress: fromAddr }
 }
 
 /** The analysis as markdown, for the clipboard or a case note. */
@@ -388,9 +624,15 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
  * Inline code renders none of those. The fence is a backtick run one longer
  * than the longest inside the value, so the value cannot close its own
  * quoting, and newlines are flattened because inline code cannot span lines.
+ *
+ * Inline code does not isolate direction, though, so after the flatten every
+ * control and format character shows as `<U+XXXX>`, the rule names follow. A
+ * right-to-left override in a From domain otherwise ran on past the fence and
+ * reversed the report's own sentence, and a soft hyphen in a host vanished
+ * from the copy an analyst pastes into a block list.
  */
 export function quoteUntrusted(value: string): string {
-  const flat = value.replace(/[\r\n\u2028\u2029]+/g, ' ')
+  const flat = visibleName(value.replace(/[\r\n\u2028\u2029]+/g, ' '))
   if (!flat) return '(empty)'
   let longest = 0
   for (const run of flat.match(/`+/g) ?? []) longest = Math.max(longest, run.length)

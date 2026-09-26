@@ -5,7 +5,9 @@ import {
   decodeEncodedWords,
   formatDelay,
   formatHeaderReport,
-  parseHeaderBlock
+  parseHeaderBlock,
+  quotedPrintableBytes,
+  quoteUntrusted
 } from './emailHeaders'
 import { analysePhishing } from './phish'
 
@@ -166,7 +168,9 @@ describe('trust attribution on authentication results', () => {
     const a = analyseHeaders(
       'ARC-Authentication-Results: i=1; relay.test; dkim=pass header.d=corp.test\nFrom: a@corp.test'
     )
-    expect(a.auth[0].assertedBy).toContain('ARC — relayed claim')
+    // Exactly: the host follows the ARC instance, and "i=1" was once printed
+    // as the host while a toContain check passed.
+    expect(a.auth[0].assertedBy).toBe('relay.test (ARC — relayed claim)')
   })
 
   it('says a Received-SPF result has no asserting host rather than implying one', () => {
@@ -303,5 +307,294 @@ describe('PhishTool parity on the header model', () => {
     const labels = analyseHeaders('From: a@b.test').identities
     expect(labels.find((i) => i.label === 'Cc')?.value).toBe('not recorded')
     expect(labels.find((i) => i.label === 'In-Reply-To')?.value).toBe('not recorded')
+  })
+})
+
+describe('hostile header sizes stay linear', () => {
+  // Header values have no length cap. Each of these took seconds through a
+  // regex that retried from every position of a long run.
+  it.each([
+    ['a run of escaped quotes', 'From: ' + '\\"'.repeat(50_000)],
+    ['a run of escaped parens', 'From: ' + '\\('.repeat(50_000)],
+    ['a run of open brackets', 'From: ' + '<'.repeat(100_000)],
+    ['a domain of dots', 'From: <x@' + '.'.repeat(100_000) + 'a>'],
+    ['a long bare display name', 'From: ' + 'a'.repeat(100_000) + ' <x@y.test>'],
+    ['a long quoted display name', 'From: "' + 'a'.repeat(100_000) + '" <x@y.test>'],
+    ['a Received tail of open parens', 'Received: from a.test by b.test; ' + '('.repeat(100_000)],
+    ['a result comment of escaped parens', 'Authentication-Results: mx.corp.test; spf=pass (' + '\\('.repeat(80_000)]
+  ])('%s', (_, raw) => {
+    const started = performance.now()
+    analyseHeaders(raw)
+    expect(performance.now() - started).toBeLessThan(2000)
+  })
+
+  it('still finds an address padded behind 2000 spaces in the display name', () => {
+    const a = analyseHeaders('From: "' + ' '.repeat(2000) + 'service@paypal.test" <evil@evil.test>')
+    expect(a.observations.map((o) => o.text)).toContain(
+      'The display name contains an address at paypal.test, which is not the sending domain.'
+    )
+  })
+
+  it('reads the same address the regexes it replaced read', () => {
+    // The old strips, kept as the reference: the scanners are meant to be
+    // exact, not merely fast.
+    const byRegex = (value: string): string => {
+      let unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '')
+      for (let i = 0; i < 6; i++) {
+        const next = unquoted.replace(/\((?:[^()\\]|\\.)*\)/g, ' ')
+        if (next === unquoted) break
+        unquoted = next
+      }
+      const angled = [...unquoted.matchAll(/<([^>]*)>/g)]
+      return (angled.length ? angled[angled.length - 1][1] : unquoted).trim().replace(/^mailto:/i, '')
+    }
+    let seed = 7
+    const next = (): number => (seed = (seed * 48_271) % 2_147_483_647)
+    const alphabet = 'a.@<>()"\\ '
+    const differ: string[] = []
+    for (let n = 0; n < 20_000; n++) {
+      const s = Array.from({ length: next() % 24 }, () => alphabet[next() % alphabet.length]).join('')
+      if (addressOf(s) !== byRegex(s)) differ.push(s)
+    }
+    expect(differ).toEqual([])
+  })
+})
+
+describe('a Received hop, read as the MTA wrote it', () => {
+  const hop = (received: string) => analyseHeaders(`Received: ${received}\nFrom: a@b.test`).hops[0]
+
+  it('keeps the address Postfix saw beside a HELO literal, and the protocol outside the TLS comment', () => {
+    const h = hop(
+      'from [192.168.1.20] (unknown [203.0.113.9]) (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 ' +
+        '(256/256 bits) key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256) ' +
+        '(No client certificate requested) by mx.example.com (Postfix) with ESMTPS id 4ABC123 ' +
+        'for <user@example.com>; Mon, 1 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('[192.168.1.20] (unknown [203.0.113.9])')
+    expect(h.via).toBe('ESMTPS')
+    expect(h.by).toBe('mx.example.com')
+    expect(h.id).toBe('4ABC123')
+    expect(h.forWhom).toBe('user@example.com')
+    expect(h.at).toBe('2024-01-01T00:00:00.000Z')
+  })
+
+  it('keeps the public address Gmail recorded for a submission from a LAN', () => {
+    const h = hop(
+      'from [192.168.1.100] (host86-1-2-3.range86-1.btcentralplus.com. [86.1.2.3]) by smtp.gmail.com ' +
+        'with ESMTPSA id abc123 for <x@gmail.test> (version=TLS1_3 cipher=TLS_AES_256_GCM_SHA384 bits=256/256); ' +
+        'Mon, 01 Jan 2024 00:00:00 -0800 (PST)'
+    )
+    expect(h.from).toContain('86.1.2.3')
+    expect(h.via).toBe('ESMTPSA')
+    expect(h.at).toBe('2024-01-01T08:00:00.000Z')
+  })
+
+  it('keeps Exim’s order, the address it saw first and the HELO in the comment, unlabelled', () => {
+    const h = hop(
+      'from [203.0.113.8] (helo=[192.168.1.20]) by mx.example.com with esmtpsa (TLS1.3) tls ' +
+        'TLS_AES_256_GCM_SHA384 (Exim 4.96) (envelope-from <a@b.test>) id 1abc-000 for c@d.test; ' +
+        'Mon, 01 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('[203.0.113.8] (helo=[192.168.1.20])')
+    expect(h.via).toBe('esmtpsa')
+    expect(h.id).toBe('1abc-000')
+  })
+
+  it('reads an ordinary Postfix TLS hop as ESMTPS, not "cipher"', () => {
+    const h = hop(
+      'from mail.sender.test (mail.sender.test [198.51.100.5]) (using TLSv1.3 with cipher ' +
+        'TLS_AES_256_GCM_SHA384 (256/256 bits)) by mx.corp.test (Postfix) with ESMTPS id 9F2; ' +
+        'Mon, 1 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('mail.sender.test (mail.sender.test [198.51.100.5])')
+    expect(h.via).toBe('ESMTPS')
+  })
+
+  it('keeps the address in a Sendmail comment that nests "(may be forged)"', () => {
+    const h = hop(
+      'from smtp.sender.test (smtp.sender.test [192.0.2.1] (may be forged)) by mx.corp.test ' +
+        '(8.15.2/8.15.2) with ESMTP id 3ABC; Mon, 1 Jan 2024 00:00:00 +0000'
+    )
+    expect(h.from).toBe('smtp.sender.test (smtp.sender.test [192.0.2.1] (may be forged))')
+    expect(h.via).toBe('ESMTP')
+  })
+
+  it('does not read a local pickup’s "(Postfix, from userid 1000)" as a hop from "userid"', () => {
+    const h = hop('by web1.corp.test (Postfix, from userid 1000) id 4XYZ; Mon, 1 Jan 2024 00:00:00 +0000')
+    expect(h.from).toBe('not recorded')
+    expect(h.by).toBe('web1.corp.test')
+    expect(h.id).toBe('4XYZ')
+  })
+})
+
+describe('who asserted an authentication result', () => {
+  const said = (header: string) =>
+    analyseHeaders(`${header}\nFrom: a@contoso.test`).auth.map((r) => `${r.mechanism}=${r.result} by ${r.assertedBy}`)
+
+  it('says Microsoft 365’s results name no host, rather than naming "spf=pass" as one', () => {
+    const header =
+      'Authentication-Results: spf=pass (sender IP is 40.107.1.1) smtp.mailfrom=contoso.test; ' +
+      'dkim=pass (signature was verified) header.d=contoso.test;dmarc=pass action=none ' +
+      'header.from=contoso.test;compauth=pass reason=100'
+    expect(said(header)).toEqual([
+      'spf=pass by no asserting host stated',
+      'dkim=pass by no asserting host stated',
+      'dmarc=pass by no asserting host stated',
+      'compauth=pass by no asserting host stated'
+    ])
+    // The comment stays in the detail: it is where Microsoft states the sending IP.
+    expect(analyseHeaders(`${header}\nFrom: a@contoso.test`).auth[0].detail).toBe(
+      '(sender IP is 40.107.1.1) smtp.mailfrom=contoso.test'
+    )
+  })
+
+  it('reads the host after an ARC instance', () => {
+    expect(
+      said(
+        'ARC-Authentication-Results: i=1; mx.microsoft.com 1; spf=pass smtp.mailfrom=contoso.test; ' +
+          'dmarc=pass header.from=contoso.test'
+      )
+    ).toEqual([
+      'spf=pass by mx.microsoft.com (ARC — relayed claim)',
+      'dmarc=pass by mx.microsoft.com (ARC — relayed claim)'
+    ])
+  })
+
+  it('does not split a result at a semicolon in a comment or a quoted address', () => {
+    // Receivers copy the envelope sender into both, so the sender writes them.
+    expect(
+      said(
+        'Authentication-Results: mx.corp.test; spf=fail (domain of x@evil.test; dkim=pass) smtp.mailfrom=x@evil.test'
+      )
+    ).toEqual(['spf=fail by mx.corp.test'])
+    expect(
+      said(
+        'Authentication-Results: mx.corp.test; spf=fail (domain of "x;dkim=pass"@evil.test does not designate ' +
+          '192.0.2.1 as permitted sender) smtp.mailfrom="x;dkim=pass"@evil.test'
+      )
+    ).toEqual(['spf=fail by mx.corp.test'])
+  })
+})
+
+describe('encoded words never move the From address', () => {
+  const texts = (raw: string) => analyseHeaders(raw).observations.map((o) => o.text)
+
+  it('does not read an encoded word inside the address as its domain', () => {
+    const raw =
+      'Return-Path: <bounce@paypal.test>\nFrom: <security@=?utf-8?q?paypal.test?=>\n' +
+      'Authentication-Results: mx.corp.test; dkim=pass header.d=paypal.test'
+    expect(texts(raw).join('\n')).not.toMatch(/both at|which is the From domain/)
+    expect(texts(raw)).toContain(
+      'Decoding the encoded words in From changes the address it names: read as written it names no ' +
+        'complete address; decoded it is security@paypal.test.'
+    )
+    expect(analyseHeaders(raw).fromAddress).toBe('security@')
+  })
+
+  it('reads the address a receiver’s DMARC check reads when decoding forges a second one', () => {
+    const raw =
+      'Return-Path: <service@paypal.com>\n' +
+      'From: =?utf-8?q?PayPal_=22?= <attacker@paypa1.com> (=?utf-8?q?=22?=<service@paypal.com>)'
+    expect(texts(raw)).toContain('From is at paypa1.com; Return-Path is at paypal.com. They differ.')
+    expect(texts(raw)).toContain(
+      'Decoding the encoded words in From changes the address it names: read as written it is ' +
+        'attacker@paypa1.com; decoded it is service@paypal.com.'
+    )
+    expect(analyseHeaders(raw).fromAddress).toBe('attacker@paypa1.com')
+  })
+
+  it('does not take an encoded angle address after the real one', () => {
+    const raw = 'Return-Path: <bounce@paypal.test>\nFrom: <x@evil.test> =?utf-8?q?=3Csecurity@paypal.test=3E?='
+    expect(texts(raw)).toContain('From is at evil.test; Return-Path is at paypal.test. They differ.')
+  })
+
+  it('still finds an address hidden in an encoded display name, and says nothing about decoding', () => {
+    const found = texts('From: =?utf-8?q?service=40paypal.com?= <attacker@evil.test>')
+    expect(found).toContain('The display name contains an address at paypal.com, which is not the sending domain.')
+    expect(found.join('\n')).not.toContain('Decoding')
+  })
+})
+
+describe('adjacent encoded words', () => {
+  it('drop the space a fold put between them', () => {
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?= =?UTF-8?B?UGFs?=')).toBe('PayPal')
+    expect(decodeEncodedWords('"=?UTF-8?B?aW52b2ljZS5w?=\t=?UTF-8?B?ZGYuZXhl?="')).toBe('"invoice.pdf.exe"')
+    const folded = analyseHeaders('Subject: =?UTF-8?B?UGF5?=\r\n =?UTF-8?B?UGFs?= account\nFrom: a@b.test')
+    expect(folded.identities.find((i) => i.label === 'Subject')?.value).toBe('PayPal account')
+  })
+
+  it('decode a character split across two words whole', () => {
+    // U+0430 is D0 B0 in UTF-8, and the split falls between the two bytes.
+    const split = '=?utf-8?B?' + btoa('p\xd0') + '?= =?utf-8?B?' + btoa('\xb0ypal') + '?='
+    expect(decodeEncodedWords(split)).toBe('p\u0430ypal')
+  })
+
+  it('join words in different charsets', () => {
+    expect(decodeEncodedWords('=?utf-8?Q?a?= =?iso-8859-1?Q?=E9?=')).toBe('aé')
+  })
+
+  it('keep whitespace a reader sees, and text that only looks like a word', () => {
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?=\u00A0=?UTF-8?B?UGFs?=')).toBe('Pay\u00A0Pal')
+    expect(decodeEncodedWords('ok?= =?UTF-8?B?UGF5?=')).toBe('ok?= Pay')
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?= x =?UTF-8?B?UGFs?=')).toBe('Pay x Pal')
+  })
+
+  it('join two 3 MB words without running out of stack', () => {
+    const word = '=?utf-8?B?' + btoa('a'.repeat(3_000_000)) + '?='
+    expect(decodeEncodedWords(`${word} ${word}`)).toBe('a'.repeat(6_000_000))
+  })
+
+  it('leave a word that does not decode, and the space beside it, as written', () => {
+    expect(decodeEncodedWords('=?x-made-up?B?VXJnZW50?= =?UTF-8?B?UGF5?=')).toBe('=?x-made-up?B?VXJnZW50?= Pay')
+    expect(decodeEncodedWords('=?UTF-8?B?UGF5?= =?UTF-8?B?!!?=')).toBe('Pay =?UTF-8?B?!!?=')
+  })
+})
+
+describe('quoted-printable over text already read as UTF-8', () => {
+  it('keeps a raw non-ASCII character as its UTF-8 bytes, not its low byte', () => {
+    expect([...quotedPrintableBytes('p\u0430y=3D')]).toEqual([112, 208, 176, 121, 61])
+    expect(decodeEncodedWords('=?utf-8?Q?p\u0430ypal?=')).toBe('p\u0430ypal')
+  })
+
+  it('still reads each escape, and leaves a broken one as written', () => {
+    expect(new TextDecoder().decode(quotedPrintableBytes('a=3Db=C3=A9=zz='))).toBe('a=bé=zz=')
+  })
+})
+
+describe('a Return-Path that names no address', () => {
+  it('says a null sender is null, not absent', () => {
+    const bounce = analyseHeaders('Return-Path: <>\nFrom: Mailer <postmaster@bank.test>\nSubject: Undeliverable')
+    expect(bounce.notes).not.toContain('No Return-Path — the envelope sender is not recorded.')
+    expect(bounce.notes).toContain(
+      'Return-Path is <>, a null envelope sender (the form RFC 5321 gives bounces and delivery notices), ' +
+        'so there is no envelope domain to compare with From.'
+    )
+  })
+
+  it('says a Return-Path of only a comment names no address', () => {
+    expect(analyseHeaders('Return-Path: (none given)\nFrom: a@b.test').notes).toContain(
+      'Return-Path names no address, so there is no envelope domain to compare with From.'
+    )
+  })
+})
+
+describe('format characters in the report', () => {
+  it('show as code points inside the quoting, with line breaks still flattened to spaces', () => {
+    expect(quoteUntrusted('scan\u202Efdp.exe')).toBe('`scan<U+202E>fdp.exe`')
+    expect(quoteUntrusted('micro\u00ADsoft.test')).toBe('`micro<U+00AD>soft.test`')
+    expect(quoteUntrusted('a\r\nb')).toBe('`a b`')
+    // Already escaped is left alone, so no value is escaped twice.
+    expect(quoteUntrusted('<U+202E>')).toBe('`<U+202E>`')
+  })
+
+  it('cannot let a direction override in the From domain reverse the report’s own sentences', () => {
+    const md = formatHeaderReport(
+      analyseHeaders(
+        'From: PayPal <x@\u202Emoc.lapyap>\nReturn-Path: <bounce@evil.test>\n' +
+          'Received: from a.test by b\u202Eevil.test; Mon, 1 Jan 2024 00:00:00 +0000'
+      )
+    )
+    expect(md.split('\n').filter((line) => /\p{Cf}/u.test(line))).toEqual([])
+    expect(md).toContain('From is at <U+202E>moc.lapyap; Return-Path is at evil.test. They differ.')
   })
 })
