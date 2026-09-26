@@ -7,6 +7,8 @@ import { renderPropRow } from '../ui/FormField'
 import { isTerminalStatus, stringToColor } from '../utils'
 import { completionOutcome, relativeDue } from '../dates'
 import { renderCustomFieldInput } from './CustomFieldInputs'
+import { setKindTag } from '../soc/alertCategory'
+import { shownAlertKind } from '../ui/composites/issueMeta'
 import {
   renderSelectControl,
   renderDateControl,
@@ -231,6 +233,38 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
         return cell
       },
       'scale'
+    )
+  }
+
+  // Alert kind — incidents on a case board, like the verdict. The kind is a tag
+  // on the case, so picking one is a tag edit that goes out with the save like
+  // any other. A kind only derived from the title matches no option: it shows
+  // as the muted placeholder, saying so, until the analyst picks.
+  if (socBoard && task.issueType === 'incident') {
+    const categories = plugin.settings.alertCategories
+    const kind = shownAlertKind({ tags: task.tags, title: task.title, categories })
+    const derived = kind?.derivedFrom !== undefined ? `${kind.category.label} (derived from title)` : undefined
+    renderPropRow(
+      grid,
+      'Alert kind',
+      () => {
+        const cell = createDiv('pm-prop-value')
+        renderSelectControl({
+          container: cell,
+          value: derived ? null : (kind?.category.id ?? ''),
+          options: [
+            { id: '', label: 'None' },
+            ...categories.map((c) => ({ id: c.id, label: c.label, color: c.color, icon: c.icon || undefined }))
+          ],
+          placeholder: derived,
+          onChange: (id) => {
+            task.tags = setKindTag(task.tags, categories, id)
+            rerender()
+          }
+        })
+        return cell
+      },
+      'radar'
     )
   }
 

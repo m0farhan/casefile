@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeEl } from '../../test/fakeDom'
 import type PMPlugin from '../main'
-import { DEFAULT_ISSUE_TYPES, DEFAULT_SEVERITIES, DEFAULT_STATUSES, makeTask, type Project, type Task } from '../types'
+import {
+  DEFAULT_ALERT_CATEGORIES,
+  DEFAULT_ISSUE_TYPES,
+  DEFAULT_SEVERITIES,
+  DEFAULT_STATUSES,
+  makeTask,
+  type Project,
+  type Task
+} from '../types'
 import { renderMultiSelect, renderSelectControl } from '../ui/composites/properties'
 import { renderTaskFormFields } from './TaskFormFields'
 
@@ -24,7 +32,7 @@ vi.mock('../ui/FormField', async () => {
 })
 vi.stubGlobal('createDiv', (info?: string) => new FakeEl('div', info))
 
-function render(task: Task, onChange?: () => void): void {
+function render(task: Task, onChange?: () => void, rerender = () => {}, boardType = 'soc'): void {
   const project = { tasks: [task], teamMembers: ['alice'], customFields: [] } as unknown as Project
   const plugin = {
     store: {
@@ -33,10 +41,10 @@ function render(task: Task, onChange?: () => void): void {
         issueTypes: DEFAULT_ISSUE_TYPES,
         severities: DEFAULT_SEVERITIES,
         verdicts: [],
-        boardType: 'soc'
+        boardType
       })
     },
-    settings: { globalTeamMembers: [], showTagColors: false }
+    settings: { globalTeamMembers: [], showTagColors: false, alertCategories: DEFAULT_ALERT_CATEGORIES }
   } as unknown as PMPlugin
   renderTaskFormFields(FakeEl.root() as unknown as HTMLElement, {
     task,
@@ -44,7 +52,7 @@ function render(task: Task, onChange?: () => void): void {
     plugin,
     parentId: null,
     setParentId: () => {},
-    rerender: () => {},
+    rerender,
     shownExtras: new Set(['depends']),
     onChange
   })
@@ -82,5 +90,44 @@ describe('renderTaskFormFields', () => {
     multi('Add dependency').remove('other-id')
     expect(task.assignees).toEqual(['bob'])
     expect(onChange).toHaveBeenCalledTimes(7)
+  })
+})
+
+describe('Alert kind', () => {
+  type SelectOpts = Parameters<typeof renderSelectControl>[0]
+  const kindControl = (): SelectOpts | undefined =>
+    vi.mocked(renderSelectControl).mock.calls.find(([o]) => o.options.some((it) => it.id === 'phishing'))?.[0]
+  const HAND_MADE = '77 - SOC138 - Detected Suspicious Xls File'
+
+  it('says a kind only derived from the title is derived, and records the one the analyst picks', () => {
+    const rerender = vi.fn<() => void>()
+    const task = makeTask({ title: HAND_MADE, issueType: 'incident', tags: ['soc138'] })
+    render(task, undefined, rerender)
+    const control = kindControl()
+    expect(control?.value).toBeNull()
+    expect(control?.placeholder).toBe('Suspicious file (derived from title)')
+    expect(control?.options[0]).toEqual({ id: '', label: 'None' })
+    expect(control?.options.find((o) => o.id === 'suspicious-file')).toMatchObject({ icon: 'file-warning' })
+    control?.onChange('suspicious-file')
+    expect(task.tags).toEqual(['soc138', 'suspicious-file'])
+    expect(rerender).toHaveBeenCalledOnce()
+  })
+
+  it('shows a recorded kind as chosen; picking another replaces it, and None clears it', () => {
+    const task = makeTask({ title: HAND_MADE, issueType: 'incident', tags: ['macro', 'day-shift'] })
+    render(task)
+    const control = kindControl()
+    expect(control?.value).toBe('suspicious-file')
+    control?.onChange('malware')
+    expect(task.tags).toEqual(['day-shift', 'malware'])
+    control?.onChange('')
+    expect(task.tags).toEqual(['day-shift'])
+  })
+
+  it('is offered only for an incident on a case board', () => {
+    render(makeTask({ title: HAND_MADE, issueType: 'task' }))
+    expect(kindControl()).toBeUndefined()
+    render(makeTask({ title: HAND_MADE, issueType: 'incident' }), undefined, undefined, 'plain')
+    expect(kindControl()).toBeUndefined()
   })
 })
