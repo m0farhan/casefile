@@ -42,7 +42,7 @@ describe('defangIoc — a defanged string must not lie about where it goes', () 
 
   it('leaves ordinary values defanged exactly as before', () => {
     expect(defangIoc('https://evil.co/path', 'url')).toBe('hxxps://evil[.]co/path')
-    expect(defangIoc('ftp://evil.co/f', 'url')).toBe('ftp://evil[.]co/f')
+    expect(defangIoc('ftp://evil.co/f', 'url')).toBe('ftp[:]//evil[.]co/f')
     expect(defangIoc('a@evil.co', 'email')).toBe('a[at]evil[.]co')
     // A host:port is not a scheme, and an IPv6 literal only looks like one.
     expect(defangIoc('evil.co:8080', 'domain')).toBe('evil[.]co:8080')
@@ -68,6 +68,45 @@ describe('defangIoc — a defanged string must not lie about where it goes', () 
     }
     // Judged on the value, so a row re-typed as an IP is still broken.
     expect(defangIoc('javascript:alert(1)', 'ip')).toBe('javascript[:]alert(1)')
+  })
+
+  it('judges a row typed as a hash on its value too', () => {
+    // The type select and hand-edited frontmatter can put any value on a hash row.
+    expect(defangIoc('javascript:alert(1)', 'hash')).toBe('javascript[:]alert(1)')
+    expect(defangIoc('http://evil.example.com/x', 'hash')).toBe('hxxp://evil[.]example[.]com/x')
+    expect(defangIoc('\\\\attacker\\s', 'hash')).toBe('[\\\\]attacker\\s')
+    // A real hash has nothing to neutralise.
+    for (const h of [
+      'd41d8cd98f00b204e9800998ecf8427e',
+      'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855',
+      '96:s4Ud1Lj96tHHlZDrwciQmA+4uy1I0G4HYuL8N3TzS8QsO:e4Uk2HHlZDrwciQmA+4uy1I0G4HYuL8N3TzS8Q',
+      'T1F0E0D0C0B0A09080706050403020100F0E0D0C0B0A09080706050403020100F0E0D0C0B0A0'
+    ]) {
+      expect(defangIoc(h, 'hash')).toBe(h)
+    }
+  })
+
+  it('breaks an ftp colon, since a dotless ftp host has no dot to break', () => {
+    expect(defangIoc('ftp://files/x', 'url')).toBe('ftp[:]//files/x')
+    expect(defangIoc('ftp://3232235521/x', 'url')).toBe('ftp[:]//3232235521/x')
+    expect(refangIoc(defangIoc('ftp://files/x', 'url'))).toBe('ftp://files/x')
+  })
+
+  it('sees the scheme past a control byte or a tab, as the URL parser does', () => {
+    // A Safe Links wrapper around %01javascript%3A unwraps to this, and the
+    // browser still runs it as javascript:.
+    expect(defangIoc('\u0001javascript:alert(document.domain)', 'url')).toBe(
+      '\u0001javascript[:]alert(document[.]domain)'
+    )
+    expect(defangIoc('\u000edata:text/html,<script>x</script>', 'url')).toBe(
+      '\u000edata[:]text/html,<script>x</script>'
+    )
+    expect(defangIoc('\u0001http://intranet/login', 'url')).toBe('\u0001hxxp://intranet/login')
+    expect(defangIoc('java\tscript:alert(1)', 'url')).toBe('java\tscript[:]alert(1)')
+    expect(defangIoc('\u0001\\\\attacker\\s', 'url')).toBe('\u0001[\\\\]attacker\\s')
+    // Not every colon is a scheme.
+    expect(defangIoc('fe80::1', 'url')).toBe('fe80::1')
+    expect(defangIoc('evil.com:8080', 'domain')).toBe('evil[.]com:8080')
   })
 
   it('brackets a UNC prefix, so a dotless host is not left live', () => {

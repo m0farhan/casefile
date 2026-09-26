@@ -20,16 +20,19 @@ export const IOC_TYPE_ICONS: Record<IocType, string> = {
 /**
  * Defang an IOC for display so it is never click- or copy-hazardous:
  * http→hxxp, dots→[.], @→[at], any other leading scheme→scheme[:], a leading
- * UNC \\→[\\]. The stored value stays real; only rendering defangs. Hashes
- * pass through untouched (nothing to neutralize).
+ * UNC \\→[\\]. The stored value stays real; only rendering defangs. A real
+ * hash has none of these and comes back unchanged. A row typed as a hash is
+ * judged on its value like any other, so a re-typed `javascript:` is not
+ * waved through.
  */
 export function defangIoc(value: string, type: IocType): string {
-  if (type === 'hash') return value
   // Direction-changing and invisible controls go first: they reorder what the
   // reader sees without changing what a browser resolves, so a defanged string
   // carrying them is a string that lies about its own destination.
   let out = value.replace(BIDI_CONTROLS, '')
-  out = out.replace(/^(\s*)https?/i, (m) => m.replace(/http/i, (h) => (h === 'HTTP' ? 'HXXP' : 'hxxp')))
+  // A URL parser drops leading C0 controls and spaces before it reads the
+  // scheme, so a control byte in front must not hide the scheme from here.
+  out = out.replace(/^([\s\p{Cc}]*)https?/iu, (m) => m.replace(/http/i, (h) => (h === 'HTTP' ? 'HXXP' : 'hxxp')))
   // Every separator a host can be written with, not just the ASCII one.
   // `paypal。com.evil。co` resolves to paypal.com.evil.co, so bracketing only
   // the ASCII dot marked the decoy and left the real apex looking clean.
@@ -50,7 +53,7 @@ export function defangIoc(value: string, type: IocType): string {
   // A UNC path opens an SMB connection, and hands over the analyst's NTLM
   // hash, from Run or Explorer. A dotless host (\\fileserver\share) has no dot
   // for the separator step to break, so the prefix itself is bracketed.
-  out = out.replace(/^(\s*)\\\\/, '$1[\\\\]')
+  out = out.replace(/^([\s\p{Cc}]*)\\\\/u, '$1[\\\\]')
   if (type === 'email' || type === 'url') out = out.replace(/@/g, '[at]')
   return out
 }
@@ -67,12 +70,20 @@ const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069\u061C]/g
 
 /**
  * A leading scheme. It runs after the dots are bracketed, so a host:port
- * (evil.com:8080) no longer has this shape and keeps its colon.
+ * (evil.com:8080) no longer has this shape and keeps its colon. Leading
+ * controls are skipped and a tab or line break inside the scheme is allowed,
+ * because the URL parser strips the first and deletes the second:
+ * `\u0001javascript:` and `java\tscript:` both run as javascript:.
  */
-const LEADING_SCHEME = /^(\s*)([a-z][a-z0-9+.-]*):/i
+const LEADING_SCHEME = /^([\s\p{Cc}]*)([a-z][a-z0-9+.\t\n\r-]*):/iu
 
-/** The schemes whose defanged form is already inert: hxxp is not a scheme, and every dotted host is broken. */
-const WEB_SCHEME = /^(h(tt|xx)ps?|ftp)$/i
+/**
+ * The schemes that keep their colon, because their defanged form is already
+ * inert: hxxp is not a scheme. ftp is not one of them. It is never rewritten,
+ * so it was inert only while the dot step broke its host, and ftp://files/x or
+ * a decimal-IP ftp host has no dot to break.
+ */
+const WEB_SCHEME = /^h(tt|xx)ps?$/i
 
 /**
  * An attacker-written name, made safe to print beside the tool's own words.
