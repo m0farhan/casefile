@@ -9,7 +9,7 @@ import {
   type SavedView,
   type Task
 } from '../types'
-import { hydrateProjectFromFrontmatter, hydrateTaskFromFile } from './YamlHydrator'
+import { hydrateProjectFromFrontmatter, hydrateTaskFromFile, safeColor } from './YamlHydrator'
 import { parseFrontmatter } from './YamlParser'
 import { serializeProject, serializeTask, taskFilePath } from './YamlSerializer'
 
@@ -674,5 +674,31 @@ describe('hand-written Project: and Parent: lines in a description', () => {
     const { frontmatter, body } = parseFrontmatter(md)
     if (!frontmatter) throw new Error('frontmatter missing')
     expect(hydrateTaskFromFile(frontmatter, body, 'x.md').task.description).toBe('Body.')
+  })
+})
+
+describe('colours from a board note', () => {
+  it('keep hex values and colour names, and fall back for anything that could fetch', () => {
+    const evil = 'url(https://evil.example/board.png)'
+    const fm = {
+      'pm-project': true,
+      color: evil,
+      config: {
+        statuses: [
+          { id: 'a', color: evil },
+          { id: 'b', color: '#ff0000' },
+          { id: 'c', color: 'red' }
+        ],
+        priorities: [{ id: 'p', color: evil }],
+        issueTypes: [{ id: 'i', color: 'var(--x)' }]
+      }
+    }
+    const p = hydrateProjectFromFrontmatter(fm, '', 'B/B.md', 'B')
+    expect(p.color).toBe('#8b72be')
+    expect(p.config?.statuses?.map((x) => x.color)).toEqual(['#8a94a0', '#ff0000', 'red'])
+    expect(p.config?.priorities?.[0].color).toBe('#8a94a0')
+    expect(p.config?.issueTypes?.[0].color).toBe('#8a94a0')
+    expect(safeColor('#ABC', 'x')).toBe('#ABC')
+    expect(safeColor(42, 'x')).toBe('x')
   })
 })

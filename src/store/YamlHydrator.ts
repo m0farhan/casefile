@@ -140,6 +140,17 @@ function str(v: unknown, fallback: string): string {
   return fallback
 }
 
+/**
+ * A colour, only when it is a hex value or a plain colour name. Colours go
+ * into CSS `background`, where `url(…)` is valid and fetches as soon as the
+ * board or dashboard draws, so a board note from a shared or synced vault could
+ * make the plugin call out with no click. The colour pickers only ever write
+ * `#rrggbb`, so nothing a user set is lost. Exported for the settings loader.
+ */
+export function safeColor(v: unknown, fallback: string): string {
+  return typeof v === 'string' && /^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|[a-z]+)$/i.test(v) ? v : fallback
+}
+
 /** A date-only field (start, due, completed): a Date keeps its calendar day, never a time. */
 function day(v: unknown): string {
   return v instanceof Date && !Number.isNaN(v.getTime()) ? v.toISOString().slice(0, 10) : str(v, '')
@@ -299,7 +310,7 @@ export function hydrateProjectFromFrontmatter(
     id: str(frontmatter.id, basename),
     title: str(frontmatter.title, basename),
     description: str(frontmatter.description, body.trim()),
-    color: str(frontmatter.color, '#8b72be'),
+    color: safeColor(frontmatter.color, '#8b72be'),
     icon: str(frontmatter.icon, '\u{1F4CB}'),
     tasks: [],
     // Copy containers: on the metadataCache fast path `frontmatter` is Obsidian's
@@ -364,7 +375,7 @@ function hydrateStatusList(raw: unknown): StatusConfig[] | undefined {
     statuses.push({
       id: s.id,
       label: typeof s.label === 'string' ? s.label : s.id,
-      color: typeof s.color === 'string' ? s.color : '#8a94a0',
+      color: safeColor(s.color, '#8a94a0'),
       icon: typeof s.icon === 'string' ? s.icon : '',
       complete: s.complete === true,
       ...(typeof s.wipLimit === 'number' && s.wipLimit > 0 ? { wipLimit: s.wipLimit } : {})
@@ -383,7 +394,7 @@ function hydratePriorityList(raw: unknown): PriorityConfig[] | undefined {
     priorities.push({
       id: p.id,
       label: typeof p.label === 'string' ? p.label : p.id,
-      color: typeof p.color === 'string' ? p.color : '#8a94a0',
+      color: safeColor(p.color, '#8a94a0'),
       icon: typeof p.icon === 'string' ? p.icon : ''
     })
   }
@@ -400,7 +411,7 @@ function hydrateIssueTypeList(raw: unknown): IssueTypeConfig[] | undefined {
     issueTypes.push({
       id: t.id,
       label: typeof t.label === 'string' ? t.label : t.id,
-      color: typeof t.color === 'string' ? t.color : '#8a94a0',
+      color: safeColor(t.color, '#8a94a0'),
       icon: typeof t.icon === 'string' ? t.icon : ''
     })
   }
