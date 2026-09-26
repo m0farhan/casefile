@@ -611,7 +611,10 @@ button.pm-verdict-cancel:hover {
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-width: 1280px;
+  /* Wide enough to use a maximised window on a large display, capped so a
+     single pane on an ultra-wide screen does not stretch the tab strip and
+     the section bands across three thousand pixels. */
+  max-width: 1600px;
   margin: 0 auto;
   padding: 20px 28px 16px;
   box-sizing: border-box;
@@ -636,6 +639,27 @@ button.pm-verdict-cancel:hover {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+}
+/* The paste box and the pane switcher used to share an edge: the tabs sat
+   directly on the textarea's bottom border. */
+.pm-phish-view > .pm-headers-tabs {
+  flex: 0 0 auto;
+  margin-top: 14px;
+}
+/* Room under the last line, so a report scrolled to its end does not finish
+   flush against the divider above the actions. */
+.pm-phish-view > .pm-headers-out {
+  padding-bottom: 16px;
+}
+/* The dialog capped each text block at 180px and each image at 420px, because
+   the whole report had half the screen to share. In a tab those caps turn a
+   message body into a scroll box inside a scroll box. The report scrolls as
+   one now; only a genuinely long block keeps a scroll of its own. */
+.pm-phish-view .pm-headers-pre {
+  max-height: 50vh;
+}
+.pm-phish-view .pm-att-image {
+  max-height: 60vh;
 }
 .pm-phish-view > .pm-modal-btn-row {
   flex: 0 0 auto;
@@ -695,6 +719,7 @@ button.pm-verdict-cancel:hover {
   color: var(--gs-ink);
   font-size: var(--font-ui-smaller);
   overflow-wrap: anywhere;
+  min-width: 0;
 }
 /* Colour here renders WHAT THE HEADER STATES, never a conclusion about the
    mail. An SPF fail really is a fail, and showing it in the colour of a fail
@@ -702,10 +727,16 @@ button.pm-verdict-cancel:hover {
    opinion about whether the message is malicious. Every one of these classes
    is chosen from a value (a result word, an alignment boolean), never from the
    wording of a sentence. */
+/* Never broken inside itself. A result is one stated word, and a hop time is
+   one timestamp with its delay; in a narrow pane the ISO stamp used to split
+   at its hyphens into "2026-09-" over "21T09:18:40.000Z". The text beside it
+   is the thing that wraps now (min-width: 0 on the value lets it give way). */
 .pm-headers-result {
   color: var(--gs-ink-muted);
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 /* On a single stated word — pass, fail — the hue IS the information. */
 .pm-headers-ok {
@@ -746,13 +777,21 @@ button.pm-verdict-cancel:hover {
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   overflow-wrap: anywhere;
+  min-width: 0;
 }
+/* Who asserted the result sits right after the result it qualifies. It used
+   to be pushed to the far edge (margin-left: auto), which in a dialog was a
+   short hop and in a full-width tab put 550px between a claim and its source.
+   It may wrap in a narrow pane rather than squeezing the detail beside it. */
 .pm-headers-by {
   color: var(--gs-ink-tertiary);
   font-size: var(--font-ui-smaller);
-  margin-left: auto;
-  padding-left: 12px;
-  white-space: nowrap;
+  margin-left: 12px;
+  min-width: 0;
+}
+.pm-headers-by::before {
+  content: '·';
+  margin-right: 8px;
 }
 .pm-headers-hop {
   color: var(--gs-accent-hover);

@@ -58,6 +58,14 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   arrived an hour earlier. Reusing one tab would have thrown the first away.
 - Creating a case from the analyser no longer closes it. The case opens on
   top, and the evidence stays on screen while it is written up.
+- The layout is fitted to a tab rather than carried over from the dialog. The
+  pane switcher no longer sits on the paste box's bottom edge. "asserted by"
+  follows the result it qualifies instead of being pushed to the far edge,
+  which in a full-width tab put 550px between a claim and its source. Hop
+  timestamps never split inside themselves in a narrow pane — the text beside
+  them wraps instead. The dialog-era caps on body text (180px) and images
+  (420px) are lifted, so a message body is no longer a scroll box inside a
+  scroll box. Checked at full width and split in half.
 
 ### Fixed — four defects found by red-teaming the analyser
 
