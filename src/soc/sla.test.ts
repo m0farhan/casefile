@@ -62,6 +62,21 @@ describe('slaState', () => {
     const s = slaState(t, POLICIES, Date.parse('2026-07-30T09:30:00.000Z'))
     expect(s?.remainingMs).toBe(30 * MIN)
   })
+
+  it('runs no clock for a policy with a blank (0) target, instead of breaching at creation', () => {
+    // A half-filled settings row saved the blank side as 0.
+    const halfResponse = { sev1: { responseMins: 0, resolutionMins: 240 } }
+    const halfResolution = { sev1: { responseMins: 30, resolutionMins: 0 } }
+    expect(slaState(incident(), halfResponse, T0 + 1000)).toBeNull()
+    expect(slaState(incident({ respondedAt: '2026-07-30T08:05:00.000Z' }), halfResolution, T0 + 6 * MIN)).toBeNull()
+    expect(slaState(incident(), { sev1: { responseMins: -5, resolutionMins: 240 } }, T0)).toBeNull()
+  })
+
+  it('has no result for an unreadable resolvedAt, rather than calling it met', () => {
+    for (const resolvedAt of ['unknown', '30/07/2026 09:00']) {
+      expect(slaState(incident({ resolvedAt }), POLICIES, T0 + 9999 * MIN)).toBeNull()
+    }
+  })
 })
 
 describe('slaAtRisk', () => {
