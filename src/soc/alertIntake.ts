@@ -165,8 +165,12 @@ export function parseAlertPaste(text: string, cfg: { severities: SeverityConfig[
  * claim for its own processor, Dataview's `dataviewjs` running JavaScript —
  * or Dataview's inline `$=`. Fenced on every fence rather than a list of
  * processors, because the list is whatever plugins the vault has.
+ * A fence token anywhere counts, not only at the start of a line: a quote, a
+ * callout or a list item holds a live fence too, and quoted mail arrives as
+ * `> ` lines the sender writes. No container grammar to keep in step — a
+ * stray ``` in prose only fences more, which is the safe mistake.
  */
-const LOOKS_LIKE_MARKUP = /<[a-z!/]|!\[|^[ \t]{0,3}(?:`{3,}|~{3,})|`\s*\$=/im
+const LOOKS_LIKE_MARKUP = /<[a-z!/]|!\[|`{3,}|~{3,}|`\s*\$=/i
 
 /**
  * A pasted alert becomes the case description verbatim, and the description
