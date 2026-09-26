@@ -940,3 +940,9 @@ a.pm-ioc-rep--unknown {
   font-size: 12px;
   color: var(--text-faint);
 }
+
+/* ─ Case description ─ */
+/* The toolbar shares the section's heading row with the Edit button. */
+.pm-modal-desc-section .pm-desc-toolbar {
+  margin-bottom: 0;
+}

@@ -199,9 +199,15 @@ export function renderDescriptionEditor(
   const { app, plugin, project, task } = ctx
 
   const descSection = container.createDiv('pm-modal-section pm-modal-desc-section')
-  descSection.createEl('h4', { text: 'Description', cls: 'pm-modal-section-title' })
+  // The format toolbar (editing) and the Edit button (reading) share the
+  // heading row, so switching modes never adds or removes a row above the
+  // text. The Edit button is also the keyboard way into an existing
+  // description: the preview itself only answers clicks.
+  const descHeader = descSection.createDiv('pm-modal-section-header')
+  descHeader.createEl('h4', { text: 'Description', cls: 'pm-modal-section-title' })
+  const descToolbar = descHeader.createDiv('pm-desc-toolbar')
+  const editBtn = new IconButton(descHeader).setIcon('pencil').setTooltip('Edit description')
 
-  const descToolbar = descSection.createDiv('pm-desc-toolbar')
   const descPreview = descSection.createDiv('pm-modal-desc-preview')
   const editorWrap = descSection.createDiv('pm-modal-description')
 
@@ -239,6 +245,7 @@ export function renderDescriptionEditor(
     editorWrap.classList.add('pm-hidden')
     descToolbar.classList.add('pm-hidden')
     descPreview.classList.remove('pm-hidden')
+    editBtn.el.classList.remove('pm-hidden')
   }
 
   const view = new EditorView({
@@ -402,6 +409,7 @@ export function renderDescriptionEditor(
 
   const showEdit = (caret?: number) => {
     descPreview.classList.add('pm-hidden')
+    editBtn.el.classList.add('pm-hidden')
     descToolbar.classList.remove('pm-hidden')
     editorWrap.classList.remove('pm-hidden')
     // Preview-side edits (checkbox toggles) land on task.description only —
@@ -464,7 +472,12 @@ export function renderDescriptionEditor(
     return current ? sourceOffsetOf(rendered + caret.offset) : undefined
   }
 
-  neutralizeExternalLinks(descPreview)
+  editBtn.onClick(() => showEdit(task.description.length))
+
+  // With app and sourcePath the guard also stops evidence Obsidian cannot
+  // display itself (a dropped .html or .lnk) from reaching the system's
+  // default app; it copies the path instead (a124).
+  neutralizeExternalLinks(descPreview, app, sourcePath)
   descPreview.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
     if (target.instanceOf(HTMLInputElement) && target.type === 'checkbox') return
@@ -501,6 +514,7 @@ export function renderDescriptionEditor(
     void renderPreview()
   } else {
     descPreview.classList.add('pm-hidden')
+    editBtn.el.classList.add('pm-hidden')
   }
 
   return {
