@@ -970,20 +970,32 @@ async function readRelationships(
 
   let budget = MAX_RELS_TOTAL
   let read = 0
+  // Parts skipped before `read` counts them, by reason, and said once per
+  // reason after the loop. One note each let 4,000 encrypted `.rels` entries
+  // put 4,000 lines on the card and in the report, and capping the notes where
+  // they are printed would push the closing summaries out instead. `read`
+  // still counts successful reads only, so sixty-four decoys cannot push the
+  // real word/_rels/document.xml.rels out of reach.
+  const unread: Record<'encrypted' | 'unlocatable' | 'zero' | 'other', CentralRecord[]> = {
+    encrypted: [],
+    unlocatable: [],
+    zero: [],
+    other: []
+  }
   for (const entry of rels) {
     if (read >= MAX_RELS_PARTS) {
       // Counted against the entries LISTED, which is the only population this
       // function has: `rels.length` is not a count of what the container
       // holds. Not "the first 64" either — `read` counts successful reads, so
       // an encrypted or unlocatable part in between is skipped without
-      // counting, and each of those has said so in its own note.
+      // counting, and each reason for that has its own note.
       facts.notes.push(
         `Reading stopped after ${MAX_RELS_PARTS} relationship parts; ${rels.length} appear among the entries listed.`
       )
       break
     }
     if (entry.encrypted) {
-      facts.notes.push(`${entry.name} is encrypted, so its targets could not be read.`)
+      unread.encrypted.push(entry)
       continue
     }
     const located = locateData(bytes, view, entry)
@@ -992,11 +1004,11 @@ async function readRelationships(
       // and a length that is missing or longer than the file holds. Which of
       // those it was is not claimed, because reading the bytes to find out is
       // the read that just failed.
-      facts.notes.push(`${entry.name} could not be read from the bytes in this file, so no targets were read from it.`)
+      unread.unlocatable.push(entry)
       continue
     }
     if (located.length === 0) {
-      facts.notes.push(`${entry.name} declares a compressed size of 0 bytes, so there was nothing in it to read.`)
+      unread.zero.push(entry)
       continue
     }
     if (budget <= 0) {
@@ -1038,7 +1050,7 @@ async function readRelationships(
       }
       budget -= out.bytes.length
     } else {
-      facts.notes.push(`${entry.name} is compressed with ${entry.method}, which this reader cannot inflate.`)
+      unread.other.push(entry)
       continue
     }
     read++
@@ -1059,6 +1071,51 @@ async function readRelationships(
     }
     collectTargets(entry.name, xml, facts.externalTargets, facts.notes)
   }
+  // One part keeps the sentence it always had; several are counted and named.
+  const say = (
+    parts: CentralRecord[],
+    one: (part: CentralRecord) => string,
+    several: string,
+    named = (part: CentralRecord): string => part.name
+  ): void => {
+    const [only] = parts
+    if (!only) return
+    facts.notes.push(
+      parts.length === 1 ? one(only) : `${parts.length} relationship parts ${several}: ${someOf(parts.map(named))}.`
+    )
+  }
+  say(
+    unread.encrypted,
+    (part) => `${part.name} is encrypted, so its targets could not be read.`,
+    'are encrypted, so their targets could not be read'
+  )
+  say(
+    unread.unlocatable,
+    (part) => `${part.name} could not be read from the bytes in this file, so no targets were read from it.`,
+    'could not be read from the bytes in this file, so no targets were read from them'
+  )
+  say(
+    unread.zero,
+    (part) => `${part.name} declares a compressed size of 0 bytes, so there was nothing in it to read.`,
+    'declare a compressed size of 0 bytes, so there was nothing in them to read'
+  )
+  say(
+    unread.other,
+    (part) => `${part.name} is compressed with ${part.method}, which this reader cannot inflate.`,
+    'are compressed in a way this reader cannot inflate, so their targets could not be read',
+    (part) => `${part.name} (${part.method})`
+  )
+}
+
+/**
+ * The first few names and how many more.
+ *
+ * ponytail: five names, then a count. Every name is still in the entry list
+ * this returns, and a note that names every part is the flood it replaces.
+ */
+function someOf(names: string[]): string {
+  const shown = names.slice(0, 5).join(', ')
+  return names.length > 5 ? `${shown} and ${names.length - 5} more` : shown
 }
 
 const OLE_MAGIC = [0xd0, 0xcf, 0x11, 0xe0]

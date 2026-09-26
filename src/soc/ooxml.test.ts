@@ -91,6 +91,32 @@ describe('readZipDocument', () => {
     expect(facts?.notes.join(' ')).toContain('is encrypted, so its targets could not be read')
   })
 
+  it('says why relationship parts were skipped once per reason, not once per part', async () => {
+    // Skipped before the 64-part counter, one note each: 4,000 of them put
+    // 4,000 lines on the card and in the report.
+    const facts = await readZipDocument(
+      zip(many(4_000, (i) => ({ name: `Invoice_${i}.exe.rels`, data: enc.encode('x'), flags: 1 })))
+    )
+    expect(facts?.notes).toEqual([
+      '4000 entries are encrypted — their contents cannot be read from here, only their names and sizes.',
+      '4000 relationship parts are encrypted, so their targets could not be read: Invoice_0.exe.rels, Invoice_1.exe.rels, Invoice_2.exe.rels, Invoice_3.exe.rels, Invoice_4.exe.rels and 3995 more.',
+      '4000 inner files could not be read whole here — encrypted, damaged, over 8 MB, or compressed in a way this device cannot inflate — so they are not hashed here.'
+    ])
+
+    const mixed = await readZipDocument(
+      zip([
+        ...many(2, (i) => ({ name: `z${i}.rels`, data: new Uint8Array(0) })),
+        ...many(2, (i) => ({ name: `m${i}.rels`, data: enc.encode('x'), method: 99 + i }))
+      ])
+    )
+    expect(mixed?.notes).toContain(
+      '2 relationship parts declare a compressed size of 0 bytes, so there was nothing in them to read: z0.rels, z1.rels.'
+    )
+    expect(mixed?.notes).toContain(
+      '2 relationship parts are compressed in a way this reader cannot inflate, so their targets could not be read: m0.rels (aes), m1.rels (other-100).'
+    )
+  })
+
   it('stops a decompression bomb at the cap and keeps what it read', async () => {
     // Four megabytes of padding that deflates to a few kilobytes, with the
     // relationship written FIRST so the test proves both halves: the cap bites
