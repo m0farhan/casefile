@@ -817,8 +817,13 @@ function nonMarkupClose(xml: string, lt: number): number | null {
   // An internal subset holds its own `>` characters, so the DOCTYPE ends at the
   // `>` after the closing `]` when there is one.
   const gt = xml.indexOf('>', lt)
-  const bracket = xml.indexOf('[', lt)
-  if (bracket >= 0 && (gt < 0 || bracket < gt)) {
+  // Looked for only before that first `>`: an internal subset opens there or
+  // not at all. Searching on to the end of the part instead cost a full scan
+  // per DOCTYPE, and a part of nothing but `<!DOCTYPE>` repeated is 104,000
+  // of them in a megabyte — 48 s for one attachment.
+  const found = (gt < 0 ? xml.slice(lt) : xml.slice(lt, gt)).indexOf('[')
+  const bracket = found < 0 ? -1 : lt + found
+  if (bracket >= 0) {
     const shut = xml.indexOf(']', bracket)
     if (shut < 0) return -1
     const after = xml.indexOf('>', shut)

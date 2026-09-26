@@ -863,6 +863,37 @@ describe('the relationship list reports only what Word would read', () => {
     expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://real.lure/y'])
   })
 
+  it('masks a DOCTYPE whose internal subset holds a `>`, and reads the relationship after it', async () => {
+    const rels = `<!DOCTYPE Relationships [<!ENTITY x "a>b"> <!-- <Relationship Target="https://hidden.test/" TargetMode="External"/> -->]>
+<Relationships>
+<Relationship Id="r1" Type="t/x" Target="https://a.test/" TargetMode="External"/>
+</Relationships>`
+    const facts = await readZipDocument(zip([{ name: '_rels/.rels', data: enc.encode(rels) }]))
+    expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://a.test/'])
+  })
+
+  it('scans parts of repeated DOCTYPEs in one pass', async () => {
+    // Each `<!DOCTYPE` searched for `[` to the end of the part, and there is
+    // none: 104,000 searches of up to a megabyte each. Four such parts fill one
+    // container's inflation budget and each attachment has its own, so two
+    // containers are 3.6 s apiece on an idle machine and 48 s under load. The
+    // one Relationship is what makes the scan run at all.
+    const part = `${'<!DOCTYPE>'.repeat(104_000)}<Relationship Id="r1" Type="t/x" Target="https://a.test/" TargetMode="External"/>`
+    const data = await deflateRaw(enc.encode(part))
+    const bytes = zip(
+      ['a', 'b', 'c', 'd'].map((letter) => ({
+        name: `word/_rels/${letter}.xml.rels`,
+        data,
+        method: 8,
+        size: part.length
+      }))
+    )
+    const started = performance.now()
+    const results = [await readZipDocument(bytes), await readZipDocument(bytes)]
+    expect(performance.now() - started).toBeLessThan(2_000)
+    for (const facts of results) expect(facts?.externalTargets).toHaveLength(4)
+  })
+
   it('does not report a relationship inside CDATA or a processing instruction', async () => {
     const facts = await readZipDocument(
       zip([
