@@ -1,5 +1,3 @@
-import { extractIocsFromText, formatIocLine } from './ioc'
-
 /**
  * Email headers, read as stated facts.
  *
@@ -63,8 +61,6 @@ export interface HeaderAnalysis {
   hops: Hop[]
   /** Stated comparisons — facts about the headers, never a verdict on them. */
   observations: Observation[]
-  /** Defanged, asset-marked, ready to paste into a case's indicators. */
-  indicators: string[]
   /** What this paste does not contain, said out loud. */
   notes: string[]
 }
@@ -213,8 +209,14 @@ function parseAuth(value: string, assertedBy = ''): AuthResult[] {
   return out
 }
 
-/** Read a pasted header block. `owned` marks the analyst's own estate as assets. */
-export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysis {
+/**
+ * Read a pasted header block.
+ *
+ * No indicators here: the phishing report builds its list from the PARSED
+ * message, and a scan of this raw text ran over every attachment's base64 —
+ * most of a second on a 46 MB mail, for a list nothing read.
+ */
+export function analyseHeaders(raw: string): HeaderAnalysis {
   const fields = parseHeaderBlock(raw)
   const first = (name: string): string =>
     decodeEncodedWords(fields.find((f) => f.name.toLowerCase() === name)?.value ?? '')
@@ -369,9 +371,7 @@ export function analyseHeaders(raw: string, owned: string[] = []): HeaderAnalysi
   if (!returnAddr) notes.push('No Return-Path — the envelope sender is not recorded.')
   if (hops.some((h) => !h.at)) notes.push('One or more hops stated no time, so those gaps are not measurable.')
 
-  const indicators = extractIocsFromText(raw, []).map((ioc) => formatIocLine(ioc, owned))
-
-  return { identities, auth, hops, observations, indicators, notes }
+  return { identities, auth, hops, observations, notes }
 }
 
 /** The analysis as markdown, for the clipboard or a case note. */

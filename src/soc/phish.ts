@@ -1,10 +1,14 @@
 import { type Attachment, hashBytes, parseEml } from './eml'
 import { md5 } from './md5'
 import { type HeaderAnalysis, addressOf, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
-import { defangIoc, extractIocsFromText, formatIocLine } from './ioc'
+import { defangIoc, detectIocType, extractIocsFromText, formatIocLine, visibleName } from './ioc'
 import { decodePercentEscapes } from './toolbox'
 import { type PdfFacts, readPdf } from './pdf'
 import { type OfficeFacts, entryNote, readZipDocument } from './ooxml'
+import { type CfbFacts, cfbNote, readCfb } from './cfb'
+import { markupCensus } from './markup'
+import { previewKind } from './preview'
+import type { Ioc } from '../types'
 
 /**
  * The phishing-specific reading of a mail, on top of the MIME parse.
@@ -662,8 +666,19 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
 }
 
 const MACRO_CAPABLE = /\.(docm|dotm|xlsm|xltm|xlam|pptm|potm|ppam|xls|doc|ppt)$/i
-const EXECUTABLE = /\.(exe|scr|com|pif|bat|cmd|ps1|vbs|js|jse|wsf|wsh|hta|msi|dll|lnk|jar|apk|iso|img)$/i
+const EXECUTABLE = /\.(exe|scr|com|pif|bat|cmd|ps1|vbs|js|jse|wsf|wsh|hta|msi|dll|lnk|jar|apk)$/i
 const ARCHIVE = /\.(zip|rar|7z|tar|gz|cab|ace|arj)$/i
+// Its own fact: a disk image is neither a program nor a script, and calling
+// it one was false. It is a container Windows opens with one double-click,
+// and nothing here reads inside it.
+const DISK_IMAGE = /\.(iso|img|vhdx?)$/i
+
+/**
+ * Said about an archive from its name alone. readAttachment drops it once the
+ * ZIP reader has listed the entries, because the card would then say the
+ * contents are not visible directly above the list of them.
+ */
+export const ARCHIVE_FACT = 'archive — its contents are not visible from here'
 
 /** Stated facts about an attachment. No scoring, no "malicious". */
 export function attachmentFacts(attachment: Attachment): string[] {
@@ -671,12 +686,15 @@ export function attachmentFacts(attachment: Attachment): string[] {
   const name = attachment.filename
   if (EXECUTABLE.test(name)) facts.push('executable or script file type')
   if (MACRO_CAPABLE.test(name)) facts.push('file type that can carry macros')
-  if (ARCHIVE.test(name)) facts.push('archive — its contents are not visible from here')
+  if (ARCHIVE.test(name)) facts.push(ARCHIVE_FACT)
+  if (DISK_IMAGE.test(name)) facts.push('disk image — the files inside it are not listed here')
   // `invoice.pdf.exe` reads as a PDF in a client that hides known extensions.
   const doubled = /\.(pdf|doc|docx|xls|xlsx|jpg|png|txt|htm|html)\.[a-z0-9]{2,4}$/i.exec(name)
   if (doubled) facts.push(`double extension — reads as ${doubled[1].toLowerCase()} but is not`)
   if (/[‪-‮⁦-⁩]/.test(name)) facts.push('contains a bidirectional override character')
-  if (attachment.inline) facts.push('referenced inline by the message body')
+  // Only what the part's own headers say. Nothing here checks that the body
+  // actually refers to it, so "referenced by the body" was a claim no one made.
+  if (attachment.inline) facts.push('marked inline or given a Content-ID by its own headers')
   return facts
 }
 
@@ -693,7 +711,11 @@ export interface AttachmentReport {
   /** What the first bytes say it is, independent of name and declared type. */
   sniffed: string
   facts: string[]
-  /** Defanged indicators found INSIDE the file's bytes, kept separate from the mail's own. */
+  /**
+   * Defanged indicators a text scan found INSIDE the file's bytes, kept
+   * separate from the mail's own. A value a structure reader found (a /URI, a
+   * relationship target) is shown with the structure instead, not again here.
+   */
   inside: string[]
   /**
    * The decoded bytes, for the preview pane. In memory only — nothing on this
@@ -704,6 +726,24 @@ export interface AttachmentReport {
   pdf?: PdfStructure
   /** What a ZIP container lists and links to — present only when the bytes ARE a ZIP. */
   office?: OfficeStructure
+  /** What a legacy OLE compound file's directory lists — present only when the bytes ARE one. */
+  ole?: CfbFacts
+}
+
+/**
+ * A file inside an archive, as its own bytes describe it. The bytes are not
+ * kept: a report holding every inner file would hold up to 32 MB per archive
+ * for a hash already taken.
+ */
+export interface InnerFileReport {
+  /** The entry name as written. Attacker text: escape it with visibleName wherever it is shown. */
+  name: string
+  /** From its first bytes, or '' when they match no signature this recognises. */
+  sniffed: string
+  /** Where those bytes disagree with the entry's own name, or ''. */
+  mismatch: string
+  /** Hex, or '' when it was not read whole — a hash of part of a file is not that file's hash. */
+  sha256: string
 }
 
 /** One picture lifted out of a document, with what its own bytes say it is and a hash of them. */
@@ -717,7 +757,10 @@ export interface EmbeddedImage {
 }
 
 export type PdfStructure = Omit<PdfFacts, 'images'> & { images: EmbeddedImage[] }
-export type OfficeStructure = Omit<OfficeFacts, 'images'> & { images: EmbeddedImage[] }
+export type OfficeStructure = Omit<OfficeFacts, 'images' | 'files'> & {
+  images: EmbeddedImage[]
+  files: InnerFileReport[]
+}
 
 /** Everything the analyser knows about one message. */
 export interface PhishReport {
@@ -735,9 +778,11 @@ export interface PhishReport {
   droppedLinks: number
   attachments: AttachmentReport[]
   /**
-   * Images the body references rather than files the user was offered. Kept
-   * apart because a signature logo among four real attachments makes the list
-   * read as heavier than the mail actually is.
+   * Parts marked inline by their own headers whose bytes are a drawable
+   * picture. Kept apart because a signature logo among four real attachments
+   * makes the list read as heavier than the mail actually is. Anything else
+   * marked inline — a PDF, an archive, a part that would not decode — is an
+   * attachment, because that is how Apple Mail and Gmail send attachments.
    */
   inlineImages: AttachmentReport[]
   /** Look-alike facts about the SENDER's domain, same folding the links get. */
@@ -759,8 +804,13 @@ export interface PhishReport {
  *
  * ponytail: a short table of the signatures that actually turn up on reported
  * mail, not a libmagic port. It answers one question — does the content agree
- * with the label — and an unrecognised file returns '' so the report says
- * nothing rather than guessing.
+ * with the label — and an unrecognised file returns '' rather than a guess, so
+ * the most contentMismatch can say about it is that it matches none of these.
+ *
+ * No label for a format this does not draw may contain "JPEG" or "image" by
+ * accident of wording: drawableType keys on a leading "JPEG", and EXT_EXPECTS
+ * reads /JPEG/ as the promise a .jpg makes. JPEG 2000 is a different format,
+ * so it is named JP2 and J2K here.
  */
 const SIGNATURES: { magic: number[]; label: string }[] = [
   { magic: [0x4d, 0x5a], label: 'Windows executable (MZ)' },
@@ -776,7 +826,21 @@ const SIGNATURES: { magic: number[]; label: string }[] = [
   { magic: [0x89, 0x50, 0x4e, 0x47], label: 'PNG image' },
   { magic: [0x47, 0x49, 0x46, 0x38], label: 'GIF image' },
   { magic: [0x7b, 0x5c, 0x72, 0x74, 0x66], label: 'RTF document' },
-  { magic: [0x23, 0x21], label: 'script with a shebang' }
+  { magic: [0x23, 0x21], label: 'script with a shebang' },
+  // The whole fixed header of each: a shortcut named Invoice.pdf, a OneNote
+  // file hiding a script behind its "click to view" button, and a cabinet are
+  // all lures that said nothing at all while they matched no row.
+  {
+    magic: [0x4c, 0, 0, 0, 0x01, 0x14, 0x02, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+    label: 'Windows shortcut (LNK)'
+  },
+  {
+    magic: [0xe4, 0x52, 0x5c, 0x7b, 0x8c, 0xd8, 0xa7, 0x4d, 0xae, 0xb1, 0x53, 0x78, 0xd0, 0x29, 0x96, 0xd3],
+    label: 'OneNote document'
+  },
+  { magic: [0x4d, 0x53, 0x43, 0x46, 0, 0, 0, 0], label: 'Microsoft cabinet (CAB)' },
+  { magic: [0, 0, 0, 0x0c, 0x6a, 0x50, 0x20, 0x20], label: 'JP2 image' },
+  { magic: [0xff, 0x4f, 0xff, 0x51], label: 'J2K image codestream' }
 ]
 
 export function sniffType(bytes: Uint8Array): string {
@@ -800,15 +864,35 @@ const EXT_EXPECTS: { ext: RegExp; label: RegExp }[] = [
   { ext: /\.rtf$/i, label: /RTF/ },
   { ext: /\.(rar)$/i, label: /RAR/ },
   { ext: /\.7z$/i, label: /7-Zip/ },
-  { ext: /\.gz$/i, label: /gzip/ }
+  { ext: /\.gz$/i, label: /gzip/ },
+  { ext: /\.lnk$/i, label: /LNK/ },
+  { ext: /\.one$/i, label: /OneNote/ },
+  { ext: /\.cab$/i, label: /cabinet/ }
 ]
 
-/** One fact when the bytes disagree with the name or the declared type. */
+/**
+ * One fact when the bytes disagree with the name or the declared type.
+ *
+ * The caller passes bytes it actually has: for an empty file there are no
+ * first bytes to talk about, and it does not ask.
+ */
 export function contentMismatch(filename: string, contentType: string, sniffed: string): string {
-  if (!sniffed) return ''
   const expectation = EXT_EXPECTS.find((e) => e.ext.test(filename))
+  // The extension is exactly what EXT_EXPECTS matched, so it carries no sender text past its own letters.
+  const ext = filename.slice(filename.lastIndexOf('.'))
+  if (!sniffed) {
+    // Unrecognised is a fact too, under a name or a type that promises a
+    // format. An HTA, an ISO (its signature sits 32 KB in) or anything newer
+    // than this table, renamed Invoice.pdf, matched no row and so drew no
+    // remark at all — the silence a renamed payload is built to get.
+    if (expectation) return `named ${ext} but its first bytes match no file signature this recognises`
+    if (/pdf$/i.test(contentType)) {
+      return `declared ${contentType} but its first bytes match no file signature this recognises`
+    }
+    return ''
+  }
   if (expectation && !expectation.label.test(sniffed)) {
-    return `named ${filename.slice(filename.lastIndexOf('.'))} but the bytes begin as ${sniffed}`
+    return `named ${ext} but the bytes begin as ${sniffed}`
   }
   if (/pdf$/i.test(contentType) && !/PDF/.test(sniffed)) {
     return `declared ${contentType} but the bytes begin as ${sniffed}`
@@ -819,22 +903,53 @@ export function contentMismatch(filename: string, contentType: string, sniffed: 
   return ''
 }
 
-/** Bytes read as text for indicator extraction. Capped: this is a scan, not a load. */
+/** Bytes read as text for indicators, from each end of a larger file. Capped: this is a scan, not a load. */
 const STRINGS_CAP = 1_000_000
+
+/**
+ * What one message's attachments may inflate between them, for pictures and
+ * the files inside archives. Each container has its own 32 MB ceiling, and a
+ * mail under 1 MB carrying twenty of them held 640 MB.
+ */
+const MESSAGE_MEDIA_BUDGET = 64_000_000
+
+/** The header block of a raw message: everything before the first blank line. */
+function headerBlockOf(raw: string): string {
+  // search, not split: split walks a 40 MB paste to cut every blank line in
+  // it, only for the first piece to be kept.
+  const end = raw.search(/\n\s*\n/)
+  return end < 0 ? raw : raw.slice(0, end)
+}
 
 export async function analysePhishing(raw: string, owned: string[], brands: string[]): Promise<PhishReport> {
   const eml = parseEml(raw)
-  const headers = analyseHeaders(raw, owned)
+  const headers = analyseHeaders(raw)
   const { links, dropped } = extractLinks(eml.text, eml.html, brands)
   const notes = [...eml.notes]
   if (dropped > 0) notes.push(`${dropped} further links are in this message and are not listed.`)
 
-  const everyPart = await Promise.all(eml.attachments.map((a) => readAttachment(a, owned)))
-  // Split by POSITION, not by filename. everyPart is a map over eml.attachments
-  // so index i is the same part; a Set of filenames put both `image001.png`
-  // parts on whichever side the first one landed, and a message with a real
-  // attachment named like its own inline logo is a message that hid one.
-  const isInline = eml.attachments.map((a) => a.inline)
+  // One part at a time, all drawing on one budget for what the archive reader
+  // inflates. Read together, each archive spent its own 32 MB at once, and
+  // which one ran the budget dry was down to timing, so no note could say
+  // truthfully which attachments had used it. In order, "read before this
+  // one" is simply what happened.
+  const media = { left: MESSAGE_MEDIA_BUDGET }
+  const everyPart: AttachmentReport[] = []
+  for (const a of eml.attachments) everyPart.push(await readAttachment(a, owned, media))
+  // Split by POSITION, not by filename. everyPart is in the order of
+  // eml.attachments, so index i is the same part; a Set of filenames put both
+  // `image001.png` parts on whichever side the first one landed, and a message
+  // with a real attachment named like its own inline logo is a message that
+  // hid one.
+  //
+  // And on the bytes as well as the flag. Gmail gives ordinary attachments a
+  // Content-ID and Apple Mail sends a PDF as `inline; filename=`, so the flag
+  // alone filed a PDF lure under inline images, whose report block is a name
+  // and a hash. Only a part whose own bytes are a picture this draws is an
+  // inline image; anything else is read as the attachment it is.
+  const isInline = eml.attachments.map(
+    (a, i) => a.inline && previewKind(a.contentType, a.filename, everyPart[i].sniffed, a.bytes) === 'image'
+  )
   const attachments = everyPart.filter((_, i) => !isInline[i])
   const inlineImages = everyPart.filter((_, i) => isInline[i])
 
@@ -852,8 +967,9 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   const senderHost = at < 0 ? '' : senderAddress.slice(at + 1).toLowerCase()
   const senderFacts = senderHost ? hostFacts(senderHost, brands, senderHost) : []
 
-  // Built once, from what was actually parsed, and used by both the copy
-  // button and the case — one source, so the two can never disagree.
+  // Built once, from what was actually parsed, and shown by the Indicators tab
+  // and the copy button. caseIocs builds the case's list from the same parts
+  // with the same partIocs, so the three cannot disagree.
   const seen = new Set<string>()
   const indicators: string[] = []
   const push = (line: string): void => {
@@ -862,14 +978,16 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
       indicators.push(line)
     }
   }
-  const headerBlock = raw.split(/\n\s*\n/)[0] ?? ''
-  for (const ioc of extractIocsFromText(`${headerBlock}\n${eml.text}`, [])) push(formatIocLine(ioc, owned))
+  for (const ioc of extractIocsFromText(`${headerBlockOf(raw)}\n${eml.text}`, [])) push(formatIocLine(ioc, owned))
   for (const link of links) {
     if (link.target) push(formatIocLine({ type: 'url', value: link.target }, owned))
   }
-  for (const attachment of attachments) {
-    if (attachment.sha256) push(formatIocLine({ type: 'hash', value: attachment.sha256 }, owned))
-    for (const line of structureIocs(attachment.pdf, attachment.office, owned)) push(line)
+  // Every part, inline or not. Which side of the split a part lands on is a
+  // display grouping, and a wrong call there must never cost the evidence.
+  // The notes stay off this list: the same URL in the body and in a PDF would
+  // otherwise be listed twice. The case keeps them.
+  for (const part of everyPart) {
+    for (const ioc of partIocs(part)) push(formatIocLine({ type: ioc.type, value: ioc.value }, owned))
   }
 
   return {
@@ -885,6 +1003,51 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
     indicators,
     notes: dedupe(notes)
   }
+}
+
+/**
+ * The indicators a case opened from this analysis carries, typed.
+ *
+ * The same values the Indicators tab shows, built from the same parts by the
+ * same partIocs, so a lure the PDF reader found can no longer be on screen and
+ * missing from the case — and task.iocs is what cross-case search reads.
+ * Unlike that list, each value found inside an attachment says which one,
+ * because in a case the note outlives the analysis that knew it.
+ */
+export function caseIocs(report: PhishReport, raw: string): Ioc[] {
+  const iocs: Ioc[] = extractIocsFromText(`${headerBlockOf(raw)}\n${report.text}`, [])
+  const seen = new Set(iocs.map((i) => i.value.toLowerCase()))
+  const add = (ioc: Ioc): void => {
+    const key = ioc.value.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    iocs.push(ioc)
+  }
+  for (const link of report.links) {
+    if (link.target) {
+      add({ type: 'url', value: link.target, note: link.wrappedBy ? `unwrapped from ${link.wrappedBy}` : '' })
+    }
+  }
+  for (const part of [...report.attachments, ...report.inlineImages]) for (const ioc of partIocs(part)) add(ioc)
+  return iocs
+}
+
+/**
+ * What one part adds to the indicators: its own hash, the values the structure
+ * readers found in it, and the hashes of the files inside it. Each carries the
+ * note a case keeps, with the sender's names escaped for display.
+ */
+function partIocs(part: AttachmentReport): Ioc[] {
+  const name = visibleName(part.filename)
+  const out: Ioc[] = []
+  if (part.sha256) out.push({ type: 'hash', value: part.sha256, note: `${name} (hashed here)` })
+  for (const ioc of structureIocValues(part.pdf, part.office)) out.push({ ...ioc, note: `inside ${name}` })
+  for (const file of part.office?.files ?? []) {
+    if (file.sha256) {
+      out.push({ type: 'hash', value: file.sha256, note: `${visibleName(file.name)} inside ${name} (hashed here)` })
+    }
+  }
+  return out
 }
 
 /**
@@ -914,7 +1077,7 @@ function dedupe(lines: string[]): string[] {
   return out
 }
 
-async function readAttachment(a: Attachment, owned: string[]): Promise<AttachmentReport> {
+async function readAttachment(a: Attachment, owned: string[], media: { left: number }): Promise<AttachmentReport> {
   const facts = attachmentFacts(a)
   if (a.undecodable) {
     // Nothing was read, so nothing is claimed. Hashing zero bytes would print
@@ -935,15 +1098,47 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
     }
   }
   const sniffed = sniffType(a.bytes)
-  const mismatch = contentMismatch(a.filename, a.contentType, sniffed)
+  // An empty file has no first bytes to compare with its name.
+  const mismatch = a.bytes.length ? contentMismatch(a.filename, a.contentType, sniffed) : ''
   // A part that was not transfer-encoded reached us through the reader's line
   // normalisation, so its bytes are the message's text, not the file as sent.
   // base64 and quoted-printable are ASCII on the wire and round-trip exactly;
   // these do not, and a hash that will not match the sender's copy has to say
   // so rather than be quoted at a sandbox as if it would.
   const wireExact = a.exact
-  const { pdf, office, failed } = await readStructure(a.bytes, sniffed)
-  if (failed) facts.push(failed)
+  const { pdf, office, ole, failed } = await readStructure(a.bytes, sniffed, media)
+  // The name said the contents could not be seen, and the ZIP reader has just listed them.
+  const named = office?.entries.length ? facts.filter((f) => f !== ARCHIVE_FACT) : facts
+
+  // Indicators carried INSIDE the file's bytes, kept as their own list and
+  // never merged into the mail's own links: where an indicator was found is
+  // half of what it means, and an analyst told "this URL was in the message"
+  // when it was really inside a spreadsheet has been told something untrue.
+  // A value a structure reader found is already on the card beside where it
+  // was found — a /URI, a relationship target — so it is not printed again.
+  const scan = scanText(a.bytes)
+  const structural = new Set(structureIocValues(pdf, office).map((ioc) => ioc.value.toLowerCase()))
+  const found = extractIocsFromText(`${scan.utf8}\n${scan.utf16}`, []).filter(
+    (ioc) => !structural.has(ioc.value.toLowerCase())
+  )
+  const inside = found.slice(0, 100).map((ioc) => formatIocLine(ioc, owned))
+  const count = (n: number): string => n.toLocaleString('en-US')
+  const scanFacts = [
+    ...(scan.between
+      ? [
+          `indicators were read from the first ${count(scan.head)} and the last ${count(scan.tail)} bytes; the ${count(scan.between)} bytes between were not scanned for indicators or script names`
+        ]
+      : []),
+    // The list stops at 100, and says so, so the hundredth line is not read as the last.
+    ...(found.length > inside.length
+      ? [`${count(found.length - inside.length)} further indicators found inside the file are not listed`]
+      : [])
+  ]
+  // Counted over the same windows, whenever the file is read as text — not
+  // only when it is named .html: a smuggling page arrives as .htm, .hta,
+  // .shtml or .svg alike, and the sender picks the name.
+  const census = previewKind(a.contentType, a.filename, sniffed, a.bytes) === 'text' ? markupCensus(scan.utf8) : null
+
   return {
     filename: a.filename,
     contentType: a.contentType,
@@ -954,33 +1149,84 @@ async function readAttachment(a: Attachment, owned: string[]): Promise<Attachmen
     sniffed,
     facts: [
       ...(mismatch ? [mismatch] : []),
-      ...facts,
+      ...named,
+      ...(failed ? [failed] : []),
+      ...scanFacts,
+      ...(census ? [census] : []),
       ...(wireExact
         ? []
         : ['this part carried no transfer encoding, so the hashes are of the decoded text, not of the bytes as sent'])
     ],
-    inside: insideWithStructure(stringsInside(a.bytes, owned), structureIocs(pdf, office, owned)),
+    inside,
     bytes: a.bytes,
     ...(pdf ? { pdf } : {}),
-    ...(office ? { office } : {})
+    ...(office ? { office } : {}),
+    ...(ole ? { ole } : {})
   }
 }
 
-/**
- * The structure readers, chosen by what the bytes are — never by the filename
- * or the declared type, which the sender writes.
- *
- * Both readers are built not to throw, but one that did would take the whole
- * analysis with it, so a failure here becomes a stated fact about this file
- * rather than a report that never arrives.
- */
 /** Past this many, a list says how many more there are instead of printing them. */
-const STRUCTURE_LIST_CAP = 50
+export const STRUCTURE_LIST_CAP = 50
+
+/**
+ * How many entries were READ from a directory — which is not how many it
+ * declares. A listing that stopped early, or a directory that was never found,
+ * would otherwise be reported as the archive's whole contents; the reader's own
+ * note says why the list is short.
+ */
+export function entriesRead(n: number, directory = 'the ZIP directory'): string {
+  return `${n} entr${n === 1 ? 'y' : 'ies'} read from ${directory}`
+}
+
+/** One row per entry with something to say about it. The name is raw, for matching; escape it with visibleName to show it. */
+export interface FlaggedEntry {
+  name: string
+  why: string[]
+}
+
+/**
+ * The ZIP entries worth a line: what the name says, and whether the entry is
+ * encrypted, in one row each. The report and the card print the same rows
+ * under the same cap, so a ZIP of 4,096 encrypted .exe files is 51 lines, not
+ * 8,192, and an archive with only its payload encrypted still says which one.
+ */
+export function flaggedEntries(office: Pick<OfficeStructure, 'entries'>): FlaggedEntry[] {
+  return office.entries.flatMap((e) => {
+    const why = [entryNote(e.name) ?? '', e.encrypted ? 'encrypted, so its contents cannot be read here' : ''].filter(
+      Boolean
+    )
+    return why.length ? [{ name: e.name, why }] : []
+  })
+}
+
+/** The compound-file entries worth a line, with the kind the directory records for each (storage, stream or root). */
+export function flaggedOleEntries(ole: CfbFacts): (FlaggedEntry & { type: string })[] {
+  return ole.entries.flatMap((e) => {
+    const note = cfbNote(e.name)
+    return note ? [{ name: e.name, type: e.type, why: [note] }] : []
+  })
+}
+
+/**
+ * What is known about one file inside an archive, in this tool's own words —
+ * the part after its name, shared by the report and the card. A mismatch
+ * already names what the bytes begin as, so it stands in for that clause.
+ */
+export function innerFileFacts(file: InnerFileReport): string {
+  return [
+    file.mismatch || (file.sniffed ? `bytes begin as ${file.sniffed}` : ''),
+    file.sha256 ? `SHA-256 ${file.sha256} (computed here)` : 'not read whole, so not hashed here'
+  ]
+    .filter(Boolean)
+    .join('; ')
+}
 
 /**
  * The structure readers' findings as report lines. Every value written by the
  * sender — a URI, an entry name, a relationship target or type — is quoted as
- * untrusted, and the ones that can be followed are defanged first.
+ * untrusted and escaped with visibleName, so a right-to-left override or a
+ * newline in it cannot reorder or add to the lines around it; the ones that
+ * can be followed are defanged first.
  */
 export function structureLines(a: AttachmentReport): string[] {
   const lines: string[] = []
@@ -990,40 +1236,47 @@ export function structureLines(a: AttachmentReport): string[] {
       lines.push(`  - ${list.length - STRUCTURE_LIST_CAP} further ${noun} are not listed`)
     }
   }
+  const shown = (value: string): string => quoteUntrusted(visibleName(value))
   if (a.pdf) {
     const { pdf } = a
     lines.push(`  - PDF ${pdf.version || 'version not recorded'}${pdf.encrypted ? ', /Encrypt present' : ''}`)
     if (pdf.markers.length) {
       lines.push(`  - PDF names found: ${pdf.markers.map((m) => `${m.name} ×${m.count}`).join(', ')}`)
     }
-    capped(pdf.uris, (uri) => `  - PDF link (/URI): ${quoteUntrusted(defangIoc(uri, 'url'))}`, 'PDF links')
+    capped(pdf.uris, (uri) => `  - PDF link (/URI): ${shown(defangIoc(uri, 'url'))}`, 'PDF links')
     capped(pdf.images, imageLine, 'PDF images')
     for (const note of pdf.notes) lines.push(`  - PDF reader: ${quoteUntrusted(note)}`)
   }
   if (a.office) {
     const { office } = a
-    lines.push(`  - the ZIP directory lists ${office.entries.length} entr${office.entries.length === 1 ? 'y' : 'ies'}`)
-    for (const entry of office.entries) {
-      const note = entryNote(entry.name)
-      if (note) lines.push(`  - entry ${quoteUntrusted(entry.name)}: ${note}`)
-      if (entry.encrypted) {
-        lines.push(`  - entry ${quoteUntrusted(entry.name)} is encrypted, so its contents cannot be read here`)
-      }
-    }
+    if (office.entries.length) lines.push(`  - ${entriesRead(office.entries.length)}`)
+    capped(flaggedEntries(office), (f) => `  - entry ${shown(f.name)}: ${f.why.join('; ')}`, 'flagged entries')
     capped(
       office.externalTargets,
       (t) =>
-        `  - external target: ${quoteUntrusted(defangIoc(t.target, 'url'))} — relationship type ${quoteUntrusted(relationshipType(t.type))}, declared in ${quoteUntrusted(t.from)}`,
+        `  - external target: ${shown(defangIoc(t.target, 'url'))} — relationship type ${shown(relationshipType(t.type))}, declared in ${shown(t.from)}`,
       'external targets'
     )
+    capped(office.files, (f) => `  - inner file ${shown(f.name)}: ${innerFileFacts(f)}`, 'inner files')
     capped(office.images, imageLine, 'pictures')
     for (const note of office.notes) lines.push(`  - ZIP reader: ${quoteUntrusted(note)}`)
+  }
+  if (a.ole) {
+    const { ole } = a
+    const directory = 'the compound-file directory'
+    if (ole.entries.length) lines.push(`  - ${entriesRead(ole.entries.length, directory)}`)
+    capped(
+      flaggedOleEntries(ole),
+      (f) => `  - ${directory} lists ${f.type} ${shown(f.name)}: ${f.why.join('; ')}`,
+      'flagged entries'
+    )
+    for (const note of ole.notes) lines.push(`  - OLE reader: ${quoteUntrusted(note)}`)
   }
   return lines
 }
 
 function imageLine(image: EmbeddedImage): string {
-  return `  - embedded picture ${quoteUntrusted(image.where)}: ${image.sniffed || 'type not recognised'}, ${image.bytes.length} bytes, SHA-256 ${image.sha256} (computed here)`
+  return `  - embedded picture ${quoteUntrusted(visibleName(image.where))}: ${image.sniffed || 'type not recognised'}, ${image.bytes.length} bytes, SHA-256 ${image.sha256} (computed here)`
 }
 
 /** The last segment of a relationship Type URI — `attachedTemplate`, `oleObject`, `hyperlink` — which is the part that says what it is for. */
@@ -1031,71 +1284,177 @@ export function relationshipType(type: string): string {
   return type.split('/').filter(Boolean).pop() || 'not recorded'
 }
 
+/**
+ * The structure readers, chosen by what the bytes are — never by the filename
+ * or the declared type, which the sender writes.
+ *
+ * The readers are built not to throw, but one that did would take the whole
+ * analysis with it, so a failure here becomes a stated fact about this file
+ * rather than a report that never arrives.
+ */
 async function readStructure(
   bytes: Uint8Array,
-  sniffed: string
-): Promise<{ pdf?: PdfStructure; office?: OfficeStructure; failed?: string }> {
+  sniffed: string,
+  media: { left: number }
+): Promise<{ pdf?: PdfStructure; office?: OfficeStructure; ole?: CfbFacts; failed?: string }> {
   const identify = (list: { where: string; bytes: Uint8Array }[]): Promise<EmbeddedImage[]> =>
     Promise.all(list.map(async (i) => ({ ...i, sniffed: sniffType(i.bytes), sha256: await hashBytes(i.bytes) })))
+  // Acrobat opens a PDF whose header sits after a prefix — a space, a BOM, a
+  // stub — and readPdf reads it there too, but the sniff wants %PDF at byte 0,
+  // so such a file never reached the reader and its /OpenAction and hex /URI
+  // went unread with no note. Only a real header inside the window readPdf
+  // itself searches counts: a text file with `endobj … %%EOF` in it is not a PDF.
+  const pdfHeader = !sniffed && /%PDF-\d\.\d/.test(String.fromCharCode(...bytes.subarray(0, 1040)))
   try {
-    if (sniffed === 'PDF') {
+    if (sniffed === 'PDF' || pdfHeader) {
       const facts = readPdf(bytes)
-      if (!facts) return {}
+      if (!facts || (!sniffed && !facts.version)) return {}
       const images = await identify(
         facts.images.map((i) => ({ where: `byte ${i.offset} (${i.filter})`, bytes: i.bytes }))
       )
       return { pdf: { ...facts, images } }
     }
     if (/ZIP/.test(sniffed)) {
-      const facts = await readZipDocument(bytes)
+      const facts = await readZipDocument(bytes, media)
       if (!facts) return {}
       const images = await identify(facts.images.map((i) => ({ where: i.name, bytes: i.bytes })))
-      return { office: { ...facts, images } }
+      // Typed and hashed, then let go: the report keeps what each file is, not
+      // the file. The first bytes decide the type even when the file was not
+      // read whole — they are still its first bytes — but only a whole file
+      // gets a hash.
+      const files = await Promise.all(
+        facts.files.map(async (f): Promise<InnerFileReport> => {
+          const kind = sniffType(f.head)
+          return {
+            name: f.name,
+            sniffed: kind,
+            mismatch: f.head.length ? contentMismatch(f.name, '', kind) : '',
+            sha256: f.bytes ? await hashBytes(f.bytes) : ''
+          }
+        })
+      )
+      return { office: { ...facts, images, files } }
+    }
+    // A legacy .doc, .xls or .msg: its directory names the macro storage and
+    // any embedded package, which the 512-byte header on the card never shows.
+    if (/OLE/.test(sniffed)) {
+      const facts = readCfb(bytes)
+      return facts ? { ole: facts } : {}
     }
     return {}
   } catch {
-    return { failed: `the ${sniffed} structure reader stopped on this file, so its contents are not listed` }
+    return { failed: `the ${sniffed || 'PDF'} structure reader stopped on this file, so its contents are not listed` }
   }
 }
 
 /**
- * Indicators the structure readers found. They matter most where the plain
- * text scan is blind: a relationship target in an Office file lives in a
- * COMPRESSED part, and a PDF link written in escapes or hex cannot be found by
- * searching the bytes as text. They are also the lure itself, so they join the
- * message's indicator list and not only the attachment's card.
- */
-function structureIocs(pdf: PdfStructure | undefined, office: OfficeStructure | undefined, owned: string[]): string[] {
-  const extra = [...(pdf?.uris ?? []), ...(office?.externalTargets.map((t) => t.target) ?? [])]
-  if (!extra.length) return []
-  return extractIocsFromText(extra.join('\n'), []).map((ioc) => formatIocLine(ioc, owned))
-}
-
-/** The plain-text scan's findings, then the readers' — each line once. */
-function insideWithStructure(found: string[], structural: string[]): string[] {
-  return [...new Set([...found, ...structural])]
-}
-
-/**
- * Indicators carried INSIDE an attachment's bytes.
+ * Indicators the structure readers found, typed and not yet formatted. They
+ * matter most where the plain text scan is blind: a relationship target in an
+ * Office file lives in a COMPRESSED part, and a PDF link written in escapes or
+ * hex cannot be found by searching the bytes as text. They are also the lure
+ * itself, so they join the message's indicator list and the case, and not
+ * only the attachment's card.
  *
- * Kept as its own list and never merged into the mail's own links: where an
- * indicator was found is half of what it means, and an analyst reading "this
- * URL was in the message" when it was really inside a spreadsheet has been
- * told something untrue.
+ * A template written as a UNC or file:// path names a remote host too — the
+ * WebDAV form `\\host@SSL\DavWWWRoot\t.dotm` fetches from it — but the prose
+ * scan knows only http(s) and a short list of TLDs, so the host is read off
+ * the front of the path. Only a dotted name counts: `\\.\pipe\x`, a
+ * single-label `\\fileserver` and `file:///C:/` name nothing to look up.
+ *
+ * ponytail: the two plain prefixes only. The long form `\\?\UNC\host\…` and a
+ * `file:` URL with one slash are left to the card, which shows every target
+ * as written; add them here if one turns up in a real template.
  */
-function stringsInside(bytes: Uint8Array, owned: string[]): string[] {
-  if (!bytes.length) return []
-  const slice = bytes.length > STRINGS_CAP ? bytes.subarray(0, STRINGS_CAP) : bytes
-  let text = ''
-  try {
-    text = new TextDecoder('utf-8').decode(slice)
-  } catch {
-    return []
+function structureIocValues(pdf: PdfStructure | undefined, office: OfficeStructure | undefined): Ioc[] {
+  const extra = [...(pdf?.uris ?? []), ...(office?.externalTargets.map((t) => t.target) ?? [])]
+  const out = extra.length ? extractIocsFromText(extra.join('\n'), []) : []
+  for (const t of office?.externalTargets ?? []) {
+    const host = /^(?:\\\\|file:\/\/)([^\\/@:]+)/i.exec(t.target)?.[1]
+    if (host && /^[\w-]+(?:\.[\w-]+)+$/.test(host)) out.push({ type: detectIocType(host), value: host })
   }
-  return extractIocsFromText(text, [])
-    .slice(0, 100)
-    .map((ioc) => formatIocLine(ioc, owned))
+  return out
+}
+
+/**
+ * The text an indicator scan reads out of a file: all of it up to twice
+ * STRINGS_CAP, otherwise the first and the last STRINGS_CAP bytes. An HTML
+ * smuggling page puts a megabyte of base64 first and the script that uses it
+ * last, so a scan of the head alone never saw the script.
+ *
+ * A window's inner edge is moved back to a space or control byte, which ends
+ * every URL, host and hash the scan looks for: cut anywhere else, half a URL
+ * or two thirds of a SHA-256 is a value the file does not contain. `head` and
+ * `tail` are the bytes actually read, and `between` the bytes that were not.
+ *
+ * ponytail: a window with no space or control byte in it at all — a megabyte
+ * of one base64 line — is trimmed to nothing, and the fact's own numbers then
+ * say that none of it was read. Holding the cut token back instead of the
+ * whole window is the upgrade if a real file needs it.
+ */
+function scanText(bytes: Uint8Array): { utf8: string; utf16: string; head: number; tail: number; between: number } {
+  if (bytes.length <= 2 * STRINGS_CAP) {
+    return { utf8: utf8Text(bytes), utf16: utf16Runs(bytes, false, false), head: bytes.length, tail: 0, between: 0 }
+  }
+  let headEnd = STRINGS_CAP
+  while (headEnd > 0 && bytes[headEnd - 1] > 0x20) headEnd--
+  let tailStart = bytes.length - STRINGS_CAP
+  while (tailStart < bytes.length && bytes[tailStart] > 0x20) tailStart++
+  const head = bytes.subarray(0, headEnd)
+  const tail = bytes.subarray(tailStart)
+  return {
+    utf8: `${utf8Text(head)}\n${utf8Text(tail)}`,
+    utf16: `${utf16Runs(head, false, true)}\n${utf16Runs(tail, true, false)}`,
+    head: head.length,
+    tail: tail.length,
+    between: tailStart - headEnd
+  }
+}
+
+function utf8Text(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder('utf-8').decode(bytes)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Runs of UTF-16LE text, one per line: a printable ASCII byte then a zero, six
+ * characters or more. A shortcut's command line, a .msg body and OneNote text
+ * are stored this way, and read as UTF-8 they are nothing — `h\0t\0t\0p\0`
+ * never matches a URL. Stepping one byte past anything else, not two, is what
+ * finds a run that starts at an odd offset, as a shortcut's arguments often do.
+ * A run that touches a cut window edge is dropped, because the rest of it is
+ * outside the window.
+ *
+ * ponytail: printable ASCII only, which is every URL, host and path the scan
+ * looks for. A run in another script is not read; a full UTF-16 decode of each
+ * run is the upgrade if an indicator ever hides in one.
+ */
+function utf16Runs(bytes: Uint8Array, cutStart: boolean, cutEnd: boolean): string {
+  const runs: string[] = []
+  let run = ''
+  let start = 0
+  for (let i = 0; i < bytes.length;) {
+    const byte = bytes[i]
+    if (byte >= 0x20 && byte <= 0x7e && bytes[i + 1] === 0) {
+      if (!run) start = i
+      run += String.fromCharCode(byte)
+      i += 2
+      continue
+    }
+    // Ended by a control byte — a NUL, a line break, the low byte of a length
+    // field — the run is whole. Ended by anything else, a letter outside ASCII
+    // or bytes that are not text, its last word may carry on past what was
+    // read: `https://ex.test/pa` read off the front of `https://ex.test/paтh`
+    // is a URL the file does not hold, so the run is cut back to its last space.
+    if (byte >= 0x20) run = run.slice(0, run.lastIndexOf(' ') + 1)
+    if (run.length >= 6 && !(cutStart && start < 2)) runs.push(run)
+    run = ''
+    i++
+  }
+  if (run.length >= 6 && !cutEnd && !(cutStart && start < 2)) runs.push(run)
+  return runs.join('\n')
 }
 
 /**
@@ -1131,7 +1490,7 @@ export function formatPhishReport(report: PhishReport): string {
   if (report.attachments.length) {
     for (const a of report.attachments) {
       const size = a.sha256 ? `${a.size} bytes` : 'size not recorded'
-      lines.push(`- ${quoteUntrusted(a.filename)} — ${quoteUntrusted(a.contentType)}, ${size}`)
+      lines.push(`- ${quoteUntrusted(visibleName(a.filename))} — ${quoteUntrusted(a.contentType)}, ${size}`)
       lines.push(`  - SHA-256 ${a.sha256 || 'not recorded'}${a.sha256 ? ' (computed here)' : ''}`)
       lines.push(`  - SHA-1 ${a.sha1 || 'not recorded'}${a.sha1 ? ' (computed here)' : ''}`)
       lines.push(`  - MD5 ${a.md5 || 'not recorded'}${a.md5 ? ' (computed here)' : ''}`)
@@ -1152,7 +1511,7 @@ export function formatPhishReport(report: PhishReport): string {
   if (report.inlineImages.length) {
     lines.push('', '### Inline images', '')
     for (const a of report.inlineImages) {
-      lines.push(`- ${quoteUntrusted(a.filename)} — ${quoteUntrusted(a.contentType)}, ${a.size} bytes`)
+      lines.push(`- ${quoteUntrusted(visibleName(a.filename))} — ${quoteUntrusted(a.contentType)}, ${a.size} bytes`)
       if (a.sha256) lines.push(`  - SHA-256 ${a.sha256} (computed here)`)
     }
   }

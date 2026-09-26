@@ -3,6 +3,7 @@ import {
   apexDomain,
   attachmentFacts,
   contentMismatch,
+  entriesRead,
   extractLinks,
   hostFacts,
   htmlToText,
@@ -128,6 +129,18 @@ describe('attachmentFacts', () => {
 
   it('catches a right-to-left override in the filename', () => {
     expect(attachmentFacts(att('invoice‮gpj.exe'))).toContain('contains a bidirectional override character')
+  })
+
+  it('calls a disk image a disk image, not an executable', () => {
+    for (const name of ['Invoice.iso', 'x.vhd', 'backup.img', 'disk.vhdx']) {
+      const facts = attachmentFacts(att(name))
+      expect(facts).toContain('disk image — the files inside it are not listed here')
+      expect(facts).not.toContain('executable or script file type')
+    }
+  })
+
+  it('says only what the part’s own headers say about being inline', () => {
+    expect(attachmentFacts(att('logo.png', true))).toContain('marked inline or given a Content-ID by its own headers')
   })
 
   it('never calls anything malicious', () => {
@@ -261,6 +274,52 @@ describe('what a file actually is', () => {
       'named .pdf but the bytes begin as Windows executable (MZ)'
     )
     expect(contentMismatch('invoice.pdf', 'application/pdf', 'PDF')).toBe('')
+  })
+
+  it('knows a shortcut, a OneNote file and a cabinet by their headers', () => {
+    const lnk = bytes(0x4c, 0, 0, 0, 0x01, 0x14, 0x02, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46, 0x9b)
+    expect(sniffType(lnk)).toBe('Windows shortcut (LNK)')
+    expect(contentMismatch('Invoice.pdf', 'application/pdf', sniffType(lnk))).toBe(
+      'named .pdf but the bytes begin as Windows shortcut (LNK)'
+    )
+    const one = bytes(0xe4, 0x52, 0x5c, 0x7b, 0x8c, 0xd8, 0xa7, 0x4d, 0xae, 0xb1, 0x53, 0x78, 0xd0, 0x29, 0x96, 0xd3)
+    expect(sniffType(one)).toBe('OneNote document')
+    expect(contentMismatch('notes.one', '', 'OneNote document')).toBe('')
+    expect(sniffType(bytes(0x4d, 0x53, 0x43, 0x46, 0, 0, 0, 0))).toBe('Microsoft cabinet (CAB)')
+    expect(contentMismatch('setup.lnk', '', 'Windows executable (MZ)')).toBe(
+      'named .lnk but the bytes begin as Windows executable (MZ)'
+    )
+  })
+
+  it('names JPEG 2000 without calling it JPEG, which it is not', () => {
+    const jp2 = bytes(0, 0, 0, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a)
+    const j2k = bytes(0xff, 0x4f, 0xff, 0x51)
+    expect(sniffType(jp2)).toBe('JP2 image')
+    expect(sniffType(j2k)).toBe('J2K image codestream')
+    for (const label of [sniffType(jp2), sniffType(j2k)]) expect(label).not.toMatch(/JPEG/)
+    expect(contentMismatch('scan.jpg', 'image/jpeg', sniffType(jp2))).toBe(
+      'named .jpg but the bytes begin as JP2 image'
+    )
+  })
+
+  it('says so when a promised format’s first bytes match nothing it knows', () => {
+    // An HTA, an ISO or anything newer than the table, renamed Invoice.pdf,
+    // used to draw no remark at all.
+    expect(contentMismatch('Scan.pdf', 'application/pdf', '')).toBe(
+      'named .pdf but its first bytes match no file signature this recognises'
+    )
+    expect(contentMismatch('scan', 'application/pdf', '')).toBe(
+      'declared application/pdf but its first bytes match no file signature this recognises'
+    )
+    // Nothing was promised, so nothing is said.
+    expect(contentMismatch('notes.txt', 'text/plain', '')).toBe('')
+  })
+})
+
+describe('entriesRead', () => {
+  it('counts what was read, in either directory', () => {
+    expect(entriesRead(1)).toBe('1 entry read from the ZIP directory')
+    expect(entriesRead(2, 'the compound-file directory')).toBe('2 entries read from the compound-file directory')
   })
 })
 

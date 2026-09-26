@@ -7,6 +7,7 @@ import {
   formatHeaderReport,
   parseHeaderBlock
 } from './emailHeaders'
+import { analysePhishing } from './phish'
 
 // A realistic spoof: envelope sender and reply-to are elsewhere, SPF fails,
 // and the display name carries a second address.
@@ -71,7 +72,7 @@ describe('addressOf', () => {
 })
 
 describe('analyseHeaders', () => {
-  const a = analyseHeaders(SPOOF, ['corp.test'])
+  const a = analyseHeaders(SPOOF)
 
   it('reports authentication results as stated, never as a verdict', () => {
     expect(a.auth).toContainEqual({
@@ -115,12 +116,15 @@ describe('analyseHeaders', () => {
     expect(a.identities.find((i) => i.label === 'Subject')?.value).toBe('Urgent: verify your account')
   })
 
-  it('defangs the indicators it pulls out and marks the analyst’s own estate', () => {
-    expect(a.indicators).toContain('ip: 203[.]0[.]113[.]55')
-    expect(a.indicators.join('\n')).not.toMatch(/(^|\s)203\.0\.113\.55/)
+  it('the report built on it defangs the header indicators and marks the analyst’s own estate', async () => {
+    // The header reader no longer scans for indicators — the phishing report
+    // does, from the parsed message — so this is asserted where the list lives.
+    const { indicators } = await analysePhishing(SPOOF, ['corp.test'], [])
+    expect(indicators).toContain('ip: 203[.]0[.]113[.]55')
+    expect(indicators.join('\n')).not.toMatch(/(^|\s)203\.0\.113\.55/)
     // The analyst's own mail relay is marked, so it never reads as an indicator.
-    expect(a.indicators).toContain('ip: 10[.]4[.]1[.]9 (own asset)')
-    expect(a.indicators).toContain('email: analyst[at]corp[.]test (own asset)')
+    expect(indicators).toContain('ip: 10[.]4[.]1[.]9 (own asset)')
+    expect(indicators).toContain('email: analyst[at]corp[.]test (own asset)')
   })
 
   it('says what a paste does not contain instead of passing it', () => {
