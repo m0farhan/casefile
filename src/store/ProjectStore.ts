@@ -1272,7 +1272,7 @@ export class ProjectStore implements TaskSource {
    * patch values against the live task; a patch that explicitly carries a
    * lifecycle timestamp different from the live one is a manual edit and wins.
    */
-  private stampActivity(project: Project, task: Task, patch: Partial<Task>): void {
+  private stampActivity(project: Project, task: Task, patch: Partial<Task>, administrative = false): void {
     const at = new Date().toISOString()
     const entries: Task['activity'] = []
     for (const field of ProjectStore.ACTIVITY_FIELDS) {
@@ -1296,8 +1296,10 @@ export class ProjectStore implements TaskSource {
     }
 
     // Incident lifecycle auto-stamps (manual edits in the patch always win).
+    // Never for an administrative change: nobody responded to or resolved the
+    // case when its status was remapped in settings.
     const issueType = patch.issueType ?? task.issueType
-    if (issueType === 'incident' && patch.status !== undefined && patch.status !== task.status) {
+    if (!administrative && issueType === 'incident' && patch.status !== undefined && patch.status !== task.status) {
       const statuses = this.statusesFor(project)
       const manualResponded = patch.respondedAt !== undefined && patch.respondedAt !== task.respondedAt
       if (!manualResponded && !task.respondedAt) patch.respondedAt = at
@@ -1434,12 +1436,21 @@ export class ProjectStore implements TaskSource {
   /**
    * Apply a patch to several tasks in one save. `patch` may be a function
    * producing a per-task patch; return null to leave that task untouched.
+   *
+   * `administrative`: the change is bookkeeping, not work on the case — a
+   * status remapped because its palette entry was deleted. The change is
+   * still logged, but no completion date or lifecycle stamp is set or
+   * cleared: a remap between two closing statuses used to overwrite the real
+   * completion date with today, and one between two open statuses invented a
+   * response time.
    */
   async updateTasks(
     project: Project,
     taskIds: string[],
-    patch: Partial<Task> | ((task: Task) => Partial<Task> | null)
+    patch: Partial<Task> | ((task: Task) => Partial<Task> | null),
+    opts?: { administrative?: boolean }
   ): Promise<void> {
+    const administrative = opts?.administrative === true
     for (const id of taskIds) {
       const task = findTaskById(project, id)
       if (!task) continue
@@ -1448,8 +1459,8 @@ export class ProjectStore implements TaskSource {
       // Copy a shared patch object before stamping so one task's completion date
       // doesn't bleed onto the next iteration through the same reference.
       const p = { ...raw }
-      this.stampCompletion(project, task, p)
-      this.stampActivity(project, task, p)
+      if (!administrative) this.stampCompletion(project, task, p)
+      this.stampActivity(project, task, p, administrative)
       const oldTitle = task.title
       updateTaskInTree(project.tasks, id, p)
       const titleChanged = p.title !== undefined && p.title !== oldTitle

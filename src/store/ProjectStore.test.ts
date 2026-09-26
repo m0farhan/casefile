@@ -1500,6 +1500,26 @@ describe('activity log + incident lifecycle stamps', () => {
     expect(inc.resolvedAt).not.toBe('')
   })
 
+  it('an administrative remap logs the status change but sets or clears no stamp', async () => {
+    const statuses: StatusConfig[] = [
+      ...STATUSES,
+      { id: 'closed', label: 'Closed', color: '#0a0', icon: '', complete: true }
+    ]
+    const { app } = makeFakeApp()
+    const store = new ProjectStore(app as unknown as App, () => ({ ...SETTINGS, statuses }))
+    const project = await store.createProject('Remap', 'Projects')
+    const inc = makeTask({ title: 'Inc', issueType: 'incident', status: 'done', completed: '2025-01-01' })
+    await store.insertTask(project, inc, null)
+    const todo = makeTask({ title: 'Queued', issueType: 'incident' })
+    await store.insertTask(project, todo, null)
+
+    await store.updateTasks(project, [inc.id], { status: 'closed' }, { administrative: true })
+    await store.updateTasks(project, [todo.id], { status: 'in-progress' }, { administrative: true })
+    expect([inc.status, inc.completed, inc.respondedAt, inc.resolvedAt]).toEqual(['closed', '2025-01-01', '', ''])
+    expect(todo.respondedAt).toBe('')
+    expect(inc.activity.map((a) => [a.field, a.from, a.to])).toEqual([['status', 'done', 'closed']])
+  })
+
   it('auto-stamps resolvedAt when an incident enters a terminal status', async () => {
     const { store } = newStore()
     const project = await store.createProject('IRR', 'Projects')
