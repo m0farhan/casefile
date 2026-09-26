@@ -1,8 +1,8 @@
 # UI styleguide (component catalog)
 
-Read this before building or changing any UI. It's the component API catalog: what exists and what to reach for. The design language (color, typography, spacing, radii, shadows, voice) lives in `docs/design-system.md`. The layer rules (primitives / composites / orchestrators and what each may import) live in CLAUDE.md under "UI layers".
+Read this before building or changing any UI. It's the component API catalog: what exists and what to reach for. The design tokens are defined in `src/styles/variables.css`. The layer rules (what primitives and composites may import) open the Primitives and Composites sections below.
 
-The static HTML previews under `docs/design-system/project/preview/` are design references only; they misrender CSS because Obsidian's core `app.css` is absent. For visual verification use the live gallery (see "Live gallery" below).
+For visual verification use the live gallery (see "Live gallery" below).
 
 ## Decision tree
 
@@ -157,22 +157,14 @@ No wrappers for these:
 
 ## Live gallery
 
-A dev-only view renders every primitive and key composite in all variants: `src/views/styleguide/StyleguideView.ts`, command "Open styleguide gallery".
+A dev-only view renders every primitive and key composite in all variants: `src/views/styleguide/StyleguideView.ts`, command "Open styleguide gallery" (id `casefile:open-styleguide`).
 
 - The view is compiled in only when `__STYLEGUIDE__` is true: dev builds (`pnpm dev`) always include it; production builds exclude it unless `STYLEGUIDE=1` is set.
-- The `/live-dev` deploy builds with `PRODUCTION=1`, so use `STYLEGUIDE=1 .claude/skills/live-dev/deploy.sh` or the gallery will be missing from the deployed build.
-- To open and screenshot it over CDP (see `docs/live-inspection.md`):
 
-```
-uv run scripts/cdp.py eval 'app.commands.executeCommandById("project-manager:open-styleguide")'
-uv run scripts/cdp.py eval 'document.querySelector("[data-sg=chip]").scrollIntoView()'
-uv run scripts/cdp.py shot styleguide-chip.png
-```
-
-Each section has a `data-sg` attribute (`chip`, `chip-button`, `avatar`, `icon-button`, `progress`, `collapse`, `empty-state`, `segmented`, `view-switcher`, `popover`, `badges`, `form`, `time-due`, `cards`, `table`).
+Each section has a `data-sg` attribute (`tokens`, `contrast`, `motion`, `chip`, `chip-button`, `avatar`, `icon-button`, `progress`, `collapse`, `empty-state`, `segmented`, `view-switcher`, `popover`, `badges`, `form`, `time-due`, `cards`, `table`).
 
 ## Maintenance
 
 - Adding or changing a component: update its entry here and its section in `StyleguideView.ts` in the same change.
 - Removing a component: delete its entry and gallery section, and check `src/styles/` for now-orphaned classes.
-- Consolidating a deprecated pattern: remove its row from the table above and close the todo.
+- Consolidating a deprecated pattern: remove its line from the decision tree above.
