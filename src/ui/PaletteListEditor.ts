@@ -47,6 +47,15 @@ export function moveItem<T>(items: T[], from: number, to: number): boolean {
   return true
 }
 
+/**
+ * The status a case left on a deleted status moves to: the first other one
+ * of the same kind, closing for closing and open for open. Moving a closed
+ * case to an open status reopened it; undefined means there is none.
+ */
+export function statusFallback(statuses: StatusConfig[], gone: StatusConfig): StatusConfig | undefined {
+  return statuses.find((s) => s.id !== gone.id && s.complete === gone.complete)
+}
+
 /** Wire drag-to-reorder on a config row; on drop, moves the dragged item to this row's index. */
 export function wireRowDragReorder<T>(row: HTMLElement, index: number, items: T[], onChanged: () => void): void {
   row.createSpan({ text: '⠿', cls: 'pm-settings-drag-handle' })
