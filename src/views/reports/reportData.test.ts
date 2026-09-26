@@ -168,9 +168,9 @@ describe('buildHandover', () => {
     expect(md).toContain('## Open incidents')
     expect(md).toContain('### Critical') // sev1's label since severity became the urgency dial
     // sev1 policy: response 60m from 11:30 -> 30m left at 12:00
-    expect(md).toContain('SOC-1 Beacon triage — in-progress · response target in 30m')
-    expect(md).toContain('last: status → in-progress at 2026-07-30T11:40:00.000Z')
-    expect(md).toContain('status: todo → in-progress (2026-07-30T11:40:00.000Z)')
+    expect(md).toContain('SOC-1 Beacon triage — In Progress · response target in 30m')
+    expect(md).toContain('last: status → In Progress at 2026-07-30T11:40:00.000Z')
+    expect(md).toContain('status: To Do → In Progress (2026-07-30T11:40:00.000Z)')
     expect(md).not.toContain('priority: low') // outside the 12h window
     // 30m left of a 60m response target = under 25%? No — 50%, so not at risk.
     expect(md).toContain('## Response/resolution targets at risk\n\nNone.')
@@ -178,6 +178,65 @@ describe('buildHandover', () => {
 
     // Deterministic: identical output on a second run.
     expect(buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')).toBe(md)
+  })
+
+  it('prints status, severity and verdict labels from the board the case is on', () => {
+    const project = makeProject('SOC', 'Projects/SOC.md')
+    project.config = {
+      statuses: [
+        { id: 'todo', label: 'Queued', color: '#888', icon: '', complete: false },
+        { id: 'status-k3j9x2', label: 'Containment', color: '#888', icon: '', complete: false }
+      ]
+    }
+    const inc = makeTask({
+      key: 'SOC-1',
+      title: 'Beacon',
+      issueType: 'incident',
+      severity: 'sev1',
+      status: 'status-k3j9x2',
+      detectedAt: '2026-07-30T11:30:00.000Z',
+      activity: [
+        { at: '2026-07-30T11:40:00.000Z', field: 'status', from: 'todo', to: 'status-k3j9x2' },
+        { at: '2026-07-30T11:41:00.000Z', field: 'severity', from: 'sev3', to: 'sev1' },
+        { at: '2026-07-30T11:42:00.000Z', field: 'verdict', from: '', to: 'true-positive' },
+        { at: '2026-07-30T11:43:00.000Z', field: 'severity', from: 'sev1', to: 'sev0' }
+      ]
+    })
+    project.tasks.push(inc)
+    const md = buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')
+    expect(md).toContain('SOC-1 Beacon — Containment ·')
+    expect(md).toContain('status: Queued → Containment')
+    expect(md).toContain('severity: Medium → Critical')
+    expect(md).toContain('verdict: (unset) → True Positive')
+    // An id nothing defines prints as itself, never as a guessed label.
+    expect(md).toContain('last: severity → sev0 at')
+    expect(md).not.toContain('status-k3j9x2')
+  })
+
+  it('defangs indicator values in activity rows, as it does in the indicator lines', () => {
+    const project = makeProject('SOC', 'Projects/SOC.md')
+    project.tasks.push(
+      makeTask({
+        key: 'SOC-1',
+        title: 'Phish',
+        issueType: 'incident',
+        severity: 'sev1',
+        detectedAt: '2026-07-30T11:30:00.000Z',
+        iocs: [{ type: 'url', value: '\\\\fileserver\\share' }],
+        activity: [
+          { at: '2026-07-30T11:40:00.000Z', field: 'iocs', from: '', to: 'http://evil.example/login' },
+          { at: '2026-07-30T11:45:00.000Z', field: 'iocs', from: 'http://evil.example/old', to: '' }
+        ]
+      })
+    )
+    const md = buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')
+    expect(md).toContain('hxxp://evil[.]example/login')
+    expect(md).not.toContain('http://evil.example/login')
+    expect(md).not.toContain('http://evil.example/old')
+    expect(md).toContain('iocs: (unset) → `hxxp://evil[.]example/login`')
+    expect(md).toContain('last: iocs → (unset) at')
+    // The indicator line keeps the UNC value exact inside a code span.
+    expect(md).toContain('  - url: `[\\\\]fileserver\\share`')
   })
 })
 

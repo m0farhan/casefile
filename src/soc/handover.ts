@@ -4,7 +4,9 @@ import type { PMSettings, Project, Task } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { ensureFolder } from '../store/vaultFs'
 import { isTerminalStatus } from '../utils'
-import { formatIocLine } from './ioc'
+import { inertLine } from './caseReport'
+import { quoteUntrusted } from './emailHeaders'
+import { OWN_ASSET_SUFFIX, activityValue, assetRule, defangIoc } from './ioc'
 import { formatSlaRemaining, slaAnchor, slaAtRisk, slaState } from './sla'
 
 /**
@@ -38,8 +40,31 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
 
   const statusesOf = (p: Project) => (p.config?.statuses?.length ? p.config.statuses : settings.statuses)
   const isOpen = ({ project, task }: Row) => !isTerminalStatus(task.status, statusesOf(project))
-  const label = (t: Task) => (t.key ? `${t.key} ${t.title}` : t.title)
-  const byKeyAsc = (a: Row, b: Row) => label(a.task).localeCompare(label(b.task))
+  const rawLabel = (t: Task) => (t.key ? `${t.key} ${t.title}` : t.title)
+  // A title can be a phishing subject verbatim, and this note opens itself.
+  const label = (t: Task) => inertLine(rawLabel(t))
+  const byKeyAsc = (a: Row, b: Row) => rawLabel(a.task).localeCompare(rawLabel(b.task))
+  // The configured label, not the raw id: this note is read away from the case
+  // (UX-14). Status resolves against the task's own board, since an override
+  // can give an id another name. An id nothing defines prints as itself.
+  const valueLabel = (p: Project, field: string, v: string): string => {
+    const list =
+      field === 'status'
+        ? statusesOf(p)
+        : field === 'severity'
+          ? settings.severities
+          : field === 'verdict'
+            ? settings.verdicts
+            : null
+    return list?.find((c) => c.id === v)?.label ?? v
+  }
+  // A stored value as the note prints it. Indicator values (activity entries
+  // carry them raw) are defanged and kept in a code span, like the indicator
+  // lines; everything else is its label, as inert text.
+  const shown = (p: Project, field: string, v: string): string => {
+    if (!v) return '(unset)'
+    return field === 'iocs' ? quoteUntrusted(activityValue(field, v)) : inertLine(valueLabel(p, field, v))
+  }
 
   const lines: string[] = [
     '# Shift handover',
@@ -97,10 +122,17 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
         (best, a) => (!best || a.at > best.at ? a : best),
         null
       )
-      const lastText = last ? ` · last: ${last.field} → ${last.to} at ${last.at}` : ''
-      lines.push(`- ${label(r.task)} — ${r.task.status} · ${slaText}${anchorNote}${lastText}`)
+      const lastText = last ? ` · last: ${last.field} → ${shown(r.project, last.field, last.to)} at ${last.at}` : ''
+      const status = shown(r.project, 'status', r.task.status)
+      lines.push(`- ${label(r.task)} — ${status} · ${slaText}${anchorNote}${lastText}`)
       // ponytail: 8 defanged indicators per incident keeps the note scannable; bump the cap if shifts want more.
-      for (const ioc of r.task.iocs.slice(0, 8)) lines.push(`  - ${formatIocLine(ioc, settings.ownedAssets)}`)
+      for (const ioc of r.task.iocs.slice(0, 8)) {
+        // formatIocLine's wording, with the value in a code span (a defanged
+        // UNC path otherwise loses a backslash) and the note made inert.
+        const note = ioc.note ? ` — ${inertLine(ioc.note)}` : ''
+        const own = assetRule(ioc.value, settings.ownedAssets) ? OWN_ASSET_SUFFIX : ''
+        lines.push(`  - ${ioc.type}: ${quoteUntrusted(defangIoc(ioc.value, ioc.type))}${note}${own}`)
+      }
       if (r.task.iocs.length > 8) lines.push(`  - +${r.task.iocs.length - 8} more`)
     }
   }
@@ -124,7 +156,11 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
   } else {
     for (const r of changed) {
       lines.push(`- ${label(r.task)}:`)
-      for (const a of r.recent) lines.push(`  - ${a.field}: ${a.from || '(unset)'} → ${a.to} (${a.at})`)
+      for (const a of r.recent) {
+        lines.push(
+          `  - ${a.field}: ${shown(r.project, a.field, a.from)} → ${shown(r.project, a.field, a.to)} (${a.at})`
+        )
+      }
     }
   }
   lines.push('')
@@ -163,10 +199,7 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
   } else {
     for (const r of waiting) {
       const assignees = r.task.assignees.length ? ` · ${r.task.assignees.join(', ')}` : ''
-      // The configured label, not the raw id — same rule as sevLabel above and
-      // caseReport.ts; this note is read away from the case (UX-14).
-      const cfg = statusesOf(r.project).find((s) => s.id === r.task.status)
-      lines.push(`- ${label(r.task)}${assignees} · ${cfg?.label ?? r.task.status}`)
+      lines.push(`- ${label(r.task)}${assignees} · ${shown(r.project, 'status', r.task.status)}`)
     }
   }
   lines.push('')
