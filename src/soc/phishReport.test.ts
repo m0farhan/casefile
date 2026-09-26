@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deflateRaw, zip } from '../../test/zip'
 import { hashBytes } from './eml'
-import { REBUILT_FACT, analysePhishing, caseIocs, formatPhishReport, structureLines } from './phish'
+import { REBUILT_FACT, analysePhishing, caseIocs, formatPhishReport, linksSection, structureLines } from './phish'
 import { formatIocLine } from './ioc'
 
 // A switch for the one test that needs the PDF reader to break. Everything
@@ -1385,10 +1385,31 @@ describe('the Links section says what it read', () => {
     )
     expect(md).toContain(
       '### Links in the message text\n\nNone found in the message text.\n\n' +
-        'Anything found inside an attachment is listed with that attachment, under Attachments.\n\n### Attachments'
+        'Anything found inside an attachment or an inline image is listed with that file, under Attachments or Inline images.\n\n### Attachments'
     )
     const bare = formatPhishReport(await analysePhishing('Content-Type: text/plain\n\nno links here', [], []))
     expect(bare).toContain('### Links in the message text\n\nNone found in the message text.\n\n### Attachments')
+  })
+
+  it('points at the inline images too, when they are all the mail carries', async () => {
+    // A logo holding a beacon URL: the pointer was missing, and "under
+    // Attachments" would have named a section that says None.
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]
+    const logo = Uint8Array.from([...png, ...ascii(' https://beacon.evil.test/p?id=42 ')])
+    const report = await analysePhishing(
+      mailWith({
+        headers: ['Content-Type: image/png', 'Content-Disposition: inline; filename="logo.png"', 'Content-ID: <logo>'],
+        bytes: logo
+      }),
+      [],
+      []
+    )
+    expect([report.attachments.length, report.inlineImages.length]).toEqual([0, 1])
+    expect(report.inlineImages[0].inside.join(' ')).toContain('beacon[.]evil[.]test')
+    const pointer =
+      'Anything found inside an attachment or an inline image is listed with that file, under Attachments or Inline images.'
+    expect(linksSection(report).notes).toEqual([pointer])
+    expect(formatPhishReport(report)).toContain(`None found in the message text.\n\n${pointer}\n\n### Attachments`)
   })
 })
 

@@ -22,6 +22,7 @@ import { defangIoc, visibleName } from '../soc/ioc'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
 import { makeTask } from '../types'
 import { TaskFileNameConflictError } from '../store/ProjectStore'
+import { BOARD_REFUSAL, TITLE_REFUSAL } from '../modals/TaskModal'
 import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
 
 /**
@@ -208,12 +209,16 @@ export class PhishAnalysisView extends ItemView {
           new Notice('No .eml files in this vault.')
           return
         }
-        openEmlPicker(this.plugin, files, (file) => {
-          void (async () => {
+        // safeAsync, not a bare promise: a file moved while the picker was open
+        // fails the read, and that must say so rather than do nothing.
+        openEmlPicker(
+          this.plugin,
+          files,
+          safeAsync(async (file) => {
             const text = await this.app.vault.cachedRead(file)
             this.analyse(text, `${visibleName(file.name)} (${NUMBER.format(file.stat.size)} bytes)`)
-          })()
-        })
+          })
+        )
       })
     )
     copyBtn.onClick(
@@ -279,11 +284,18 @@ export class PhishAnalysisView extends ItemView {
     // Built from the PARSED message by the same code as the Indicators tab,
     // so a lure a structure reader found inside a PDF is on the case too.
     const iocs = caseIocs(report, raw)
-    openProjectPicker(this.plugin, projects, (project) => {
-      void (async () => {
+    // safeAsync, not a bare promise: the caller's own guard has returned by
+    // the time a board is picked, so anything thrown here was never seen.
+    openProjectPicker(
+      this.plugin,
+      projects,
+      safeAsync(async (project) => {
         const config = this.plugin.store.configFor(project)
         const task = makeTask({
-          title: title.slice(0, 120),
+          // Cut by UTF-16 unit, then a half emoji dropped: the note keeps the
+          // title as written, so half a surrogate would be saved as U+FFFD.
+          // Not Array.from, which would walk a subject that can be megabytes.
+          title: title.slice(0, 120).replace(/[\uD800-\uDBFF]$/, ''),
           issueType: 'incident',
           status: getDefaultStatusId(config.statuses),
           priority: getDefaultPriorityId(config.priorities),
@@ -302,13 +314,22 @@ export class PhishAnalysisView extends ItemView {
             new Notice(`Case not created: a note named "${err.fileName}" already exists.`)
             return
           }
+          // The store's own refusals say why (see TaskModal): a subject of only
+          // dots has no character a file name can keep.
+          if (
+            err instanceof Error &&
+            (err.message.startsWith(TITLE_REFUSAL) || err.message.startsWith(BOARD_REFUSAL))
+          ) {
+            new Notice(`Case not created. ${err.message}`)
+            return
+          }
           throw err
         }
         // The analysis stays open. A modal had to close to show the case; a tab
         // is exactly where the evidence should sit while the case is written.
         openTaskModal(this.plugin, project, { task, onSave: () => {} })
-      })()
-    })
+      })
+    )
   }
 
   /**
@@ -830,8 +851,10 @@ class EmlPickerModal extends SuggestModal<TFile> {
   renderSuggestion(file: TFile, el: HTMLElement): void {
     el.addClass('mod-complex')
     const content = el.createDiv({ cls: 'suggestion-content' })
-    content.createDiv({ cls: 'suggestion-title', text: file.name })
-    content.createDiv({ cls: 'suggestion-note', text: file.parent?.path ?? '' })
+    // Escaped as the load note escapes it: a mail client saves a message under
+    // its Subject, so the sender can write this name. Filtering keeps the raw path.
+    content.createDiv({ cls: 'suggestion-title', text: visibleName(file.name) })
+    content.createDiv({ cls: 'suggestion-note', text: visibleName(file.parent?.path ?? '') })
   }
 
   onChooseSuggestion(file: TFile): void {
