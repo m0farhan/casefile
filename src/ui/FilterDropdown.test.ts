@@ -135,6 +135,34 @@ class FakeEl {
     return null
   }
 
+  // Just the selector shapes Popover asks for: a tag, a .class or an
+  // [attr="value"], alone or in a comma list.
+  matches(sel: string): boolean {
+    return sel.split(',').some((part) => {
+      const s = part.trim()
+      const attr = /^\[([\w-]+)="([^"]*)"\]$/.exec(s)
+      if (attr) return this.attrs.get(attr[1]) === attr[2]
+      if (s.startsWith('.')) return this.classes.has(s.slice(1))
+      return this.tagName === s
+    })
+  }
+
+  querySelectorAll(sel: string): FakeEl[] {
+    const out: FakeEl[] = []
+    const walk = (el: FakeEl): void => {
+      for (const c of el.children) {
+        if (c.matches(sel)) out.push(c)
+        walk(c)
+      }
+    }
+    walk(this)
+    return out
+  }
+
+  querySelector(sel: string): FakeEl | null {
+    return this.querySelectorAll(sel)[0] ?? null
+  }
+
   empty(): void {
     for (const c of this.children) c.parent = null
     this.children = []
@@ -307,6 +335,41 @@ describe('renderFilterDropdown', () => {
     // A second open still works after the teardown.
     chip.fire('click')
     expect(pops()).toHaveLength(1)
+  })
+
+  it('opening moves focus onto the first option, or the first selected one', () => {
+    const { chip } = mount()
+    chip.focus()
+    chip.fire('click')
+    expect(doc.activeElement).toBe(optionRows()[0])
+
+    doc.fire('keydown', { key: 'Escape', stopPropagation: () => {} })
+    const second = mount(['closed'])
+    second.chip.fire('click')
+    expect(doc.activeElement?.getAttribute('aria-selected')).toBe('true')
+    expect(byClass(doc.activeElement as FakeEl, 'pm-pop-item-label')[0].textContent).toBe('Closed')
+  })
+
+  it('arrow keys step between the option rows and wrap', () => {
+    const { chip } = mount()
+    chip.fire('click')
+    const [openRow, closedRow] = optionRows()
+    const arrow = (key: string) => {
+      const e = { key, preventDefault: vi.fn<() => void>(), stopPropagation: vi.fn<() => void>() }
+      doc.fire('keydown', e)
+      return e
+    }
+    expect(arrow('ArrowDown').preventDefault).toHaveBeenCalled()
+    expect(doc.activeElement).toBe(closedRow)
+    arrow('ArrowDown')
+    expect(doc.activeElement).toBe(openRow)
+    arrow('ArrowUp')
+    expect(doc.activeElement).toBe(closedRow)
+
+    // Focus outside the rows (a date or search field): arrows are left alone.
+    doc.activeElement = null
+    expect(arrow('ArrowDown').preventDefault).not.toHaveBeenCalled()
+    expect(doc.activeElement).toBeNull()
   })
 
   it('outside pointer-down closes and clicking the chip again toggles', () => {
