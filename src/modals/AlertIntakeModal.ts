@@ -13,6 +13,7 @@ const EMPTY_PARSE: ParsedAlert = {
   severityId: '',
   occurredAt: '',
   detectedAt: '',
+  zoneAssumed: { occurredAt: false, detectedAt: false },
   description: '',
   iocs: []
 }
@@ -209,21 +210,29 @@ export class AlertIntakeModal extends Modal {
    * this renders from the parse alone, and a case with no severity or an
    * Informational one has no clock at all (sev5 ships without a policy). The
    * panel of the case this opens discloses the anchor, where the policy is known.
+   * A date with no time of day is not a stamp, so it reads as no time found.
    */
-  private renderStamp(key: 'occurredAt' | 'detectedAt', iso: string): void {
+  private renderStamp(key: 'occurredAt' | 'detectedAt', iso: string, emptyText = 'No time found in paste'): void {
     this[key] = iso
     const el = key === 'occurredAt' ? this.occurredEl : this.detectedEl
     el.empty()
     if (!iso) {
       // Honest empty: no timestamp was parsed, so none is shown or stored.
-      el.createSpan({ cls: 'pm-alert-empty', text: 'Not found in paste' })
+      el.createSpan({ cls: 'pm-alert-empty', text: emptyText })
       return
     }
     el.createSpan({ text: new Date(iso).toLocaleString() })
+    // No zone was read from the value, so it was taken as local time. Said so,
+    // because the stored instant, and the SLA anchored on it, depend on it.
+    // Worded as what was read, not what the paste holds: a zone in brackets,
+    // `(UTC)`, is skipped by Date.parse too.
+    if (this.parsed.zoneAssumed[key]) {
+      el.createSpan({ cls: 'pm-alert-empty', text: ' · read as your local time: no zone was read from the paste' })
+    }
     new ExtraButtonComponent(el)
       .setIcon('x')
       .setTooltip('Clear')
-      .onClick(() => this.renderStamp(key, ''))
+      .onClick(() => this.renderStamp(key, '', 'Not recorded'))
   }
 
   private readonly create = safeAsync(async () => {

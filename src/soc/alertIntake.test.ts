@@ -68,6 +68,38 @@ describe('parseAlertPaste', () => {
     expect(parseAlertPaste('Alert Time : 2024-05-13T06:22:00Z', CFG).occurredAt).toBe('')
   })
 
+  it('refuses a date with no time of day, rather than inventing a midnight', () => {
+    // ISO date-only parses as UTC midnight and 'May 13, 2024' as local midnight:
+    // a time nobody wrote, a day early west of UTC, and a sev1 born breached.
+    expect(parseAlertPaste('Detected : 2024-05-13', CFG).detectedAt).toBe('')
+    expect(parseAlertPaste('Detected : May 13, 2024', CFG).detectedAt).toBe('')
+    expect(parseAlertPaste('Event Time : 2024-05-13', CFG).occurredAt).toBe('')
+    // A ':' is not a date: this used to become 1 January.
+    expect(parseAlertPaste('Detected : 2024 09:22', CFG).detectedAt).toBe('')
+  })
+
+  it('says when a stamp named no zone and was read as local time', () => {
+    const r = parseAlertPaste('Alert Time : 2024-05-13 09:22', CFG)
+    expect(r.detectedAt).toBe(new Date(2024, 4, 13, 9, 22).toISOString())
+    expect(r.zoneAssumed.detectedAt).toBe(true)
+    expect(parseAlertPaste('Event Time : May, 13, 2024, 10:38 AM', CFG).zoneAssumed.occurredAt).toBe(true)
+  })
+
+  it.each([
+    '2024-05-13T09:22:00Z',
+    '2024-05-13T09:22:00+03:00',
+    '2024-05-13 09:22 +03',
+    'Mon, 13 May 2024 06:22:00 GMT',
+    '2024-05-13 09:22 UTC',
+    '13 May 2024 09:22 +0300 (EEST)',
+    '13 May 2024 09:22 GMT+0300',
+    'May 13, 2024 09:22 AM EST'
+  ])('takes the zone written in %s', (value) => {
+    const r = parseAlertPaste(`Detected : ${value}`, CFG)
+    expect(r.detectedAt).not.toBe('')
+    expect(r.zoneAssumed.detectedAt).toBe(false)
+  })
+
   it('refuses a count as a timestamp, so a bare number cannot anchor the SLA', () => {
     // Date.parse('3') is 2001-03-01 and Date.parse('257') is year 257 — V8's
     // legacy fallback. An EDR's `Detected : 3` must not fabricate a stamp.
@@ -132,6 +164,7 @@ describe('parseAlertPaste', () => {
       severityId: '',
       occurredAt: '',
       detectedAt: '',
+      zoneAssumed: { occurredAt: false, detectedAt: false },
       description: '',
       iocs: []
     })
