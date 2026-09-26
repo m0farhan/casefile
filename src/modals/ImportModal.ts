@@ -343,7 +343,7 @@ export class ImportModal extends Modal {
 
   private async handleImport(): Promise<void> {
     if (!this.project) {
-      new Notice('Error: project not set for import', 5000)
+      new Notice('Error: no board chosen for the import', 5000)
       return
     }
 

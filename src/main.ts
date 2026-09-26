@@ -1023,7 +1023,7 @@ export default class PMPlugin extends Plugin {
     const store = this.store
     const moved = await this.asOwnMove(() => store.renameProjectFolder(project, newTitle))
     if (moved === 'occupied') {
-      this.showNotice(`A folder named "${projectFileName(newTitle.trim())}" already exists — case not renamed.`)
+      this.showNotice(`A folder named "${projectFileName(newTitle.trim())}" already exists — board not renamed.`)
       return false
     }
     if (moved) {
