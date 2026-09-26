@@ -573,24 +573,41 @@ function closesAt(text: string, at: number): boolean {
 }
 
 /**
+ * How a whole image file begins: a JPEG's SOI, the twelve-byte JP2 signature
+ * box, or a raw JPEG 2000 codestream's SOC followed by SIZ, which the standard
+ * requires to come next.
+ */
+const IMAGE_STARTS = [
+  [0xff, 0xd8],
+  [0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a],
+  [0xff, 0x4f, 0xff, 0x51]
+]
+
+/**
  * Does this byte run begin and end as a whole file of the kind the filter
  * names? JPEG is SOI…EOI; JPEG 2000 is either the JP2 signature box or a raw
- * codestream SOC…EOC.
+ * codestream SOC, SIZ…EOC. All three end FF D9: EOI and EOC are the same two
+ * bytes, and a JP2 file's codestream box normally comes last.
  *
  * The point is not to validate the image — it is to refuse a run that is only
  * bounded by a keyword. Bytes that ran past their own object into the next
- * one do not end where a picture ends.
+ * one do not end where a picture ends. JPEG 2000 used to be taken on its first
+ * two or three bytes with no look at the end at all, so a run that swallowed
+ * the next object came back hashed as a picture.
+ *
+ * ponytail: the end check refuses a real JP2 whose last box is not the
+ * codestream (an xml or uuid box after it is legal), and says so through the
+ * unverified count. Upgrade path if one turns up: walk the top-level box
+ * lengths and require them to add up exactly to the run.
  */
 function wholeImage(scan: Uint8Array, start: number, end: number): boolean {
-  if (end - start < 4 || end > scan.length) return false
-  // Either shape is accepted whatever the dictionary called it. The declared
+  if (end > scan.length || scan[end - 2] !== 0xff || scan[end - 1] !== 0xd9) return false
+  // Any shape is accepted whatever the dictionary called it. The declared
   // filter is written by the sender, and a stream labelled one thing holding
   // another is a fact worth keeping rather than a reason to drop the bytes —
   // the magic-byte gate downstream is what says which it really is.
-  const jpegWhole = scan[start] === 0xff && scan[start + 1] === 0xd8 && scan[end - 2] === 0xff && scan[end - 1] === 0xd9
-  const jp2 = scan[start] === 0x00 && scan[start + 1] === 0x00 && scan[start + 2] === 0x00
-  const codestream = scan[start] === 0xff && scan[start + 1] === 0x4f
-  return jpegWhole || jp2 || codestream
+  // The `+ 2` keeps the start marker and the FF D9 from overlapping.
+  return IMAGE_STARTS.some((sig) => end - start >= sig.length + 2 && sig.every((b, i) => scan[start + i] === b))
 }
 
 function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[] {
@@ -598,10 +615,11 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
   const seen = new Set<number>()
   const re = new RegExp(IMAGE_FILTER_SOURCE, 'g')
   // Shared by every streamEnd call in this scan: `endstream` is searched for
-  // forwards, so one answer of "there is none after here" answers it for every
-  // later offset too. Without that, a file of filter names and `stream`
-  // keywords and no `endstream` bought a scan to EOF per occurrence.
-  const memo = { noneLeft: false }
+  // forwards, so one answer serves every later offset it covers. Without that,
+  // a file of filter names and `stream` keywords bought a scan to EOF per
+  // occurrence when there was no `endstream`, and a 12MB scan per occurrence
+  // when there was one far away.
+  const memo = { noneLeft: false, from: 0, at: -1 }
   let total = 0
   let examined = 0
   let overrun = false
@@ -724,8 +742,8 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
   if (unverified) {
     notes.push(
       `${unverified} /DCTDecode or /JPXDecode entr(ies) had no usable declared length, and the bytes before the ` +
-        `next 'endstream' do not begin and end as a complete image. They were not extracted — that is a stream ` +
-        `this scan could not take safely, not a stream that is absent.`
+        `next 'endstream' could not be confirmed to begin and end as a complete image. They were not extracted — ` +
+        `that is a stream this scan could not take safely, not a stream that is absent.`
     )
   }
   if (empty) {
@@ -741,6 +759,16 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
       `${bySearch} extracted image(s) declared no direct /Length, so each was cut at the next 'endstream' keyword ` +
         'and kept only because it begins and ends as a complete image. One whose data held those nine bytes would ' +
         'still be cut there, so its hash could be of a prefix of the image in the document.'
+    )
+  }
+  // Said here rather than left to whoever shows the result: an empty list from
+  // a scan that only looks at two filters is not a file with no pictures, and
+  // PDF writers usually store a picture that came from a PNG as /FlateDecode,
+  // which this skips.
+  if (!out.length) {
+    notes.push(
+      'Only /DCTDecode (JPEG) and /JPXDecode (JPEG 2000) streams are extracted as pictures, and none was extracted ' +
+        'here. An image stored any other way, /FlateDecode included, is not read, so none drawn is not none present.'
     )
   }
   return out
@@ -822,17 +850,26 @@ function streamDataStart(text: string, from: number): number {
  * Until then a direct /Length that disagrees is at least reported — readImages
  * compares the two and says so.
  *
- * The memo is what keeps the failing case cheap. A successful search is already
- * bounded by the caller's byte budget, which stops the loop once the extracted
- * bytes add up; a failing one is not bounded by anything, and it fails the same
- * way for every later offset, so one answer serves them all.
+ * The memo is what makes every search together one pass over the file, found
+ * or not. A failing search fails the same way for every later offset, so one
+ * answer serves them all. A successful one from `from` that lands at `at` says
+ * no `endstream` begins in between, so any start in that range lands at `at`
+ * too. That second half is not optional: the caller's byte budget only counts
+ * runs it keeps, so 4,096 filter names in front of one distant `endstream`,
+ * each run rejected as no image, bought a 12MB search apiece — about 30
+ * seconds with the UI thread held.
  */
-function streamEnd(text: string, start: number, memo: { noneLeft: boolean }): number {
+function streamEnd(text: string, start: number, memo: { noneLeft: boolean; from: number; at: number }): number {
   if (memo.noneLeft) return -1
-  const at = text.indexOf('endstream', start)
-  if (at < 0) {
-    memo.noneLeft = true
-    return -1
+  let at = memo.at
+  if (!(memo.from <= start && start <= memo.at)) {
+    at = text.indexOf('endstream', start)
+    if (at < 0) {
+      memo.noneLeft = true
+      return -1
+    }
+    memo.from = start
+    memo.at = at
   }
   // The EOL before `endstream` is a delimiter the writer may insert; the spec
   // says it is not part of the data, and a trailing 0x0a appended to a JPEG

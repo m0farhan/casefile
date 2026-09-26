@@ -21,7 +21,15 @@ function pdf(...parts: (string | Uint8Array)[]): Uint8Array {
 /** A JPEG carrying the bytes `)`, `end` and `obj` — the things a lazy scanner stops at. */
 const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x29, 0x65, 0x6e, 0x64, 0x6f, 0x62, 0x6a, 0xff, 0xd9])
 
+/** The twelve-byte JP2 signature box every JPEG 2000 file of that shape begins with. */
+const JP2 = Uint8Array.from([0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a])
+
 const TRAILER = '\ntrailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF\n'
+
+/** Word for word, because the card and the copied report both print it. */
+const NONE_EXTRACTED =
+  'Only /DCTDecode (JPEG) and /JPXDecode (JPEG 2000) streams are extracted as pictures, and none was extracted ' +
+  'here. An image stored any other way, /FlateDecode included, is not read, so none drawn is not none present.'
 
 describe('readPdf', () => {
   it('declines bytes that are not a PDF rather than reporting an empty one', () => {
@@ -192,7 +200,7 @@ describe('images', () => {
       )
     )
     expect(facts?.images).toEqual([])
-    expect(facts?.notes.join(' ')).toContain('do not begin and end as a complete image')
+    expect(facts?.notes.join(' ')).toContain('could not be confirmed to begin and end as a complete image')
   })
 
   it('still takes a whole JPEG bounded only by the keyword, so an indirect /Length loses nothing', () => {
@@ -209,6 +217,63 @@ describe('images', () => {
     expect(facts?.images).toHaveLength(1)
     expect(facts?.images[0]?.filter).toBe('/JPXDecode')
     expect([...(facts?.images[0]?.bytes ?? [])]).toEqual([...JPEG])
+  })
+
+  it('refuses a JPEG 2000 run that swallowed the next object, or that only begins like one', () => {
+    // No `endstream` of its own and an indirect /Length, so the search stops at
+    // the next object's and the run spans both. JPEG 2000 used to be kept on its
+    // first two or three bytes, so this came back hashed as a picture under a
+    // note saying it began and ended as one.
+    const nextObject = '\nendobj\n2 0 obj << /Length 22 >>\nstream\nBT (other object) Tj ET\nendstream\nendobj'
+    const swallowed = readPdf(
+      pdf(
+        '%PDF-1.7\n1 0 obj << /Subtype /Image /Filter /JPXDecode /Length 9 0 R >>\nstream\n',
+        JP2,
+        nextObject,
+        TRAILER
+      )
+    )
+    expect(swallowed?.images).toEqual([])
+    expect(swallowed?.notes.join(' ')).toContain('1 /DCTDecode or /JPXDecode entr(ies) had no usable declared length')
+    // The start has to be the whole signature too: three NULs, or SOC without
+    // the SIZ that must follow it, is not JPEG 2000 however the run ends.
+    for (const start of [
+      [0x00, 0x00, 0x00, 0x41],
+      [0xff, 0x4f, 0x41, 0x42]
+    ]) {
+      const facts = readPdf(
+        pdf(
+          '%PDF-1.7\n<< /Filter /JPXDecode >>\nstream\n',
+          Uint8Array.from([...start, 0xff, 0xd9]),
+          '\nendstream',
+          TRAILER
+        )
+      )
+      expect(facts?.images).toEqual([])
+    }
+  })
+
+  it('takes a JPEG 2000 run bounded only by the keyword when it begins and ends as one, in either shape', () => {
+    const jp2 = pdf(JP2, 'jp2c', Uint8Array.from([0xff, 0x4f, 0xff, 0x51, 0xff, 0xd9]))
+    const codestream = Uint8Array.from([0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0xff, 0xd9])
+    for (const body of [jp2, codestream]) {
+      const facts = readPdf(
+        pdf('%PDF-1.7\n<< /Filter /JPXDecode /Length 9 0 R >>\nstream\n', body, '\nendstream\nendobj', TRAILER)
+      )
+      expect([...(facts?.images[0]?.bytes ?? [])]).toEqual([...body])
+    }
+  })
+
+  it('says which streams it extracts when it extracted none, so an empty list is not read as no pictures', () => {
+    // A picture that came from a PNG is stored as /FlateDecode, which this
+    // skips. With nothing said, "no images" read as "this file has none".
+    const facts = readPdf(
+      pdf('%PDF-1.5\n<< /Subtype /Image /Filter /FlateDecode /Length 4 >>\nstream\nABCD\nendstream\nendobj', TRAILER)
+    )
+    expect(facts?.images).toEqual([])
+    expect(facts?.notes).toContain(NONE_EXTRACTED)
+    const withImage = readPdf(pdf(head, JPEG, '\nendstream\nendobj', TRAILER))
+    expect(withImage?.notes).not.toContain(NONE_EXTRACTED)
   })
 
   it('leaves FlateDecode alone — that is pixel data, not a file', () => {
@@ -339,7 +404,7 @@ describe('notes that would otherwise be wrong', () => {
     // SHA-256 of something that is not in the file is the one output worse
     // than a missing one.
     expect(facts?.images).toEqual([])
-    expect(facts?.notes.join(' ')).toContain('do not begin and end as a complete image')
+    expect(facts?.notes.join(' ')).toContain('could not be confirmed to begin and end as a complete image')
   })
 
   it('says the same thing when /Length is written before /Filter, which is how Quartz writes it', () => {
@@ -366,7 +431,7 @@ describe('notes that would otherwise be wrong', () => {
     // SHA-256 of something that is not in the file is the one output worse
     // than a missing one.
     expect(facts?.images).toEqual([])
-    expect(facts?.notes.join(' ')).toContain('do not begin and end as a complete image')
+    expect(facts?.notes.join(' ')).toContain('could not be confirmed to begin and end as a complete image')
   })
 
   it('does not take a /Length out of the object before this one and call an honest stream mismatched', () => {
@@ -675,6 +740,25 @@ describe('files built to make the scan run away', () => {
     )
     expect([...(facts?.images[0]?.bytes ?? [])]).toEqual([...JPEG])
     expect(ms).toBeLessThan(ceiling(BEFORE.noEndstream))
+  })
+
+  it('bounds streams that all end at one distant endstream: a found answer serves every start before it', () => {
+    // The found half of the same hole. Each run is 12MB of `a`, fails the
+    // whole-image check and is dropped without touching the byte budget, so
+    // the budget never stopped the loop: 4,096 searches of 12MB each, 31.8
+    // seconds on the unfixed module. The bulk is built as bytes because
+    // turning a 12MB string into them costs more than the scan being timed.
+    const { ms, facts } = timed(
+      pdf(
+        '%PDF-1.7\n',
+        ...REAL_IMAGE,
+        '/DCTDecode stream\n'.repeat(4096),
+        new Uint8Array(12e6).fill(0x61),
+        'endstream\nendobj\n%%EOF'
+      )
+    )
+    expect([...(facts?.images[0]?.bytes ?? [])]).toEqual([...JPEG])
+    expect(ms).toBeLessThan(2000)
   })
 
   it('counts an empty stream as work done, though it grows neither the image count nor the byte total', () => {
