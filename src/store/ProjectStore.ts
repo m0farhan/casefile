@@ -312,12 +312,23 @@ export class ProjectStore implements TaskSource {
    * the flat `Archive` for archived tasks. Falls back to the project folder
    * when the parent has no file yet (its write failed) — the loader is
    * layout-agnostic and the next successful save relocates.
+   *
+   * Archiving a parent carries its subtasks into Archive inside the parent's
+   * own folder. Such a subtask stays there, so unarchiving the parent brings
+   * it back; flattening it into Archive stranded it under a live case. Any
+   * other archived task (on its own, or reparented since) uses the flat
+   * Archive. A live subtask never goes into an archived parent's folder,
+   * where the loader would read it as archived again.
    */
   private folderForTask(project: Project, task: Task, parentId = findParentId(project, task.id)): string {
     const base = this.projectTaskFolder(project)
-    if (task.archived) return normalizePath(base + '/Archive')
     const parent = parentId ? findTaskById(project, parentId) : null
-    return parent?.filePath ? this.taskFolder(parent.filePath) : base
+    if (task.archived) {
+      const own = parent?.archived && parent.filePath ? this.taskFolder(parent.filePath) : null
+      const current = task.filePath?.slice(0, task.filePath.lastIndexOf('/'))
+      return own && current === own ? own : normalizePath(base + '/Archive')
+    }
+    return parent?.filePath && !parent.archived ? this.taskFolder(parent.filePath) : base
   }
 
   // ─── Load ──────────────────────────────────────────────────────────────────

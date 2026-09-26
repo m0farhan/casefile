@@ -2581,3 +2581,51 @@ describe('ProjectStore relocating a case note', () => {
     expect(vault.getAbstractFileByPath('Projects')).toBeNull()
   })
 })
+
+describe('ProjectStore archived parents and their subtasks', () => {
+  /** Parent with Child, Parent archived (carrying Child), then a fresh store as after a restart. */
+  async function archivedFamily() {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Fam', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const child = await addNamed(store, project, 'Child', parent.id)
+    await store.archiveTask(project, parent.id)
+    expect(child.filePath).toBe('Projects/Fam/Tasks/Archive/Parent/Child.md')
+    expect(child.archived).toBe(true)
+    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    const restart = async () => {
+      const s = new ProjectStore(app, () => SETTINGS)
+      return { s, p: expectDefined(await s.loadProject(pf)) }
+    }
+    return { vault, parent, child, restart }
+  }
+
+  it('unarchiving a child of an archived parent leaves it live, at the case folder', async () => {
+    const { child, restart } = await archivedFamily()
+    const { s, p } = await restart()
+    await s.unarchiveTask(p, child.id)
+    expect(findTask(p.tasks, child.id)?.filePath).toBe('Projects/Fam/Tasks/Child.md')
+    const again = (await restart()).p
+    expect(expectDefined(findTask(again.tasks, child.id)).archived).toBeFalsy()
+  })
+
+  it('unarchiving a parent brings its subtask back live, and a rename carries it along', async () => {
+    const { parent, child, restart } = await archivedFamily()
+    const { s, p } = await restart()
+    await s.unarchiveTask(p, parent.id)
+    expect(findTask(p.tasks, child.id)?.archived).toBe(false)
+    await s.updateTask(p, parent.id, { title: 'Renamed' })
+    const kid = expectDefined(findTask((await restart()).p.tasks, child.id))
+    expect([kid.filePath, !!kid.archived]).toEqual(['Projects/Fam/Tasks/Renamed/Child.md', false])
+  })
+
+  it('an archived subtask moved to the top stays archived, in one file, when its old parent is unarchived', async () => {
+    const { vault, parent, child, restart } = await archivedFamily()
+    const { s, p } = await restart()
+    await s.moveTask(p, child.id, null)
+    await s.unarchiveTask(p, parent.id)
+    const md = vault.getMarkdownFiles().filter((f) => f.basename === 'Child')
+    expect(md.map((f) => f.path)).toEqual(['Projects/Fam/Tasks/Archive/Child.md'])
+    expect(findTask((await restart()).p.tasks, child.id)?.archived).toBe(true)
+  })
+})
