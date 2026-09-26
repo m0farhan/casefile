@@ -38,9 +38,15 @@ export interface OptionRow extends GlyphSpec {
   onPick: () => void
 }
 
-/** Renders one selectable row (glyph/avatar + label + optional check) into a popover list. */
+/** Renders one selectable row (glyph/avatar + label + optional check) into a popover list.
+    The row states its selection as an option, which is also where the Popover puts focus
+    on open. */
 export function renderOptionRow(parent: HTMLElement, row: OptionRow): HTMLElement {
-  const item = parent.createEl('button', { cls: 'pm-pop-item' })
+  parent.setAttr('role', 'listbox')
+  const item = parent.createEl('button', {
+    cls: 'pm-pop-item',
+    attr: { role: 'option', 'aria-selected': String(!!row.selected) }
+  })
   if (row.accent) item.addClass('pm-pop-item--accent')
   if (row.avatar) new Avatar(item).setName(row.avatar).setSize('sm')
   else renderGlyph(item, row)

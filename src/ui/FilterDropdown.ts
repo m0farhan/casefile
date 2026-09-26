@@ -30,23 +30,9 @@ export function renderFilterDropdown(
       pop.close()
       return
     }
-    const doc = btn.el.ownerDocument
-    // Registered before open(), so it runs ahead of the Popover's own
-    // Escape-close handler (same target and phase, registration order) and
-    // the chip regains focus as the panel closes.
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') btn.el.focus()
-    }
-    doc.addEventListener('keydown', onEsc, true)
     // ponytail: if the chip is torn out of the DOM while the panel is open,
     // the Popover's outside-pointerdown path still closes the orphan.
-    pop = new Popover({
-      anchor: btn.el,
-      onClose: () => {
-        doc.removeEventListener('keydown', onEsc, true)
-        pop = null
-      }
-    })
+    pop = new Popover({ anchor: btn.el, onClose: () => (pop = null) })
 
     const body = pop.contentEl
     body.addClass('pm-filter-pop')
@@ -66,6 +52,9 @@ export function renderFilterDropdown(
         onChange(selected)
         updateLabel()
         for (const sync of rowSyncs) sync()
+        // Clear removes itself; focus moves to the first option rather than
+        // dropping to the document with the button.
+        list.querySelector<HTMLElement>('.pm-pop-item')?.focus()
         renderFooter()
       })
     }

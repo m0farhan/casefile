@@ -324,7 +324,7 @@
   color: var(--gs-ink-subtle);
 }
 .pm-backlog-header-count {
-  color: var(--gs-ink-tertiary);
+  color: var(--gs-ink-faint);
 }
 .pm-backlog-row {
   display: flex;

@@ -114,7 +114,7 @@
   border-radius: var(--radius-s);
   text-align: center;
   font-size: 12px;
-  color: var(--gs-ink-tertiary);
+  color: var(--gs-ink-faint);
 }
 .pm-kanban-drop-target .pm-kanban-empty {
   display: none;
@@ -488,6 +488,12 @@
 .pm-kanban-card > .pm-kanban-progress:hover::-webkit-slider-thumb,
 .pm-kanban-card > .pm-kanban-progress:focus-visible::-webkit-slider-thumb {
   opacity: 1;
+}
+/* No hover on a touch screen, so the thumb shows all the time. */
+@media (hover: none) {
+  .pm-kanban-card > .pm-kanban-progress::-webkit-slider-thumb {
+    opacity: 1;
+  }
 }
 .pm-kanban-card > .pm-kanban-progress:focus-visible {
   box-shadow: var(--gs-focus-ring);

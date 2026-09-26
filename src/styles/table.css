@@ -39,6 +39,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Eleven nowrap buttons: wrapping keeps Delete and the clear-selection X on
+     screen in a normal-width pane instead of scrolling the table sideways. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .pm-bulk-bar-right {
   display: flex;
@@ -47,7 +51,7 @@
 .pm-bulk-bar-count {
   font-size: 12px;
   font-weight: 600;
-  color: var(--interactive-accent);
+  color: var(--interactive-accent-hover);
   padding-right: 4px;
 }
 
@@ -170,9 +174,17 @@ button.pm-chip-btn--active:hover {
   pointer-events: none;
 }
 .pm-table-row:hover .pm-table-cell-select input[type='checkbox'],
-.pm-table-row .pm-table-cell-select input[type='checkbox']:checked {
+.pm-table-row .pm-table-cell-select input[type='checkbox']:checked,
+.pm-table-row .pm-table-cell-select input[type='checkbox']:focus-visible {
   opacity: 1;
   pointer-events: auto;
+}
+/* No hover on a touch screen: the checkbox shows, so one tap ticks it. */
+@media (hover: none) {
+  .pm-table-row .pm-table-cell-select input[type='checkbox'] {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .pm-table-cell-expand {
   width: 32px;
@@ -212,7 +224,7 @@ button.pm-chip-btn--active:hover {
   line-height: 1.4;
 }
 .pm-task-title-text:hover {
-  color: var(--interactive-accent);
+  color: var(--interactive-accent-hover);
 }
 
 .pm-table-tags {
@@ -294,11 +306,19 @@ button.pm-chip-btn--active:hover {
 }
 .pm-table-row:hover .pm-icon-btn--hover-only,
 .pm-modal-subtask-row:hover .pm-icon-btn--hover-only,
-.pm-gantt-label-row:hover .pm-icon-btn--hover-only {
+.pm-gantt-label-row:hover .pm-icon-btn--hover-only,
+.pm-link-row:hover .pm-icon-btn--hover-only,
+.pm-sg-row:hover .pm-icon-btn--hover-only {
   opacity: 1;
 }
 .pm-icon-btn--hover-only:focus-visible {
   opacity: 1;
+}
+/* No hover on a touch screen, so nothing would ever reveal these. */
+@media (hover: none) {
+  .pm-icon-btn--hover-only {
+    opacity: 1;
+  }
 }
 
 /* -- Chip (unified label primitive: status, priority, tags, due, badges) -- */
