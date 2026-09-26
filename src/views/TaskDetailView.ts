@@ -451,6 +451,7 @@ export class TaskDetailView extends ItemView {
     })
     renderActivitySection(body, task, this.activityState)
     renderSubtasksPanel(body, task, this.plugin, config.statuses, {
+      project,
       onOpen: (sub) => {
         const live = findTaskById(project, sub.id)
         if (!live) {

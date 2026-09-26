@@ -448,6 +448,7 @@ export class TaskModal extends Modal {
 
     // ── Subtasks ────────────────────────────────────────────────────────────
     renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses, {
+      project: this.project,
       onOpen: (sub) => {
         const live = findTaskById(this.project, sub.id)
         if (!live) {
