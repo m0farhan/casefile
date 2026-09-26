@@ -940,3 +940,276 @@ a.pm-ioc-rep--unknown {
   font-size: 12px;
   color: var(--text-faint);
 }
+
+/* ─ Case description: one typography for reading and editing ─ */
+/* The description flips between Obsidian's rendered preview and a CodeMirror
+   editor carrying this plugin's live-preview marks (DescriptionEditor.ts).
+   Both boxes share the metrics below, read from Obsidian's typography
+   variables so they follow the user's text font and size, and the preview
+   spaces its blocks by whole source lines. So a click into the text moves
+   nothing:
+   - a heading line is --hN-size tall with --p-spacing above it, in both;
+   - a list line is one line with --list-spacing above and below, its text one
+     --list-indent per level in, its bullet or checkbox hung in that indent at
+     the same spot;
+   - a blank source line is one line tall in the editor, and the preview puts
+     as many lines above each block as the source has blank lines there
+     (DescriptionEditor sets --pm-gap per block and --pm-trail at the end).
+   Colours stay on the plugin's tokens, except where Obsidian's own heading
+   and emphasis rules already colour the preview; the editor copies those.
+   These rules replace the older description rules in task-modal.css and
+   widgets.css, which they outrank by source order or specificity. */
+.pm-modal-desc-section {
+  /* One line of body text, the same length wherever it is used. */
+  --pm-desc-line: calc(var(--font-text-size) * var(--line-height-normal));
+  /* How far left of an item's text its bullet or checkbox is centred. */
+  --pm-desc-mark: calc(var(--checkbox-size) / 2 + 0.4em);
+}
+.pm-modal-desc-section .pm-desc-toolbar {
+  margin-bottom: 0;
+}
+.pm-modal-desc-preview,
+.pm-modal-description .cm-editor {
+  box-sizing: border-box;
+  min-height: 80px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  font-family: var(--font-text);
+  font-size: var(--font-text-size);
+  line-height: var(--line-height-normal);
+}
+/* Wrap where the preview wraps. CodeMirror's default (break-spaces) keeps a
+   space at the end of a wrapped line on that line, so a line that just fits
+   in the preview broke one word early in the editor. pre-wrap lets that
+   space hang, as the preview does. */
+.pm-modal-description .cm-content.cm-lineWrapping {
+  white-space: pre-wrap;
+}
+/* Blank lines at the end of the text stay as tall as the editor shows them. */
+.pm-modal-desc-preview {
+  padding-bottom: calc(6px + var(--pm-trail, 0) * var(--pm-desc-line));
+}
+
+/* Blocks: no margins of their own; a gap of --pm-gap source lines before
+   each top-level block (one by default, none before the first, until
+   DescriptionEditor sets the real count). */
+.pm-modal-desc-preview :is(p, ul, ol, blockquote, pre, h1, h2, h3, h4, h5, h6) {
+  margin: 0;
+}
+.pm-modal-desc-section .pm-modal-desc-preview > * {
+  margin-block: calc(var(--pm-gap, 1) * var(--pm-desc-line)) 0;
+}
+.pm-modal-desc-section .pm-modal-desc-preview > :first-child {
+  margin-top: calc(var(--pm-gap, 0) * var(--pm-desc-line));
+}
+
+/* Headings. The preview's h1–h6 already take these variables from
+   Obsidian's own heading rules; the editor's heading lines mirror them. */
+.pm-modal-desc-preview :is(h1, h2, h3, h4, h5, h6),
+.pm-modal-description .cm-line:is(.cm-cf-h1, .cm-cf-h2, .cm-cf-h3, .cm-cf-h4, .cm-cf-h5, .cm-cf-h6) {
+  padding-top: var(--p-spacing);
+}
+.pm-modal-description .cm-line.cm-cf-h1 {
+  --font-weight: var(--h1-weight);
+  font-weight: var(--font-weight);
+  font-size: var(--h1-size);
+  line-height: var(--h1-line-height);
+  font-family: var(--h1-font);
+  font-style: var(--h1-style);
+  font-variant: var(--h1-variant);
+  letter-spacing: var(--h1-letter-spacing);
+  color: var(--h1-color);
+}
+.pm-modal-description .cm-line.cm-cf-h2 {
+  --font-weight: var(--h2-weight);
+  font-weight: var(--font-weight);
+  font-size: var(--h2-size);
+  line-height: var(--h2-line-height);
+  font-family: var(--h2-font);
+  font-style: var(--h2-style);
+  font-variant: var(--h2-variant);
+  letter-spacing: var(--h2-letter-spacing);
+  color: var(--h2-color);
+}
+.pm-modal-description .cm-line.cm-cf-h3 {
+  --font-weight: var(--h3-weight);
+  font-weight: var(--font-weight);
+  font-size: var(--h3-size);
+  line-height: var(--h3-line-height);
+  font-family: var(--h3-font);
+  font-style: var(--h3-style);
+  font-variant: var(--h3-variant);
+  letter-spacing: var(--h3-letter-spacing);
+  color: var(--h3-color);
+}
+.pm-modal-description .cm-line.cm-cf-h4 {
+  --font-weight: var(--h4-weight);
+  font-weight: var(--font-weight);
+  font-size: var(--h4-size);
+  line-height: var(--h4-line-height);
+  font-family: var(--h4-font);
+  font-style: var(--h4-style);
+  font-variant: var(--h4-variant);
+  letter-spacing: var(--h4-letter-spacing);
+  color: var(--h4-color);
+}
+.pm-modal-description .cm-line.cm-cf-h5 {
+  --font-weight: var(--h5-weight);
+  font-weight: var(--font-weight);
+  font-size: var(--h5-size);
+  line-height: var(--h5-line-height);
+  font-family: var(--h5-font);
+  font-style: var(--h5-style);
+  font-variant: var(--h5-variant);
+  letter-spacing: var(--h5-letter-spacing);
+  color: var(--h5-color);
+}
+.pm-modal-description .cm-line.cm-cf-h6 {
+  --font-weight: var(--h6-weight);
+  font-weight: var(--font-weight);
+  font-size: var(--h6-size);
+  line-height: var(--h6-line-height);
+  font-family: var(--h6-font);
+  font-style: var(--h6-style);
+  font-variant: var(--h6-variant);
+  letter-spacing: var(--h6-letter-spacing);
+  color: var(--h6-color);
+}
+
+/* Inline marks, the same expressions Obsidian's strong/em rules use. */
+.pm-modal-description .cm-cf-strong {
+  font-weight: calc(var(--font-weight) + var(--bold-modifier));
+  color: var(--bold-color);
+}
+.pm-modal-description .cm-cf-em {
+  font-style: italic;
+  color: var(--italic-color);
+}
+.pm-modal-desc-preview :not(pre) > code,
+.pm-modal-description .cm-cf-code {
+  font-family: var(--gs-font-mono);
+  background: color-mix(in srgb, var(--gs-teal) 12%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+/* Quotes */
+.pm-modal-desc-preview blockquote,
+.pm-modal-description .cm-line.cm-cf-quote {
+  border-inline-start: 2px solid var(--gs-hairline-strong);
+  padding-inline-start: 10px;
+  color: var(--gs-ink-subtle);
+}
+.pm-modal-desc-preview blockquote {
+  margin-inline: 0;
+}
+
+/* Fenced code. The editor shows the fence lines; the preview pads the block
+   by one of those lines above and below instead, and wraps as the editor
+   does. */
+.pm-modal-desc-preview pre,
+.pm-modal-description .cm-line.cm-cf-fenceline {
+  padding-inline: 6px;
+  font-family: var(--gs-font-mono);
+  font-size: 0.92em;
+  background: color-mix(in srgb, var(--gs-ink) 5%, transparent);
+}
+.pm-modal-desc-preview pre {
+  padding-block: calc(1em * var(--line-height-normal));
+  white-space: pre-wrap;
+}
+.pm-modal-desc-preview pre > code {
+  font: inherit;
+}
+
+/* Lists, preview side: text one --list-indent in per level, the bullet or
+   checkbox centred --pm-desc-mark left of the text on the first line. */
+.pm-modal-desc-preview :is(ul, ol) {
+  padding-inline-start: var(--list-indent);
+}
+.pm-modal-desc-preview li {
+  position: relative;
+  padding-block: var(--list-spacing);
+}
+.pm-modal-desc-preview ul > li {
+  list-style: none;
+}
+.pm-modal-desc-preview ol > li::marker {
+  color: var(--text-faint);
+}
+.pm-modal-desc-preview ul > li:not(.task-list-item)::before {
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--pm-desc-mark) - var(--list-bullet-size) / 2);
+  top: calc(var(--list-spacing) + (var(--pm-desc-line) - var(--list-bullet-size)) / 2);
+}
+.pm-modal-desc-section .pm-modal-desc-preview .task-list-item-checkbox {
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--pm-desc-mark) - var(--checkbox-size) / 2);
+  top: calc(var(--list-spacing) + (var(--pm-desc-line) - var(--checkbox-size)) / 2);
+  margin: 0;
+}
+/* The editor pads the parent's line before the nested item's; the preview
+   would put the parent's padding after the whole nested list. Moving it
+   keeps every nested line where the editor has it. */
+.pm-modal-desc-preview li > :is(ul, ol) {
+  margin-block: var(--list-spacing) calc(-1 * var(--list-spacing));
+}
+/* A loose list had a blank line between its items. */
+.pm-modal-desc-preview li:has(> p) + li {
+  margin-top: var(--pm-desc-line);
+}
+/* Struck through for x/X only, as Obsidian's own rule does. */
+.pm-modal-desc-section .pm-modal-desc-preview li:is([data-task='x'], [data-task='X']),
+.pm-modal-description .cm-line.cm-cf-task-done {
+  color: var(--gs-ink-subtle);
+  text-decoration: line-through;
+}
+
+/* Lists, editor side: the line hangs an indent box (the leading whitespace,
+   one --list-indent per level) and a marker box one --list-indent wide in
+   front of the text, and wrapped lines align with the text. The marker box
+   holds the bullet or checkbox widget, or the raw marker on the cursor line,
+   so revealing the marker moves nothing. */
+.pm-modal-description .cm-line.cm-cf-li {
+  padding-block: var(--list-spacing);
+  padding-inline-start: calc((var(--pm-depth) + 1) * var(--list-indent));
+  text-indent: calc((var(--pm-depth) + 1) * var(--list-indent) * -1);
+}
+.pm-modal-description .cm-cf-indent {
+  display: inline-block;
+  width: calc(var(--pm-depth) * var(--list-indent));
+  vertical-align: top;
+  text-indent: 0;
+}
+.pm-modal-description :is(.cm-cf-listmark, .cm-cf-bullet, .cm-cf-check) {
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: center;
+  width: var(--list-indent);
+  height: var(--pm-desc-line);
+  vertical-align: top;
+  text-indent: 0;
+  color: var(--text-faint);
+}
+.pm-modal-description .cm-cf-bullet::after {
+  margin-inline-end: calc(var(--pm-desc-mark) - var(--list-bullet-size) / 2);
+}
+.pm-modal-description .cm-cf-check > input {
+  margin: 0;
+  margin-inline-end: calc(var(--pm-desc-mark) - var(--checkbox-size) / 2);
+  cursor: pointer;
+}
+
+/* The one dot both modes draw, sized and shaped by Obsidian's bullet
+   variables. */
+.pm-modal-desc-preview ul > li:not(.task-list-item)::before,
+.pm-modal-description .cm-cf-bullet::after {
+  content: '';
+  width: var(--list-bullet-size);
+  height: var(--list-bullet-size);
+  border: var(--list-bullet-border);
+  border-radius: var(--list-bullet-radius);
+  transform: var(--list-bullet-transform);
+  background-color: var(--text-faint);
+}

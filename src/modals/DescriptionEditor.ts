@@ -1,6 +1,6 @@
 import { neutralizeExternalLinks, scrubRemoteEmbeds } from '../soc/safeRender'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import type { Range } from '@codemirror/state'
+import type { EditorState, Range } from '@codemirror/state'
 import {
   Decoration,
   EditorView,
@@ -17,7 +17,7 @@ import type { Project, Task } from '../types'
 import { IconButton } from '../ui/primitives/IconButton'
 import { toggleRenderedCheckbox } from './checkboxToggle'
 import { toggleInlineMarker } from './inlineFormat'
-import { classifyLine, computeInlineMarks, fenceMap } from './livePreviewMarks'
+import { blockGaps, classifyLine, computeInlineMarks, fenceMap, listDepths } from './livePreviewMarks'
 import { NoteLinkSuggest } from './NoteLinkSuggest'
 
 export interface DescriptionEditorContext {
@@ -43,6 +43,11 @@ export interface DescriptionEditorHandle {
 // the main selection touches the line/range — there the raw markdown reveals
 // (Obsidian Live Preview behavior). Links and embeds stay raw while editing;
 // the read-mode preview renders them fully.
+//
+// A list line hangs its marker in a box one --list-indent wide, the same
+// place the rendered list puts its bullet, checkbox or number, and the raw
+// marker revealed on the cursor line sits in that same box. So neither the
+// switch to the preview nor the reveal moves the item's text.
 
 const inlineDeco = {
   strong: Decoration.mark({ class: 'cm-cf-strong' }),
@@ -54,11 +59,17 @@ const headingLine = [1, 2, 3, 4, 5, 6].map((n) => Decoration.line({ class: `cm-c
 const quoteLine = Decoration.line({ class: 'cm-cf-quote' })
 const taskDoneLine = Decoration.line({ class: 'cm-cf-task-done' })
 const fenceLine = Decoration.line({ class: 'cm-cf-fenceline' })
-const listNumMark = Decoration.mark({ class: 'cm-cf-listmark' })
+const listMark = Decoration.mark({ class: 'cm-cf-listmark' })
+const indentMark = Decoration.mark({ class: 'cm-cf-indent' })
+// The depth rides on the line as a CSS variable; the stylesheet turns it into
+// the same indent the preview's nested lists get.
+const listLine = (depth: number) =>
+  Decoration.line({ class: 'cm-cf-li', attributes: { style: `--pm-depth: ${depth}` } })
 
 class BulletWidget extends WidgetType {
   toDOM(): HTMLElement {
-    return createSpan({ cls: 'cm-cf-bullet', text: '•' })
+    // The dot is drawn in CSS, identically to the preview's.
+    return createSpan({ cls: 'cm-cf-bullet' })
   }
 
   eq(): boolean {
@@ -68,29 +79,36 @@ class BulletWidget extends WidgetType {
 
 class CheckWidget extends WidgetType {
   constructor(
-    private readonly checked: boolean,
+    /** The character between the brackets. */
+    private readonly state: string,
     private readonly statePos: number
   ) {
     super()
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const input = createEl('input', { type: 'checkbox', cls: 'cm-cf-checkbox' })
-    input.checked = this.checked
+    const box = createSpan({ cls: 'cm-cf-check' })
+    // The preview's own checkbox class, so both get Obsidian's checkbox size.
+    const input = box.createEl('input', { type: 'checkbox', cls: 'task-list-item-checkbox' })
+    // Drawn the way Obsidian renders it: any state but a space shows ticked.
+    input.checked = this.state !== ' '
     // mousedown would move the caret onto the line and reveal the raw markers
     // mid-click; the click itself flips the state char in the source.
     input.addEventListener('mousedown', (e) => e.preventDefault())
     input.addEventListener('click', (e) => {
       e.preventDefault()
+      // Same toggle as the preview's (checkboxToggle): x/X clears, anything
+      // else becomes x.
+      const done = this.state === 'x' || this.state === 'X'
       view.dispatch({
-        changes: { from: this.statePos, to: this.statePos + 1, insert: this.checked ? ' ' : 'x' }
+        changes: { from: this.statePos, to: this.statePos + 1, insert: done ? ' ' : 'x' }
       })
     })
-    return input
+    return box
   }
 
   eq(other: CheckWidget): boolean {
-    return other.checked === this.checked && other.statePos === this.statePos
+    return other.state === this.state && other.statePos === this.statePos
   }
 
   ignoreEvent(): boolean {
@@ -98,14 +116,20 @@ class CheckWidget extends WidgetType {
   }
 }
 
-function buildLivePreviewDecorations(view: EditorView): DecorationSet {
+/** Exported for tests; the view plugin passes its state and visible ranges. */
+export function buildLivePreviewDecorations(
+  state: EditorState,
+  visibleRanges: readonly { from: number; to: number }[]
+): DecorationSet {
   const ranges: Range<Decoration>[] = []
-  const doc = view.state.doc
-  // ponytail: whole-doc fence scan on every rebuild — descriptions are small;
-  // cache the fence map against the doc if profiles ever say otherwise.
-  const fenced = fenceMap(doc.toString())
-  const sel = view.state.selection.main
-  for (const { from, to } of view.visibleRanges) {
+  const doc = state.doc
+  // ponytail: whole-doc fence and list scans on every rebuild — descriptions
+  // are small; cache both against the doc if profiles ever say otherwise.
+  const text = doc.toString()
+  const fenced = fenceMap(text)
+  const depths = listDepths(text, fenced)
+  const sel = state.selection.main
+  for (const { from, to } of visibleRanges) {
     let pos = from
     while (pos <= to) {
       const line = doc.lineAt(pos)
@@ -116,6 +140,10 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
       }
       const touched = sel.from <= line.to && sel.to >= line.from
       const lm = classifyLine(line.text)
+      if (lm && lm.kind !== 'heading' && lm.kind !== 'quote') {
+        ranges.push(listLine(depths[line.number - 1]).range(line.from))
+        if (lm.indent > 0) ranges.push(indentMark.range(line.from, line.from + lm.indent))
+      }
       if (lm) {
         switch (lm.kind) {
           case 'heading':
@@ -128,25 +156,29 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             break
           case 'task': {
             if (lm.checked) ranges.push(taskDoneLine.range(line.from))
-            if (!touched) {
-              const f = line.from + lm.indent
-              ranges.push(
-                Decoration.replace({
-                  widget: new CheckWidget(lm.checked, line.from + lm.stateOffset)
-                }).range(f, f + lm.markerLen)
-              )
-            }
+            const f = line.from + lm.indent
+            ranges.push(
+              touched
+                ? listMark.range(f, f + lm.markerLen)
+                : Decoration.replace({
+                    widget: new CheckWidget(line.text[lm.stateOffset], line.from + lm.stateOffset)
+                  }).range(f, f + lm.markerLen)
+            )
             break
           }
-          case 'bullet':
-            if (!touched) {
-              const f = line.from + lm.indent
-              ranges.push(Decoration.replace({ widget: new BulletWidget() }).range(f, f + 1))
-            }
-            break
-          case 'ordered': {
+          case 'bullet': {
+            // "- " together: the box stands in for the marker and its space.
             const f = line.from + lm.indent
-            ranges.push(listNumMark.range(f, f + lm.markerLen))
+            ranges.push(
+              touched ? listMark.range(f, f + 2) : Decoration.replace({ widget: new BulletWidget() }).range(f, f + 2)
+            )
+            break
+          }
+          case 'ordered': {
+            // Numbers stay visible, as in Obsidian; "1. " right-aligns in the
+            // box, where the preview's number sits.
+            const f = line.from + lm.indent
+            ranges.push(listMark.range(f, f + lm.markerLen + 1))
             break
           }
         }
@@ -173,12 +205,12 @@ const livePreviewPlugin = ViewPlugin.fromClass(
     decorations: DecorationSet
 
     constructor(view: EditorView) {
-      this.decorations = buildLivePreviewDecorations(view)
+      this.decorations = buildLivePreviewDecorations(view.state, view.visibleRanges)
     }
 
     update(update: ViewUpdate): void {
       if (update.docChanged || update.selectionSet || update.viewportChanged) {
-        this.decorations = buildLivePreviewDecorations(update.view)
+        this.decorations = buildLivePreviewDecorations(update.state, update.view.visibleRanges)
       }
     }
   },
@@ -199,9 +231,15 @@ export function renderDescriptionEditor(
   const { app, plugin, project, task } = ctx
 
   const descSection = container.createDiv('pm-modal-section pm-modal-desc-section')
-  descSection.createEl('h4', { text: 'Description', cls: 'pm-modal-section-title' })
+  // The format toolbar (editing) and the Edit button (reading) share the
+  // heading row, so switching modes never adds or removes a row above the
+  // text. The Edit button is also the keyboard way into an existing
+  // description: the preview itself only answers clicks.
+  const descHeader = descSection.createDiv('pm-modal-section-header')
+  descHeader.createEl('h4', { text: 'Description', cls: 'pm-modal-section-title' })
+  const descToolbar = descHeader.createDiv('pm-desc-toolbar')
+  const editBtn = new IconButton(descHeader).setIcon('pencil').setTooltip('Edit description')
 
-  const descToolbar = descSection.createDiv('pm-desc-toolbar')
   const descPreview = descSection.createDiv('pm-modal-desc-preview')
   const editorWrap = descSection.createDiv('pm-modal-description')
 
@@ -239,6 +277,7 @@ export function renderDescriptionEditor(
     editorWrap.classList.add('pm-hidden')
     descToolbar.classList.add('pm-hidden')
     descPreview.classList.remove('pm-hidden')
+    editBtn.el.classList.remove('pm-hidden')
   }
 
   const view = new EditorView({
@@ -391,6 +430,19 @@ export function renderDescriptionEditor(
     })
   }
 
+  // Rendering turns blank lines into margins; the editor shows each one as
+  // a line. So the stylesheet spaces the preview's top-level blocks by whole
+  // lines, one by default, and here each block gets the exact count the
+  // source has above it. A different block count (a construct blockGaps does
+  // not model) keeps the defaults rather than misplace every block after it.
+  const placeLikeSourceLines = () => {
+    const { gaps, trail } = blockGaps(task.description)
+    descPreview.setCssProps({ '--pm-trail': String(trail) })
+    const blocks = descPreview.querySelectorAll<HTMLElement>(':scope > *')
+    if (blocks.length !== gaps.length) return
+    blocks.forEach((el, i) => el.setCssProps({ '--pm-gap': String(gaps[i]) }))
+  }
+
   const renderPreview = async () => {
     descComp.unload()
     descComp = new Component()
@@ -398,10 +450,12 @@ export function renderDescriptionEditor(
     descPreview.empty()
     await MarkdownRenderer.render(app, scrubRemoteEmbeds(task.description), descPreview, sourcePath, descComp)
     attachCheckboxListeners()
+    placeLikeSourceLines()
   }
 
   const showEdit = (caret?: number) => {
     descPreview.classList.add('pm-hidden')
+    editBtn.el.classList.add('pm-hidden')
     descToolbar.classList.remove('pm-hidden')
     editorWrap.classList.remove('pm-hidden')
     // Preview-side edits (checkbox toggles) land on task.description only —
@@ -464,7 +518,12 @@ export function renderDescriptionEditor(
     return current ? sourceOffsetOf(rendered + caret.offset) : undefined
   }
 
-  neutralizeExternalLinks(descPreview)
+  editBtn.onClick(() => showEdit(task.description.length))
+
+  // With app and sourcePath the guard also stops evidence Obsidian cannot
+  // display itself (a dropped .html or .lnk) from reaching the system's
+  // default app; it copies the path instead (a124).
+  neutralizeExternalLinks(descPreview, app, sourcePath)
   descPreview.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
     if (target.instanceOf(HTMLInputElement) && target.type === 'checkbox') return
@@ -501,6 +560,7 @@ export function renderDescriptionEditor(
     void renderPreview()
   } else {
     descPreview.classList.add('pm-hidden')
+    editBtn.el.classList.add('pm-hidden')
   }
 
   return {
