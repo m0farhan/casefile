@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { EXECUTABLE_NAME, SCRIPT_CARRIER_NAME, SHORTCUT_NAME, entryNote } from './ooxml'
 import {
   apexDomain,
   attachmentFacts,
@@ -160,6 +161,33 @@ describe('attachmentFacts', () => {
 
   it('says only what the part’s own headers say about being inline', () => {
     expect(attachmentFacts(att('logo.png', true))).toContain('marked inline or given a Content-ID by its own headers')
+  })
+
+  it('says the same about a name at the top level as the ZIP reader says about an entry', () => {
+    // .vbe and .cpl were flagged only inside a ZIP, .pif and .apk only outside
+    // one, and .url, .chm and .xll nowhere.
+    const rows: [RegExp, string, string][] = [
+      [EXECUTABLE_NAME, 'executable or script file type', 'named like an executable or script'],
+      [SCRIPT_CARRIER_NAME, 'file type that can carry script', 'named as a file type that can carry script'],
+      [
+        SHORTCUT_NAME,
+        'shortcut-style file type — it names another location or program to open',
+        'named as a shortcut-style file that names another location or program to open'
+      ]
+    ]
+    for (const [list, fact, note] of rows) {
+      const extensions = /\(([^)]+)\)/.exec(list.source)?.[1].split('|') ?? []
+      expect(extensions.length).toBeGreaterThan(1)
+      // Each row names its file, so a failure says which extension drifted.
+      const names = extensions.map((ext) => `Invoice.${ext.toUpperCase()}`)
+      expect(names.map((name) => [name, attachmentFacts(att(name)).includes(fact), entryNote(name)])).toEqual(
+        names.map((name) => [name, true, note])
+      )
+    }
+    // A shortcut, a help file and a console file are not programs.
+    for (const name of ['a.url', 'b.chm', 'c.msc', 'd.iqy']) {
+      expect(attachmentFacts(att(name))).not.toContain('executable or script file type')
+    }
   })
 
   it('never calls anything malicious', () => {
@@ -458,6 +486,46 @@ describe('an anchor label is dropped only when nothing else found it', () => {
     const html = '<a href="http://evil.test/go">https://paypal.test/signin</a>'
     const targets = extractLinks('', html, []).links.map((l) => l.target)
     expect(targets).toEqual(['http://evil.test/go'])
+  })
+
+  it('drops a label that ends a sentence, as the visible-text scan read it', () => {
+    const html = '<p>Sign in: <a href="http://evil.test/go">https://paypal.test/login.</a></p>'
+    expect(extractLinks('', html, []).links.map((l) => l.target)).toEqual(['http://evil.test/go'])
+  })
+})
+
+describe('a URL in prose ends where the sentence says it does', () => {
+  it('leaves off the quotes and punctuation around it, ASCII or typographic', () => {
+    // Outlook types curly quotes, and the closing one went into the link.
+    const text =
+      'Sign in at “https://login.evil-portal.test/verify” today, or «https://a.evil.test/x». Or https://x.test/v.'
+    const html = '<p>Or ‘https://b.evil.test/y’.</p>'
+    expect(
+      extractLinks(text, html, [])
+        .links.map((l) => l.raw)
+        .sort()
+    ).toEqual([
+      'https://a.evil.test/x',
+      'https://b.evil.test/y',
+      'https://login.evil-portal.test/verify',
+      'https://x.test/v'
+    ])
+  })
+
+  it('keeps an attribute value exactly as written, punctuation and all', () => {
+    const html =
+      '<a href="javascript:void(0)">x</a><a href="https://en.wikipedia.test/wiki/Foo_(bar)">y</a>' +
+      '<a href="https://q.test/a.">z</a><img src="https://z.test/c”">'
+    expect(
+      extractLinks('', html, [])
+        .links.map((l) => l.raw)
+        .sort()
+    ).toEqual([
+      'https://en.wikipedia.test/wiki/Foo_(bar)',
+      'https://q.test/a.',
+      'https://z.test/c”',
+      'javascript:void(0)'
+    ])
   })
 })
 

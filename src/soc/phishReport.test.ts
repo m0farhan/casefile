@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deflateRaw, zip } from '../../test/zip'
 import { hashBytes } from './eml'
-import { analysePhishing, caseIocs, formatPhishReport, structureLines } from './phish'
+import { REBUILT_FACT, analysePhishing, caseIocs, formatPhishReport, structureLines } from './phish'
+import { formatIocLine } from './ioc'
 
 // A switch for the one test that needs the PDF reader to break. Everything
 // else in this file gets the real reader.
@@ -481,15 +482,22 @@ describe('the case carries what the analysis found', () => {
     const report = await analysePhishing(MAIL, ['corp.test'], ['paypal'])
     const iocs = caseIocs(report, MAIL)
     expect(iocs).toContainEqual({ type: 'ip', value: '203.0.113.77' })
-    expect(iocs).toContainEqual({ type: 'url', value: 'https://login.paypa1.test/verify' })
+    // In the plain text, and the target of the Safe Links anchor: one row,
+    // and the note from where it was also found.
+    expect(iocs).toContainEqual({
+      type: 'url',
+      value: 'https://login.paypa1.test/verify',
+      note: 'unwrapped from Microsoft Safe Links'
+    })
     expect(iocs).toContainEqual({
       type: 'hash',
       value: report.attachments[0].sha256,
       note: 'Invoice_2026.docm (hashed here)'
     })
-    // Each value once, whatever case it was written in.
-    const values = iocs.map((i) => i.value.toLowerCase())
-    expect(new Set(values).size).toBe(values.length)
+    // Each value once: a host, an address or a hash whatever case it was
+    // written in, a URL as written.
+    const keys = iocs.map((i) => `${i.type}:${i.type === 'url' ? i.value : i.value.toLowerCase()}`)
+    expect(new Set(keys).size).toBe(keys.length)
   })
 })
 
@@ -903,7 +911,7 @@ describe('text the plain scan could not see', () => {
     expect(a.inside).toContain('url: hxxps://tail-side[.]example[.]com/t')
     expect(a.inside.some((l) => /middle|edge-cut/.test(l))).toBe(false)
     const said = a.facts.find((f) => f.startsWith('the text scan for indicators')) ?? ''
-    const [head, tail, between] = [...said.matchAll(/[\d,]+/g)].map((m) => Number(m[0].replace(/,/g, '')))
+    const [head, tail, between] = [...said.matchAll(/\d[\d,]*/g)].map((m) => Number(m[0].replace(/,/g, '')))
     // No structure reader read this file, so the sentence names none.
     expect(said).toMatch(/; it did not read the [\d,]+ bytes between$/)
     expect(head).toBeLessThanOrEqual(1_000_000)
@@ -924,7 +932,7 @@ describe('text the plain scan could not see', () => {
     expect(report.indicators).toContain('url: hxxps://mid-lure[.]test/x')
     const said = a.facts.find((f) => f.startsWith('the text scan for indicators')) ?? ''
     expect(said).toMatch(
-      /^the text scan for indicators and script names read the first [\d,]+ and the last [\d,]+ bytes; it did not read the [\d,]+ bytes between; the PDF structure reader read this file separately, and its lines are listed separately$/
+      /^the text scan for indicators, script names and RTF markers read the first [\d,]+ and the last [\d,]+ bytes; it did not read the [\d,]+ bytes between; the PDF structure reader read this file separately, and its lines are listed separately$/
     )
     expect(a.facts.join(' ')).not.toContain('not scanned for indicators')
   })
@@ -1095,6 +1103,23 @@ describe('a legacy Office document', () => {
     expect(md).toContain('  - the compound-file directory lists storage `Macros`: named as VBA macro storage')
     expect(md).not.toContain('embedded picture')
   })
+
+  it('names an encrypted Office file for what its bytes and directory say', async () => {
+    // A password-protected .xlsx is a compound file, not a legacy document,
+    // and nothing said its contents were encrypted.
+    const bytes = compound([
+      ['Root Entry', 5],
+      ['\u0006DataSpaces', 1],
+      ['EncryptionInfo', 2],
+      ['EncryptedPackage', 2]
+    ])
+    const mail = mailWith(attached('Remittance.xlsx', bytes)).replace('see attached', 'The password is 1234')
+    const md = formatPhishReport(await analysePhishing(mail, [], []))
+    expect(md).toContain('named .xlsx but the bytes begin as OLE compound file')
+    expect(md).toContain(
+      'lists stream `EncryptedPackage`: named as an encrypted Office package, whose contents cannot be read here'
+    )
+  })
 })
 
 describe('end to end, on files shaped like the real thing', () => {
@@ -1214,6 +1239,121 @@ describe('a forwarded message’s own headers', () => {
       note: 'in the headers of original.eml'
     })
   })
+
+  it('keeps its text apart from the reporter’s, under its own name', async () => {
+    // The phisher's sentence was printed as the reporter's own body.
+    const report = await analysePhishing(FORWARD, [], [])
+    expect(report.text).toBe('Reporting this.')
+    expect(report.forwarded.map((f) => f.origin)).toEqual(['original.eml'])
+    expect(report.forwarded[0].text).toContain('Scan the QR code')
+    const md = formatPhishReport(report)
+    const [outer, inner] = md.split('Text of the attached message `original.eml`:')
+    expect(outer).toContain('Reporting this.')
+    expect(outer).not.toContain('Scan the QR code')
+    expect(inner).toContain('Scan the QR code')
+  })
+
+  it('says its hash is of bytes rebuilt from text, where the case keeps it', async () => {
+    // A message/rfc822 part is never base64 or quoted-printable, so its bytes
+    // are always the text as read.
+    const report = await analysePhishing(FORWARD, [], [])
+    const [eml] = report.attachments
+    expect(eml.exact).toBe(false)
+    expect(eml.facts).toContain(REBUILT_FACT)
+    expect(caseIocs(report, FORWARD)).toContainEqual({
+      type: 'hash',
+      value: eml.sha256,
+      note: 'original.eml (hashed here from its text as read; may not match the file as sent)'
+    })
+  })
+
+  const NESTED = (disposition: string, outerHtml = ''): string =>
+    [
+      'From: user@corp.test',
+      'Subject: FW: payment',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="OUT"',
+      '',
+      '--OUT',
+      `Content-Type: ${outerHtml ? 'text/html' : 'text/plain'}`,
+      '',
+      outerHtml || 'Reporting this.',
+      '--OUT',
+      'Content-Type: message/rfc822',
+      disposition,
+      '',
+      'Received: from mx.evil.example (mx.evil.example [203.0.113.9])',
+      '\tby mx.corp.test; Thu, 24 Sep 2026 08:02:11 +0000',
+      'From: attacker@evil.example',
+      'Subject: Invoice',
+      'Content-Type: multipart/mixed; boundary="IN"',
+      '',
+      '--IN',
+      'Content-Type: text/html',
+      '',
+      '<p>Pay at https://pay.evil.example/login or reply to billing@pay-desk.example</p>',
+      '--IN',
+      'Content-Type: application/octet-stream; name="payload.exe"',
+      'Content-Disposition: attachment; filename="payload.exe"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      btoa('MZ payload'),
+      '--IN--',
+      '',
+      '--OUT--',
+      ''
+    ].join('\n')
+
+  it('names the message each link, value and payload came out of', async () => {
+    const mail = NESTED('Content-Disposition: attachment; filename="fwd.eml"')
+    const report = await analysePhishing(mail, [], [])
+    const link = report.links.find((l) => l.target === 'https://pay.evil.example/login')
+    expect(link?.origin).toBe('fwd.eml')
+    const payload = report.attachments.find((a) => a.filename === 'payload.exe')
+    expect(payload?.origin).toBe('fwd.eml')
+    const iocs = caseIocs(report, mail)
+    expect(iocs).toContainEqual({
+      type: 'url',
+      value: 'https://pay.evil.example/login',
+      note: 'in the body of fwd.eml'
+    })
+    expect(iocs).toContainEqual({ type: 'email', value: 'billing@pay-desk.example', note: 'in the body of fwd.eml' })
+    expect(iocs).toContainEqual({
+      type: 'hash',
+      value: payload?.sha256,
+      note: 'payload.exe inside fwd.eml (hashed here)'
+    })
+    expect(iocs).toContainEqual({ type: 'ip', value: '203.0.113.9', note: 'in the headers of fwd.eml' })
+    const md = formatPhishReport(report)
+    expect(md).toContain('- `hxxps://pay[.]evil[.]example/login`\n  - in the body of `fwd.eml`')
+    expect(md).toContain('- `payload.exe` inside `fwd.eml` — `application/octet-stream`, 10 bytes')
+  })
+
+  it('reads an attached message that has no name, and gives it a row', async () => {
+    const mail = NESTED('Content-Disposition: inline')
+    const report = await analysePhishing(mail, [], [])
+    expect(report.attachments.map((a) => a.contentType)).toContain('message/rfc822')
+    expect(report.indicators).toContain('ip: 203[.]0[.]113[.]9')
+    expect(report.indicators).toContain('email: attacker[at]evil[.]example')
+    const iocs = caseIocs(report, mail)
+    expect(iocs).toContainEqual({ type: 'ip', value: '203.0.113.9', note: 'in the headers of an attached message' })
+    const payload = report.attachments.find((a) => a.filename === 'payload.exe')
+    expect(iocs).toContainEqual({
+      type: 'hash',
+      value: payload?.sha256,
+      note: 'payload.exe inside an attached message (hashed here)'
+    })
+  })
+
+  it('is not hidden by a comment the outer HTML leaves open', async () => {
+    const report = await analysePhishing(
+      NESTED('Content-Disposition: attachment; filename="fwd.eml"', '<p>See attached.</p><!--'),
+      [],
+      []
+    )
+    expect(report.htmlText).toBe('See attached.')
+    expect(report.forwarded[0].htmlText).toContain('Pay at https://pay.evil.example/login')
+  })
 })
 
 describe('the Links section says what it read', () => {
@@ -1281,5 +1421,276 @@ describe('the report keeps markup and images inside code', () => {
     expect(md).toContain('beacon.test')
     expect(outsideCode).not.toMatch(/<[a-z!/?]/i)
     expect(outsideCode).not.toMatch(/!\[(?!\[)/)
+  })
+})
+
+describe('Indicators and the case are one list', () => {
+  const htmlOnly = (body: string): string =>
+    `From: a@sender.test\nTo: b@corp.test\nSubject: hi\nContent-Type: text/html\n\n${body}\n`
+
+  it('reads the words of an HTML-only mail for indicators, as it does a plain-text one', async () => {
+    // The reply-to address a lure asks for was in what the victim read and in no indicator.
+    const mail = htmlOnly(
+      '<p>Hi, send the receipt to <b>billing@acme-payments.xyz</b>.</p><p>Or pay at portal acme-payments.xyz, server 203.0.113.9</p>'
+    )
+    const report = await analysePhishing(mail, [], [])
+    for (const line of [
+      'email: billing[at]acme-payments[.]xyz',
+      'domain: acme-payments[.]xyz',
+      'ip: 203[.]0[.]113[.]9'
+    ]) {
+      expect(report.indicators).toContain(line)
+    }
+    const values = caseIocs(report, mail).map((i) => i.value)
+    expect(values).toEqual(expect.arrayContaining(['billing@acme-payments.xyz', 'acme-payments.xyz', '203.0.113.9']))
+  })
+
+  it('never lists the host of an anchor’s decoy text as a domain', async () => {
+    const mail = htmlOnly('<a href="https://evil.test/x">https://www.paypal.com/signin</a>')
+    const report = await analysePhishing(mail, [], [])
+    expect(report.indicators.join('\n')).not.toContain('paypal')
+    expect(caseIocs(report, mail).map((i) => i.value)).not.toContain('www.paypal.com')
+  })
+
+  it('keeps two links whose paths differ only in case, in both lists', async () => {
+    // bit.ly paths are case-sensitive; the case compared them lower-cased and
+    // dropped the PDF's link the Indicators tab listed.
+    const statement = ascii(pdf('<< /Type /Catalog >>', '<< /A << /S /URI /URI (https://bit.ly/3xKq) >> >>'))
+    const mail = mailWith(attached('statement.pdf', statement, 'application/pdf')).replace(
+      'see attached',
+      'Pay here https://bit.ly/3XkQ today'
+    )
+    const report = await analysePhishing(mail, [], [])
+    const iocs = caseIocs(report, mail)
+    expect(iocs).toContainEqual({ type: 'url', value: 'https://bit.ly/3XkQ' })
+    expect(iocs).toContainEqual({ type: 'url', value: 'https://bit.ly/3xKq', note: 'inside statement.pdf' })
+    const lines = iocs.map((i) => formatIocLine({ type: i.type, value: i.value }, []))
+    expect(new Set(lines)).toEqual(new Set(report.indicators))
+  })
+
+  it('keeps one row for a hash written in upper case in the body, noted where it was hashed', async () => {
+    const bytes = ascii('MZ payload')
+    const digest = await hashBytes(bytes)
+    const mail = mailWith(attached('a.bin', bytes)).replace('see attached', `hash ${digest.toUpperCase()}`)
+    const report = await analysePhishing(mail, [], [])
+    const hashes = caseIocs(report, mail).filter((i) => i.type === 'hash')
+    expect(hashes).toHaveLength(1)
+    expect(hashes[0].note).toBe('a.bin (hashed here)')
+    expect(report.indicators.filter((l) => l.startsWith('hash: '))).toHaveLength(1)
+  })
+
+  it('stays quick on a long run of hyphens in the HTML text', async () => {
+    const started = Date.now()
+    const report = await analysePhishing(htmlOnly(`<p>${'a-'.repeat(54_000)}</p>`), [], [])
+    caseIocs(report, '')
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
+})
+
+describe('what the parts’ own headers and bytes say', () => {
+  it('files a picture sent as an attachment as one, Content-ID or not', async () => {
+    // Gmail's shape: an attachment disposition and a Content-ID. It was filed as
+    // an inline image, and the report said "Attachments: None."
+    const mail = mailWith({
+      headers: [
+        'Content-Type: image/png; name="qr.png"',
+        'Content-Disposition: attachment; filename="qr.png"',
+        'Content-ID: <f_m1abc>',
+        'X-Attachment-Id: f_m1abc'
+      ],
+      bytes: new Uint8Array([...PNG, ...ascii(' https://qr-lure.example.test/login ')])
+    })
+    const report = await analysePhishing(mail, [], [])
+    expect(report.attachments.map((a) => a.filename)).toEqual(['qr.png'])
+    expect(report.inlineImages).toHaveLength(0)
+    const md = formatPhishReport(report)
+    expect(md).not.toContain('### Attachments\n\nNone.')
+    expect(md).toContain('  - found inside the file: `url: hxxps://qr-lure[.]example[.]test/login`')
+    expect(report.attachments[0].facts).toContain('marked inline or given a Content-ID by its own headers')
+  })
+
+  it('checks the sender’s domain as written, not as its encoded words decode', async () => {
+    // Decoded first, a quote in an encoded word turned a comment into the
+    // address, and the look-alike domain the mail came from was never checked.
+    const mail =
+      'From: =?utf-8?q?PayPal_=22?= <attacker@paypa1.com> (=?utf-8?q?=22?=<service@paypal.com>)\n' +
+      'Return-Path: <service@paypal.com>\nContent-Type: text/plain\n\nhi\n'
+    const report = await analysePhishing(mail, [], ['paypal'])
+    expect(report.senderFacts).toContain('reads as "paypal" once look-alike characters are folded')
+  })
+
+  it('reads the headers of a paste that begins with blank lines', async () => {
+    const mail =
+      '\n\nReceived: from mx.evil.example (mx.evil.example [203.0.113.5])\n\tby mx.corp.test; Thu, 24 Sep 2026 08:02:11 +0000\n' +
+      'From: phisher@evil.example\nSubject: hi\nContent-Type: text/plain\n\nhello\n'
+    const report = await analysePhishing(mail, [], [])
+    const values = caseIocs(report, mail).map((i) => i.value)
+    expect(values).toContain('203.0.113.5')
+    expect(values).toContain('phisher@evil.example')
+    // A paste of a body alone, opening on a blank line, is still a body.
+    const body = await analysePhishing('\nClick http://evil.test/a now\n\nThanks', [], [])
+    expect(body.links.map((l) => l.target)).toEqual(['http://evil.test/a'])
+    // Millions of them are skipped by a search, not a repeated-group regex that overflows the stack.
+    const padded = await analysePhishing(`${'\n'.repeat(5_000_000)}From: phisher@evil.example\n\nhi`, [], [])
+    expect(padded.indicators).toContain('email: phisher[at]evil[.]example')
+  })
+
+  it('says a quoted-printable file with hard line breaks was rebuilt from its text', async () => {
+    // A hard break stands for CRLF, which the reader has already turned into
+    // LF: the hash was of no file anyone sent, and nothing said so.
+    const mail = [
+      'From: a@sender.test',
+      'Content-Type: multipart/mixed; boundary="B"',
+      '',
+      '--B',
+      'Content-Type: text/html; name="pay.html"',
+      'Content-Disposition: attachment; filename="pay.html"',
+      'Content-Transfer-Encoding: quoted-printable',
+      '',
+      '<html>',
+      '<script>location=3D"https://evil.test"</script>',
+      '</html>',
+      '--B--',
+      ''
+    ].join('\n')
+    const report = await analysePhishing(mail, [], [])
+    const [a] = report.attachments
+    expect(a.exact).toBe(false)
+    expect(a.facts).toContain(REBUILT_FACT)
+    expect(caseIocs(report, mail).find((i) => i.value === a.sha256)?.note).toBe(
+      'pay.html (hashed here from its text as read; may not match the file as sent)'
+    )
+    // A base64 file is the file as sent, and says nothing of the kind.
+    const [plain] = (await analysePhishing(mailWith(attached('a.bin', ascii('MZ'))), [], [])).attachments
+    expect(plain.exact).toBe(true)
+    expect(plain.facts).not.toContain(REBUILT_FACT)
+  })
+
+  it('counts an RTF’s objects past the part the preview shows', async () => {
+    // Past the first 20,000 characters an Equation Editor object was stated nowhere.
+    const rtf = ascii(
+      `{\\rtf1\\ansi ${'padding '.repeat(3000)}{\\object\\objemb\\objupdate{\\*\\objclass Equation.3}{\\*\\objdata 0105000002000000}}}`
+    )
+    const report = await analysePhishing(mailWith(attached('Remittance.rtf', rtf, 'application/rtf')), [], [])
+    const census = report.attachments[0].facts.find((f) => f.startsWith('RTF object and DDEAUTO markers found:')) ?? ''
+    expect(census).toContain('\\objdata ×1')
+    expect(census).toContain('the first \\objclass reads Equation.3')
+    expect(formatPhishReport(report)).toContain('RTF object and DDEAUTO markers found: \\object ×1')
+  })
+})
+
+describe('end to end, on the fixes the readers made', () => {
+  it('catches a program named as a picture inside an archive by its bytes', async () => {
+    const pe = new Uint8Array(200)
+    pe.set([0x4d, 0x5a, 0x90, 0x00])
+    const other = pe.slice()
+    other[199] = 1
+    const bytes = zip([
+      { name: 'Invoice.jpg', data: pe },
+      { name: 'photo.jfif', data: other }
+    ])
+    const mail = mailWith(attached('files.zip', bytes, 'application/zip'))
+    const report = await analysePhishing(mail, [], [])
+    const digest = await hashBytes(pe)
+    const lines = structureLines(report.attachments[0])
+    expect(lines).toContain(
+      `  - inner file \`Invoice.jpg\`: named .jpg but the bytes begin as Windows executable (MZ); SHA-256 ${digest} (computed here)`
+    )
+    expect(lines).toContain(
+      `  - inner file \`photo.jfif\`: named .jfif but the bytes begin as Windows executable (MZ); SHA-256 ${await hashBytes(other)} (computed here)`
+    )
+    expect(lines.join('\n')).not.toContain('embedded picture')
+    expect(report.indicators).toContain(`hash: ${digest}`)
+    expect(caseIocs(report, mail)).toContainEqual({
+      type: 'hash',
+      value: digest,
+      note: 'Invoice.jpg inside files.zip (hashed here)'
+    })
+  })
+
+  it('reads a filename folded into two encoded words as the one name a client shows', async () => {
+    const mail = mailWith({
+      headers: [
+        'Content-Type: application/octet-stream',
+        'Content-Disposition: attachment; filename="=?UTF-8?B?aW52b2ljZS5w?= =?UTF-8?B?ZGYuZXhl?="'
+      ],
+      bytes: ascii('MZ')
+    })
+    const [a] = (await analysePhishing(mail, [], [])).attachments
+    expect(a.filename).toBe('invoice.pdf.exe')
+    expect(a.facts).toContain(
+      'double extension — the name ends .pdf.exe; with the last extension hidden it reads as .pdf'
+    )
+  })
+
+  it('reads a URL in prose up to the sentence around it, in the links, the indicators and the case', async () => {
+    const mail =
+      'From: a@sender.test\nContent-Type: text/plain\n\nPlease sign in at “https://login.evil-portal.test/verify” today. Or https://x.test/verify.\n'
+    const report = await analysePhishing(mail, [], [])
+    expect(report.links.map((l) => l.target).sort()).toEqual([
+      'https://login.evil-portal.test/verify',
+      'https://x.test/verify'
+    ])
+    expect(report.indicators).toContain('url: hxxps://login[.]evil-portal[.]test/verify')
+    const urls = caseIocs(report, mail)
+      .filter((i) => i.type === 'url')
+      .map((i) => i.value)
+    expect(urls.sort()).toEqual(['https://login.evil-portal.test/verify', 'https://x.test/verify'])
+    // Bytes that do not decode end a URL inside a file too.
+    const bytes = new Uint8Array([...ascii('xx http://evil.example.com/stage'), 0xff, 0xfe, ...ascii('AB')])
+    const [a] = (await analysePhishing(mailWith(attached('x.bin', bytes)), [], [])).attachments
+    expect(a.inside).toContain('url: hxxp://evil[.]example[.]com/stage')
+  })
+
+  it('shows every format character a sender wrote as its code, outside the message body', async () => {
+    const rlo = '‮'
+    const docx = zip([
+      { name: '[Content_Types].xml', data: ascii('<Types/>') },
+      { name: `word/_rels/${rlo}slmx.document.xml.rels`, data: ascii('xx'), flags: 1 }
+    ])
+    const mail = [
+      `From: "Pay${rlo}lap" <a@evil.test>`,
+      'Subject: files',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="B"',
+      '',
+      '--B',
+      'Content-Type: text/html',
+      '',
+      '<a href="https://micro­soft-login.test/verify">sign in</a>',
+      '--B',
+      `Content-Type: application/${rlo}exe.fdp; name="scan.pdf"`,
+      'Content-Disposition: attachment; filename="scan.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      base64(ascii('%PDF-1.7\n')),
+      '--B',
+      `Content-Type: image/${rlo}gnp; name="report.docx"`,
+      'Content-Disposition: attachment; filename="report.docx"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      base64(docx),
+      '--B',
+      'Content-Type: application/octet-stream',
+      'Content-Disposition: attachment; filename="=?utf-8?Q?Invoice=E2=80=AEfdp.exe?="',
+      'Content-Transfer-Encoding: base64',
+      '',
+      '!!!!',
+      '--B--',
+      ''
+    ].join('\n')
+    const md = formatPhishReport(await analysePhishing(mail, [], []))
+    const outsideFences = md.replace(/^(`{3,})\n[\s\S]*?\n\1$/gm, '')
+    expect(outsideFences.split('\n').filter((l) => /\p{Cf}/u.test(l))).toEqual([])
+    for (const shown of [
+      'Pay<U+202E>lap',
+      'application/<U+202E>exe.fdp',
+      'image/<U+202E>gnp',
+      'word/_rels/<U+202E>slmx.document.xml.rels',
+      'Invoice<U+202E>fdp.exe',
+      'micro<U+00AD>soft-login'
+    ]) {
+      expect(outsideFences).toContain(shown)
+    }
   })
 })
