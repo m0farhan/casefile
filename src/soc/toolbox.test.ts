@@ -53,10 +53,20 @@ describe('decodePercentEscapes', () => {
     expect(decodePercentEscapes('a+b%20c')).toBe('a+b c')
   })
 
-  it('returns the input untouched when any escape in it is malformed', () => {
-    // All or nothing: decodeURIComponent throws on the whole string, so a
-    // half-decoded value is never handed back as if it were the answer.
-    expect(decodePercentEscapes('100%25 sure %ZZ')).toBe('100%25 sure %ZZ')
+  it('decodes every valid run even when another escape is malformed', () => {
+    // One stray % or a %TEMP% used to stop the whole selection from decoding.
+    expect(decodePercentEscapes('100%25 sure %ZZ')).toBe('100% sure %ZZ')
+    expect(decodePercentEscapes('%TEMP% x%2Fy')).toBe('%TEMP% x/y')
+    expect(decodePercentEscapes('https://x.test/?p=100%&next=%68%74%74%70%73%3A%2F%2Fevil.test')).toBe(
+      'https://x.test/?p=100%&next=https://evil.test'
+    )
+  })
+
+  it('keeps bytes that are not valid UTF-8 as written, never a guessed character', () => {
+    expect(decodePercentEscapes('..%c0%af..')).toBe('..%c0%af..')
+    // The ASCII escapes around them are valid on their own.
+    expect(decodePercentEscapes('%2F%c0%af%2E')).toBe('/%c0%af.')
+    expect(decodePercentEscapes('%e2%82%ac %c3')).toBe('€ %c3')
   })
 })
 
@@ -99,6 +109,34 @@ describe('readTimestamp', () => {
   it('is empty for something that is not a time', () => {
     expect(readTimestamp('hello')).toEqual([])
   })
+
+  it('offers no reading for text that does not state its own year, month and day', () => {
+    // The legacy parser read these as 2001-09-26, 2019-01-01, 2001-06-30,
+    // 0120-01-01 and 12 December: dates nobody wrote.
+    for (const s of ['Sep 26 14:03:11', 'Server 2019', 'Build 7.1', 'Chrome 120', 'Windows 10', 'Decode 2019 12']) {
+      expect(readTimestamp(s)).toEqual([])
+    }
+    // Day first or month first is not in the text.
+    expect(readTimestamp('09/10/2026')).toEqual([])
+  })
+
+  it('labels the zone the way the parser actually read it', () => {
+    expect(readTimestamp('2026-09-26')).toEqual([
+      { assumption: 'date only (read as UTC midnight)', iso: '2026-09-26T00:00:00.000Z' }
+    ])
+    expect(readTimestamp('Thu, 10 Sep 2026 14:03:11 GMT')).toEqual([
+      { assumption: 'as written (zone stated)', iso: '2026-09-10T14:03:11.000Z' }
+    ])
+    expect(readTimestamp('Mon, 21 Sep 2026 12:12:00 -0700 (PDT)')).toEqual([
+      { assumption: 'as written (zone stated)', iso: '2026-09-21T19:12:00.000Z' }
+    ])
+    expect(readTimestamp('2026-09-10 14:03:11 UTC')).toEqual([
+      { assumption: 'as written (zone stated)', iso: '2026-09-10T14:03:11.000Z' }
+    ])
+    expect(readTimestamp('2026-09-10 14:03:11+0100')[0].iso).toBe('2026-09-10T13:03:11.000Z')
+    expect(readTimestamp('2026-09-10T14:03:11.123456Z')[0].iso).toBe('2026-09-10T14:03:11.123Z')
+    expect(readTimestamp('2026-09-10 14:03:11')[0].assumption).toContain('no zone')
+  })
 })
 
 describe('defang / refang selection', () => {
@@ -109,6 +147,31 @@ describe('defang / refang selection', () => {
 
   it('round-trips through refang', () => {
     expect(refangSelection(defangSelection('evil.test'))).toBe('evil.test')
+  })
+
+  it('refangs a value behind a bullet, a label or a bracket, not only at the line start', () => {
+    // These came back half refanged: dots done, scheme still hxxp.
+    expect(refangSelection('- hxxp://a[.]example/x')).toBe('- http://a.example/x')
+    expect(refangSelection('url: hxxps://a[.]example/x')).toBe('url: https://a.example/x')
+    expect(refangSelection('see (hxxp://a[.]example/x) now')).toBe('see (http://a.example/x) now')
+    expect(refangSelection('* [\\\\]fileserver\\share')).toBe('* \\\\fileserver\\share')
+  })
+
+  it('defangs a value behind a list marker or a label, and UNC and scheme values', () => {
+    expect(defangSelection('- http://a.example/x\n- http://b.example/y')).toBe(
+      '- hxxp://a[.]example/x\n- hxxp://b[.]example/y'
+    )
+    expect(defangSelection('1. evil.example')).toBe('1. evil[.]example')
+    expect(defangSelection('url: http://a.example/x')).toBe('url: hxxp://a[.]example/x')
+    expect(defangSelection('\\\\fileserver\\share')).toBe('[\\\\]fileserver\\share')
+    expect(defangSelection('javascript:alert(1)')).toBe('javascript[:]alert(1)')
+    expect(defangSelection('ms-msdt:/id PCWDiagnostic')).toBe('ms-msdt[:]/id PCWDiagnostic')
+  })
+
+  it('still leaves prose, labels and drive paths alone', () => {
+    for (const s of ['Note: see below', 'Time: 12:00', 'C:\\Windows\\x.exe', 'Reviewed app.js today']) {
+      expect(defangSelection(s)).toBe(s)
+    }
   })
 })
 
@@ -137,6 +200,19 @@ describe('runToolbox', () => {
     expect(names).toContain('Read as a timestamp')
     expect(names).not.toContain('Decode base64')
     expect(names).not.toContain('Decode hex')
+  })
+
+  it('names the kind of indicator only when one value was defanged', async () => {
+    const title = async (s: string) => (await runToolbox(s)).find((t) => t.name === 'Defang indicators')?.result.title
+    expect(await title('http://a.example/x')).toBe('defanged (url)')
+    // A list is several kinds, and a UNC path is not a domain.
+    expect(await title('- http://a.example/x\n- bob@evil.example')).toBe('defanged')
+    expect(await title('\\\\evil.example\\share')).toBe('defanged')
+  })
+
+  it('says when a percent decode left escapes as written', async () => {
+    const hit = (await runToolbox('..%c0%af..%20')).find((t) => t.name === 'Decode percent-escapes')
+    expect(hit?.result).toEqual({ title: 'percent-escapes partly decoded (some left as written)', body: '..%c0%af.. ' })
   })
 
   it('always offers a hash, because any selection has one', async () => {

@@ -139,6 +139,18 @@ describe('parseReputation - VirusTotal', () => {
     expect(parseReputation('virustotal', 200, 'not json').verdict).toBe('unknown')
     expect(parseReputation('virustotal', 200, '{}').verdict).toBe('unknown')
   })
+
+  it('marks the failures worth asking again, and only those', () => {
+    // Check all re-sends rows whose lookup got no answer. A rate limit or a
+    // server error can clear by itself; 'not found' and 'key rejected' are
+    // answers, and asking again would only spend quota.
+    expect(parseReputation('virustotal', 429, '').transient).toBe(true)
+    expect(parseReputation('abuseipdb', 503, '').transient).toBe(true)
+    expect(parseReputation('urlhaus', 500, '').transient).toBe(true)
+    expect(parseReputation('virustotal', 401, '').transient).toBeUndefined()
+    expect(parseReputation('virustotal', 404, '').transient).toBeUndefined()
+    expect(parseReputation('virustotal', 400, '').transient).toBeUndefined()
+  })
 })
 
 describe('parseReputation - AbuseIPDB', () => {
@@ -152,10 +164,23 @@ describe('parseReputation - AbuseIPDB', () => {
     })
     expect(parseReputation('abuseipdb', 200, abBody(40, 2)).verdict).toBe('suspicious')
     expect(parseReputation('abuseipdb', 200, abBody(0, 0))).toEqual({ verdict: 'unknown', summary: 'no reports' })
+    // Reported, scoring low: that is not a clearance.
     expect(parseReputation('abuseipdb', 200, abBody(10, 1))).toEqual({
-      verdict: 'clean',
-      summary: '10% confidence · 1 report'
+      verdict: 'unknown',
+      summary: '10% confidence · 1 report · below suspicion threshold'
     })
+    expect(parseReputation('abuseipdb', 200, abBody(24, 20)).verdict).toBe('unknown')
+  })
+
+  it('reads clean only when AbuseIPDB whitelists the address', () => {
+    const body = (score: number) =>
+      JSON.stringify({ data: { abuseConfidenceScore: score, totalReports: 3, isWhitelisted: true } })
+    expect(parseReputation('abuseipdb', 200, body(0))).toEqual({
+      verdict: 'clean',
+      summary: 'whitelisted · 0% confidence · 3 reports'
+    })
+    // A high score never turns green, whitelisted or not.
+    expect(parseReputation('abuseipdb', 200, body(80)).verdict).toBe('malicious')
   })
 
   it('degrades honestly on errors', () => {
@@ -216,7 +241,16 @@ describe('parseReputation - abuse.ch', () => {
     expect(parseReputation('threatfox', 429, '').summary).toContain('rate limited')
     expect(parseReputation('urlhaus', 200, 'not json').verdict).toBe('unknown')
     expect(parseReputation('threatfox', 200, '{"query_status":"ok","data":"error"}').verdict).toBe('unknown')
-    expect(parseReputation('malwarebazaar', 200, '{"query_status":"illegal_hash"}').verdict).toBe('unknown')
+    expect(parseReputation('malwarebazaar', 200, '{"query_status":"illegal_hash"}')).toEqual({
+      verdict: 'unknown',
+      summary: 'answered "illegal_hash"'
+    })
+  })
+
+  it('names a status it read, and calls only a real non-answer unreadable', () => {
+    expect(parseReputation('urlhaus', 200, '{"query_status":"invalid_host"}').summary).toBe('answered "invalid_host"')
+    expect(parseReputation('urlhaus', 200, '{}').summary).toBe('unreadable response')
+    expect(parseReputation('threatfox', 200, '{"query_status":"<b>\\u202e x"}').summary).toBe('unreadable response')
   })
 })
 
@@ -260,5 +294,29 @@ describe('the asset boundary is the one outbound gate (ST-4)', () => {
   it('is judged on the value, so re-typing a row cannot walk an address out', () => {
     // The row says "domain" but the value is an internal address.
     expect(buildRequests('domain', '10.0.0.5', KEYS, [])).toEqual([])
+  })
+
+  it('sends nothing for a UNC path, a local path or a bracketed address', () => {
+    const all = { ...KEYS, abusech: 'ac-key' }
+    const owned = ['corp.example']
+    for (const v of [
+      '\\\\10.0.0.5\\c$\\evil.exe',
+      '\\\\dc01.corp.example\\share',
+      '[\\\\]dc01[.]corp[.]example\\share\\a.txt',
+      'C:\\Users\\jdoe',
+      '<john@corp.example>',
+      'dc01\\c$\\evil.exe'
+    ]) {
+      expect(buildRequests('domain', v, all, owned)).toEqual([])
+      expect(buildRequests('email', v, all, owned)).toEqual([])
+    }
+    // Hashes and full URLs still go out.
+    expect(buildRequests('hash', 'cd903ad2211cf7d166646d75e57fb866', all, owned).length).toBe(2)
+    expect(buildRequests('url', 'https://evil.test/a\\b?c=<d>', all, owned).length).toBe(2)
+  })
+
+  it('keeps the own IDN domain in, however it is spelled', () => {
+    expect(buildRequests('url', 'https://mail.bücher.example/login', KEYS, ['bücher.example'])).toEqual([])
+    expect(buildRequests('domain', 'mail\u3002corp.example', KEYS, ['corp.example'])).toEqual([])
   })
 })

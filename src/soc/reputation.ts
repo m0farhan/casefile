@@ -1,5 +1,5 @@
 import type { IocType } from '../types'
-import { assetRule, refangIoc } from './ioc'
+import { assetRule, hasIocShape, refangIoc } from './ioc'
 
 /**
  * Live IOC reputation checks: pure request builders + response parsers, no
@@ -51,6 +51,12 @@ export interface RepOutcome {
    * Overrides RepRequest.link via spread order in the caller.
    */
   link?: string
+  /**
+   * The provider gave no answer yet, rather than an answer: rate limited, a
+   * server error, a network failure. Check all asks again for these rows and
+   * leaves settled ones alone ('not found' and 'key rejected' are answers).
+   */
+  transient?: true
 }
 
 export const PROVIDER_LABELS: Record<RepProvider, string> = {
@@ -101,6 +107,10 @@ export function buildRequests(type: IocType, value: string, keys: RepKeys, owned
   // The one outbound gate: an indicator naming the org's own estate has no
   // request to send. Before any URL, header or key is assembled.
   if (assetRule(real, owned)) return []
+  // Nor does anything the boundary cannot read. A local path, a bracketed
+  // <addr@host> or a UNC form it does not reduce names an internal machine or
+  // a user and has no reputation to look up, so it fails closed here.
+  if (!hasIocShape(real)) return []
   const out: RepRequest[] = []
   const vt = keys.virustotal?.trim()
   const ab = keys.abuseipdb?.trim()
@@ -199,14 +209,17 @@ export function skippedProviders(type: IocType, keys: RepKeys): RepProvider[] {
 function httpOutcome(provider: RepProvider, status: number): RepOutcome | null {
   if (status === 200) return null
   if (status === 401 || status === 403) return { verdict: 'unknown', summary: 'key rejected' }
-  if (status === 429) return { verdict: 'unknown', summary: 'rate limited — retry shortly' }
+  if (status === 429) return { verdict: 'unknown', summary: 'rate limited — retry shortly', transient: true }
   if (status === 404) {
     return {
       verdict: 'unknown',
       summary: provider === 'virustotal' ? 'not found in VirusTotal' : 'not found'
     }
   }
-  return { verdict: 'unknown', summary: `request failed (HTTP ${status})` }
+  const failed: RepOutcome = { verdict: 'unknown', summary: `request failed (HTTP ${status})` }
+  // A server error can clear on its own; any other 4xx is about the request.
+  if (status >= 500) failed.transient = true
+  return failed
 }
 
 /**
@@ -221,7 +234,12 @@ function parseAbuseCh(provider: RepProvider, body: Record<string, unknown>): Rep
   if (ABUSECH_NOT_LISTED.has(qs)) {
     return { verdict: 'unknown', summary: `not listed in ${PROVIDER_LABELS[provider]}` }
   }
-  if (qs !== 'ok') return { verdict: 'unknown', summary: 'unreadable response' }
+  // Any other status is still an answer: invalid_host for a dotless name,
+  // illegal_hash for a value that is not one. Named as the provider gave it
+  // (the chip already names the provider), when it is a plain status token.
+  if (qs !== 'ok') {
+    return { verdict: 'unknown', summary: /^\w{1,40}$/.test(qs) ? `answered "${qs}"` : 'unreadable response' }
+  }
 
   if (provider === 'urlhaus') {
     // Two response shapes: /v1/url/ carries url_status/threat/id at top level;
@@ -295,6 +313,10 @@ export function parseReputation(provider: RepProvider, status: number, bodyText:
   const detail = `${score}% confidence · ${reports} report${reports === 1 ? '' : 's'}`
   if (score >= 75) return { verdict: 'malicious', summary: detail }
   if (score >= 25) return { verdict: 'suspicious', summary: detail }
+  // A whitelist entry is AbuseIPDB's one positive clearance. A low score is
+  // weak evidence of abuse, not a statement that the address is clean, and an
+  // address with reports is never painted clean for scoring low (SD-01).
+  if (data.isWhitelisted === true) return { verdict: 'clean', summary: `whitelisted · ${detail}` }
   if (reports === 0) return { verdict: 'unknown', summary: 'no reports' } // nobody looked ≠ clean (SD-01)
-  return { verdict: 'clean', summary: detail }
+  return { verdict: 'unknown', summary: `${detail} · below suspicion threshold` }
 }

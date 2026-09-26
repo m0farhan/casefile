@@ -1,20 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
   VT_PACE_MS,
+  activityValue,
   assetRule,
   defangIoc,
   detectIocType,
   extractIocsFromText,
   formatIocLine,
   hasIocShape,
+  iocKey,
   iocSightings,
   parseIocPaste,
   refangIoc,
+  sightingsIndex,
+  stripProseTail,
   unmatchableAssetRules,
   visibleName,
   vtWaitMs
 } from './ioc'
-import { makeTask, type Ioc } from '../types'
+import { makeTask, type Ioc, type Task } from '../types'
+import { flattenTasks } from '../store/TaskTreeOps'
 
 describe('defangIoc — a defanged string must not lie about where it goes', () => {
   it('brackets unicode label separators, not just the ASCII dot', () => {
@@ -37,7 +42,7 @@ describe('defangIoc — a defanged string must not lie about where it goes', () 
 
   it('leaves ordinary values defanged exactly as before', () => {
     expect(defangIoc('https://evil.co/path', 'url')).toBe('hxxps://evil[.]co/path')
-    expect(defangIoc('ftp://evil.co/f', 'url')).toBe('ftp://evil[.]co/f')
+    expect(defangIoc('ftp://evil.co/f', 'url')).toBe('ftp[:]//evil[.]co/f')
     expect(defangIoc('a@evil.co', 'email')).toBe('a[at]evil[.]co')
     // A host:port is not a scheme, and an IPv6 literal only looks like one.
     expect(defangIoc('evil.co:8080', 'domain')).toBe('evil[.]co:8080')
@@ -63,6 +68,45 @@ describe('defangIoc — a defanged string must not lie about where it goes', () 
     }
     // Judged on the value, so a row re-typed as an IP is still broken.
     expect(defangIoc('javascript:alert(1)', 'ip')).toBe('javascript[:]alert(1)')
+  })
+
+  it('judges a row typed as a hash on its value too', () => {
+    // The type select and hand-edited frontmatter can put any value on a hash row.
+    expect(defangIoc('javascript:alert(1)', 'hash')).toBe('javascript[:]alert(1)')
+    expect(defangIoc('http://evil.example.com/x', 'hash')).toBe('hxxp://evil[.]example[.]com/x')
+    expect(defangIoc('\\\\attacker\\s', 'hash')).toBe('[\\\\]attacker\\s')
+    // A real hash has nothing to neutralise.
+    for (const h of [
+      'd41d8cd98f00b204e9800998ecf8427e',
+      'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855',
+      '96:s4Ud1Lj96tHHlZDrwciQmA+4uy1I0G4HYuL8N3TzS8QsO:e4Uk2HHlZDrwciQmA+4uy1I0G4HYuL8N3TzS8Q',
+      'T1F0E0D0C0B0A09080706050403020100F0E0D0C0B0A09080706050403020100F0E0D0C0B0A0'
+    ]) {
+      expect(defangIoc(h, 'hash')).toBe(h)
+    }
+  })
+
+  it('breaks an ftp colon, since a dotless ftp host has no dot to break', () => {
+    expect(defangIoc('ftp://files/x', 'url')).toBe('ftp[:]//files/x')
+    expect(defangIoc('ftp://3232235521/x', 'url')).toBe('ftp[:]//3232235521/x')
+    expect(refangIoc(defangIoc('ftp://files/x', 'url'))).toBe('ftp://files/x')
+  })
+
+  it('sees the scheme past a control byte or a tab, as the URL parser does', () => {
+    // A Safe Links wrapper around %01javascript%3A unwraps to this, and the
+    // browser still runs it as javascript:.
+    expect(defangIoc('\u0001javascript:alert(document.domain)', 'url')).toBe(
+      '\u0001javascript[:]alert(document[.]domain)'
+    )
+    expect(defangIoc('\u000edata:text/html,<script>x</script>', 'url')).toBe(
+      '\u000edata[:]text/html,<script>x</script>'
+    )
+    expect(defangIoc('\u0001http://intranet/login', 'url')).toBe('\u0001hxxp://intranet/login')
+    expect(defangIoc('java\tscript:alert(1)', 'url')).toBe('java\tscript[:]alert(1)')
+    expect(defangIoc('\u0001\\\\attacker\\s', 'url')).toBe('\u0001[\\\\]attacker\\s')
+    // Not every colon is a scheme.
+    expect(defangIoc('fe80::1', 'url')).toBe('fe80::1')
+    expect(defangIoc('evil.com:8080', 'domain')).toBe('evil[.]com:8080')
   })
 
   it('brackets a UNC prefix, so a dotless host is not left live', () => {
@@ -161,6 +205,19 @@ describe('parseIocPaste', () => {
     expect(parseIocPaste('', [])).toEqual([])
     expect(parseIocPaste('  \n\n , ,\t', [])).toEqual([])
   })
+
+  it('refangs [dot], (dot) and [://], the forms CyberChef and vendor reports use', () => {
+    expect(parseIocPaste('evil[dot]com hxxps[://]evil[.]com', [])).toEqual([
+      { type: 'domain', value: 'evil.com' },
+      { type: 'url', value: 'https://evil.com' }
+    ])
+    expect(parseIocPaste('EVIL(DOT)COM', [])).toEqual([{ type: 'domain', value: 'EVIL.COM' }])
+    expect(refangIoc('john(dot)smith(at)corp(dot)com')).toBe('john.smith@corp.com')
+    // Only between label characters: a real path keeps its value.
+    expect(parseIocPaste('https://en.wikipedia.org/wiki/Foo_(dot)', [])).toEqual([
+      { type: 'url', value: 'https://en.wikipedia.org/wiki/Foo_(dot)' }
+    ])
+  })
 })
 
 describe('formatIocLine', () => {
@@ -243,6 +300,82 @@ describe('extractIocsFromText', () => {
     expect(urls('https://evil.example/a\\b')).toEqual(['https://evil.example/a'])
     expect(urls('see https://evil.example/a\u0000\u0000\u0000tail')).toEqual(['https://evil.example/a'])
   })
+
+  it('ends a URL at a closing typographic quote and at U+FFFD', () => {
+    const urls = (text: string) =>
+      extractIocsFromText(text, [])
+        .filter((i) => i.type === 'url')
+        .map((i) => i.value)
+    // Word and Outlook autocorrect quotes; a block-list entry ending in ” matches nothing.
+    expect(urls('Please sign in at “https://login.evil-portal.com/verify” today.')).toEqual([
+      'https://login.evil-portal.com/verify'
+    ])
+    expect(urls('«https://a.evil.test/x»')).toEqual(['https://a.evil.test/x'])
+    expect(urls('‘https://b.evil.test/y’.')).toEqual(['https://b.evil.test/y'])
+    // FF FE after a link in a binary decodes to two replacement characters.
+    expect(urls('garbage http://evil.example.com/stage\uFFFD\uFFFDAB')).toEqual(['http://evil.example.com/stage'])
+  })
+
+  it('keeps two URLs that differ only in case, since a path is case-sensitive', () => {
+    const values = extractIocsFromText('https://bit.ly/3XkQ and later https://bit.ly/3xKq', []).map((i) => i.value)
+    expect(values).toContain('https://bit.ly/3XkQ')
+    expect(values).toContain('https://bit.ly/3xKq')
+    // Hashes and hosts still fold case, against the case and within the scan.
+    expect(extractIocsFromText('D41D8CD98F00B204E9800998ECF8427E', ['d41d8cd98f00b204e9800998ecf8427e'])).toEqual([])
+    expect(extractIocsFromText('EVIL.com and evil.COM', []).map((i) => i.value)).toEqual(['EVIL.com'])
+  })
+
+  it('reads the [dot], (dot) and [://] defang forms', () => {
+    const got = extractIocsFromText('see evil[dot]com and hxxps[://]bad[.]net/x, phish[at]bad[dot]ru', []).map(
+      (i) => i.value
+    )
+    expect(got).toContain('evil.com')
+    expect(got).toContain('https://bad.net/x')
+    expect(got).toContain('phish@bad.ru')
+    // A (.) or (dot) inside a URL is part of the host, not the end of the URL:
+    // the value used to be the fragment 'https://x(' that exists nowhere.
+    const urls = extractIocsFromText('hxxps://x[dot]net/a hxxps://y(dot)org/b hxxps://z(.)io/c', [])
+      .filter((i) => i.type === 'url')
+      .map((i) => i.value)
+    expect(urls).toEqual(['https://x.net/a', 'https://y.org/b', 'https://z.io/c'])
+  })
+})
+
+describe('extractIocsFromText — hostile text cannot freeze the scan', () => {
+  // Each of these took seconds to minutes: an unanchored `\b[\w-]+` restarted
+  // at every hyphen or dot of a run and rescanned to its end. Bounds are loose
+  // so a loaded machine does not flake; the fixed scan takes tens of ms.
+  const MB = 1024 * 1024
+  const base64url = 'QmFzZTY0-dXJs_YWxwaGFiZXQ-'
+  const shapes: [string, string][] = [
+    ["'a-' × 80,000", 'a-'.repeat(80_000)],
+    ['2 MB of a-', 'a-'.repeat(MB)],
+    ['2 MB of a.', 'a.'.repeat(MB)],
+    ['2 MB of base64url', base64url.repeat(Math.ceil((2 * MB) / base64url.length))],
+    ['a URL, 1 MB of dots, a letter', `https://x.example.com/${'.'.repeat(MB)}a`]
+  ]
+  for (const [name, text] of shapes) {
+    it(`scans ${name} in linear time`, () => {
+      const start = performance.now()
+      extractIocsFromText(text, [])
+      expect(performance.now() - start).toBeLessThan(1500)
+    })
+  }
+
+  it('still lists an over-long token whole, never a tail of it', () => {
+    // Bounding the repetitions instead would have listed a 63-character suffix
+    // that appears nowhere in the text as a host.
+    const host = `${'x-'.repeat(40)}y.com`
+    expect(extractIocsFromText(host, []).map((i) => i.value)).toEqual([host])
+    expect(extractIocsFromText(`--${host}`, []).map((i) => i.value)).toEqual([host])
+  })
+
+  it('does not list an address glued to the one before it as an email (documented)', () => {
+    const got = extractIocsFromText('a@b.com+x@c.com', [])
+    expect(got.filter((i) => i.type === 'email').map((i) => i.value)).toEqual(['a@b.com'])
+    // Its domain is still listed.
+    expect(got.map((i) => i.value)).toContain('c.com')
+  })
 })
 
 describe('vtWaitMs', () => {
@@ -301,6 +434,114 @@ describe('iocSightings', () => {
   })
 })
 
+describe('sightingsIndex — one board walk per render, not one per row', () => {
+  // The per-row walk iocSightings used to do, kept here as the reference.
+  const walk = (value: string, board: Task[], exclude: string, owned: string[]) => {
+    const needle = refangIoc(value).toLowerCase()
+    if (!needle || assetRule(needle, owned)) return []
+    return flattenTasks(board)
+      .map(({ task }) => task)
+      .filter((t) => t.id !== exclude && t.iocs.some((i) => refangIoc(i.value).toLowerCase() === needle))
+      .map((t) => ({ taskId: t.id, key: t.key, title: t.title }))
+  }
+
+  it('answers exactly what the per-row walk answered', () => {
+    const board = [
+      makeTask({ id: 'a', key: 'SOC1', title: 'A', iocs: [{ type: 'ip', value: '203.0.113.9' }] }),
+      makeTask({
+        id: 'b',
+        key: 'SOC2',
+        title: 'B',
+        // Held twice, once defanged: still one sighting.
+        iocs: [
+          { type: 'ip', value: '203[.]0[.]113[.]9' },
+          { type: 'ip', value: '203.0.113.9' },
+          { type: 'domain', value: 'Mail.Corp.Example' }
+        ],
+        subtasks: [makeTask({ id: 'c', key: 'SOC3', title: 'C', iocs: [{ type: 'domain', value: 'EVIL.test' }] })]
+      }),
+      makeTask({ id: 'd', key: 'SOC4', title: 'D', iocs: [{ type: 'domain', value: 'evil[.]test' }] })
+    ]
+    const owned = ['corp.example']
+    for (const exclude of ['', 'a', 'c']) {
+      const lookup = sightingsIndex(board, exclude, owned)
+      for (const v of [
+        '203.0.113.9',
+        '203[.]0[.]113[.]9',
+        'evil.TEST',
+        'mail.corp.example',
+        '10.0.0.1',
+        '',
+        'x.test'
+      ]) {
+        expect(lookup(v)).toEqual(walk(v, board, exclude, owned))
+      }
+    }
+    // The asset is on the board, and is still never a sighting.
+    expect(sightingsIndex(board, '', owned)('mail.corp.example')).toEqual([])
+  })
+
+  it('looks up 5,000 rows against a 5,000-indicator board in well under a render', () => {
+    const board = Array.from({ length: 50 }, (_, c) =>
+      makeTask({
+        id: `t${c}`,
+        key: `SOC${c}`,
+        title: `Case ${c}`,
+        iocs: Array.from({ length: 100 }, (_, i) => ({
+          type: 'domain' as const,
+          value: `h${c * 100 + i}[.]evil[.]test`
+        }))
+      })
+    )
+    const rows = Array.from({ length: 5000 }, (_, i) => `h${i * 3}.evil.test`)
+    const start = performance.now()
+    const lookup = sightingsIndex(board, 't0', [])
+    const hits = rows.filter((v) => lookup(v).length > 0).length
+    expect(performance.now() - start).toBeLessThan(200)
+    expect(hits).toBeGreaterThan(0)
+  })
+})
+
+describe('activityValue — an activity row never prints a live indicator', () => {
+  it('defangs indicator values and leaves every other field as recorded', () => {
+    expect(activityValue('iocs', 'http://evil.example/login')).toBe('hxxp://evil[.]example/login')
+    expect(activityValue('iocs', 'bad@evil.example')).toBe('bad[at]evil[.]example')
+    expect(activityValue('iocs', '')).toBe('')
+    expect(activityValue('title', 'http://evil.example/login')).toBe('http://evil.example/login')
+  })
+})
+
+describe('iocKey — the one dedupe key', () => {
+  it('folds case everywhere except a URL, whose path is case-sensitive', () => {
+    expect(iocKey({ type: 'url', value: 'https://bit.ly/3XkQ' })).not.toBe(
+      iocKey({ type: 'url', value: 'https://bit.ly/3xKq' })
+    )
+    expect(iocKey({ type: 'hash', value: 'D41D8CD98F00B204E9800998ECF8427E' })).toBe(
+      iocKey({ type: 'hash', value: 'd41d8cd98f00b204e9800998ecf8427e' })
+    )
+    expect(iocKey({ type: 'domain', value: 'EVIL.test' })).toBe(iocKey({ type: 'domain', value: 'evil.test' }))
+    expect(iocKey({ type: 'domain', value: 'evil.test' })).not.toBe(iocKey({ type: 'email', value: 'evil.test' }))
+  })
+})
+
+describe('stripProseTail', () => {
+  it('drops the sentence punctuation after an indicator, ASCII or typographic', () => {
+    expect(stripProseTail('https://x.test/verify”.')).toBe('https://x.test/verify')
+    expect(stripProseTail('https://x.test/a»')).toBe('https://x.test/a')
+    expect(stripProseTail('evil.test);')).toBe('evil.test')
+    expect(stripProseTail('https://x.test/a')).toBe('https://x.test/a')
+    expect(stripProseTail('.,;')).toBe('')
+  })
+
+  it('takes linear time on a long punctuation run', () => {
+    const s = `https://x.test/${'.'.repeat(1_000_000)}a`
+    const start = performance.now()
+    expect(stripProseTail(s)).toBe(s)
+    expect(stripProseTail(`${s}${'.'.repeat(1_000_000)}`)).toBe(s)
+    expect(performance.now() - start).toBeLessThan(1500)
+  })
+})
+
 describe('assetRule — the boundary that decides what is never sent', () => {
   it('covers private, loopback and link-local without any configuration', () => {
     for (const v of ['10.1.2.3', '172.16.0.1', '192.168.1.1', '127.0.0.1', '169.254.1.1']) {
@@ -354,6 +595,43 @@ describe('assetRule — the boundary that decides what is never sent', () => {
     // Not every colon is an address: a clock and a MAC must not match.
     expect(assetRule('12:34:56', [])).toBeNull()
     expect(assetRule('08:00:27:12:34:56', [])).toBeNull()
+  })
+
+  it('judges a UNC path by its server', () => {
+    // \\10.0.0.5\c$ used to reach no built-in range and went to VirusTotal.
+    expect(assetRule('\\\\10.0.0.5\\c$\\evil.exe', [])?.builtIn).toBe(true)
+    expect(assetRule('\\\\dc01.corp.example\\share', ['corp.example'])).not.toBeNull()
+    expect(assetRule('[\\\\]dc01[.]corp[.]example\\share\\a.txt', ['corp.example'])).not.toBeNull()
+    // A WebDAV suffix is not a mailbox separator.
+    expect(assetRule('\\\\dc01.corp.example@SSL\\DavWWWRoot\\x', ['corp.example'])).not.toBeNull()
+    expect(assetRule('\\\\evil.test\\share', ['corp.example'])).toBeNull()
+  })
+
+  it('treats every spelling of an IDN host as that host', () => {
+    // Only a URL used to go through the parser, so a rule and a value spelled
+    // differently never met.
+    expect(assetRule('https://mail.bücher.example/login', ['bücher.example'])).not.toBeNull()
+    expect(assetRule('xn--bcher-kva.example', ['bücher.example'])).not.toBeNull()
+    expect(assetRule('bücher.example', ['xn--bcher-kva.example'])).not.toBeNull()
+    expect(assetRule('mail\u3002corp.example', ['corp.example'])).not.toBeNull()
+    expect(assetRule('mail.\uFF43\uFF4F\uFF52\uFF50.example', ['corp.example'])).not.toBeNull()
+    expect(assetRule('mail.corp.xn--p1ai', ['corp.рф'])).not.toBeNull()
+    expect(assetRule('\uFF11\uFF10.\uFF10.\uFF10.\uFF15', [])?.builtIn).toBe(true)
+    expect(unmatchableAssetRules(['corp.xn--p1ai', 'corp.рф'])).toEqual([])
+    // Still a label boundary.
+    expect(assetRule('evilbücher.example', ['bücher.example'])).toBeNull()
+  })
+
+  it('never reads a half-typed address as a shorthand or octal one', () => {
+    // The URL parser turns '198.51.100' into 198.51.0.100 and '010' into 8.
+    // Neither spelling may become a live rule or an own-asset mark.
+    expect(unmatchableAssetRules(['10', '198.51.100'])).toEqual(['10', '198.51.100'])
+    expect(assetRule('198.51.0.100', ['198.51.100'])).toBeNull()
+    expect(assetRule('10.0.19041', [])).toBeNull()
+    expect(hasIocShape('1.2.3')).toBe(false)
+    expect(hasIocShape('10.0.19041')).toBe(false)
+    expect(assetRule('0.0.0.10', ['\uFF11\uFF10'])).toBeNull()
+    expect(assetRule('8.0.0.5', ['\uFF10\uFF11\uFF10.\uFF10.\uFF10.\uFF15'])).toBeNull()
   })
 
   it('names every listed entry it cannot match, so nothing reads as cover', () => {

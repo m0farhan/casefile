@@ -20,16 +20,19 @@ export const IOC_TYPE_ICONS: Record<IocType, string> = {
 /**
  * Defang an IOC for display so it is never click- or copy-hazardous:
  * http→hxxp, dots→[.], @→[at], any other leading scheme→scheme[:], a leading
- * UNC \\→[\\]. The stored value stays real; only rendering defangs. Hashes
- * pass through untouched (nothing to neutralize).
+ * UNC \\→[\\]. The stored value stays real; only rendering defangs. A real
+ * hash has none of these and comes back unchanged. A row typed as a hash is
+ * judged on its value like any other, so a re-typed `javascript:` is not
+ * waved through.
  */
 export function defangIoc(value: string, type: IocType): string {
-  if (type === 'hash') return value
   // Direction-changing and invisible controls go first: they reorder what the
   // reader sees without changing what a browser resolves, so a defanged string
   // carrying them is a string that lies about its own destination.
   let out = value.replace(BIDI_CONTROLS, '')
-  out = out.replace(/^(\s*)https?/i, (m) => m.replace(/http/i, (h) => (h === 'HTTP' ? 'HXXP' : 'hxxp')))
+  // A URL parser drops leading C0 controls and spaces before it reads the
+  // scheme, so a control byte in front must not hide the scheme from here.
+  out = out.replace(/^([\s\p{Cc}]*)https?/iu, (m) => m.replace(/http/i, (h) => (h === 'HTTP' ? 'HXXP' : 'hxxp')))
   // Every separator a host can be written with, not just the ASCII one.
   // `paypal。com.evil。co` resolves to paypal.com.evil.co, so bracketing only
   // the ASCII dot marked the decoy and left the real apex looking clean.
@@ -50,7 +53,7 @@ export function defangIoc(value: string, type: IocType): string {
   // A UNC path opens an SMB connection, and hands over the analyst's NTLM
   // hash, from Run or Explorer. A dotless host (\\fileserver\share) has no dot
   // for the separator step to break, so the prefix itself is bracketed.
-  out = out.replace(/^(\s*)\\\\/, '$1[\\\\]')
+  out = out.replace(/^([\s\p{Cc}]*)\\\\/u, '$1[\\\\]')
   if (type === 'email' || type === 'url') out = out.replace(/@/g, '[at]')
   return out
 }
@@ -67,12 +70,20 @@ const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069\u061C]/g
 
 /**
  * A leading scheme. It runs after the dots are bracketed, so a host:port
- * (evil.com:8080) no longer has this shape and keeps its colon.
+ * (evil.com:8080) no longer has this shape and keeps its colon. Leading
+ * controls are skipped and a tab or line break inside the scheme is allowed,
+ * because the URL parser strips the first and deletes the second:
+ * `\u0001javascript:` and `java\tscript:` both run as javascript:.
  */
-const LEADING_SCHEME = /^(\s*)([a-z][a-z0-9+.-]*):/i
+const LEADING_SCHEME = /^([\s\p{Cc}]*)([a-z][a-z0-9+.\t\n\r-]*):/iu
 
-/** The schemes whose defanged form is already inert: hxxp is not a scheme, and every dotted host is broken. */
-const WEB_SCHEME = /^(h(tt|xx)ps?|ftp)$/i
+/**
+ * The schemes that keep their colon, because their defanged form is already
+ * inert: hxxp is not a scheme. ftp is not one of them. It is never rewritten,
+ * so it was inert only while the dot step broke its host, and ftp://files/x or
+ * a decimal-IP ftp host has no dot to break.
+ */
+const WEB_SCHEME = /^h(tt|xx)ps?$/i
 
 /**
  * An attacker-written name, made safe to print beside the tool's own words.
@@ -91,20 +102,61 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 
 /**
  * Undo the common defang forms so pasted report indicators are stored real:
- * hxxp→http, [.]/(.)→., [at]/(at)/[@]→@, [:]→:, a leading [\\]→\\. Inverse of
- * defangIoc plus the variants seen in vendor reports. Idempotent on
+ * hxxp→http, [://]→://, [.]/(.)/[dot]/(dot)→., [at]/(at)/[@]→@, [:]→:, a
+ * leading [\\]→\\. Inverse of defangIoc plus the variants seen in vendor
+ * reports (hxxps[://]host[.]tld is CyberChef's default). Idempotent on
  * already-real values.
  */
 // ponytail: covers the defang forms in real CTI reports; extend the map if a new one shows up
 export function refangIoc(value: string): string {
-  return value
-    .trim()
-    .replace(/^hxxp/i, (h) => (h === 'HXXP' ? 'HTTP' : 'http'))
-    .replace(/[[(]\.[\])]/g, '.')
-    .replace(/[[(]at[\])]/gi, '@')
-    .replace(/\[@\]/g, '@')
-    .replace(/\[:\]/g, ':')
-    .replace(/^\[\\\\\]/, '\\\\')
+  return (
+    value
+      .trim()
+      .replace(/^hxxp/i, (h) => (h === 'HXXP' ? 'HTTP' : 'http'))
+      .replace(/\[:\/\/\]/g, '://')
+      .replace(/[[(]\.[\])]/g, '.')
+      // The word form only between label characters: evil[dot]com is a host,
+      // while wiki/Foo_(dot) is a real path whose value must not change.
+      .replace(/([\p{L}\p{N}-])[[(]dot[\])](?=[\p{L}\p{N}-])/giu, '$1.')
+      .replace(/[[(]at[\])]/gi, '@')
+      .replace(/\[@\]/g, '@')
+      .replace(/\[:\]/g, ':')
+      .replace(/^\[\\\\\]/, '\\\\')
+  )
+}
+
+/**
+ * An activity entry's value, ready to print. Indicator rows are defanged the
+ * way every other indicator line is; the stored entry stays real, so history
+ * is untouched. An entry records no type, and a removed indicator is no longer
+ * on the task to ask, so the type is read from the value itself.
+ */
+export function activityValue(field: string, v: string): string {
+  return field === 'iocs' && v ? defangIoc(v, detectIocType(v)) : v
+}
+
+/**
+ * The key two indicators are the same by. Hosts, addresses and hashes do not
+ * depend on case, so they compare lower-cased. A URL keeps its exact spelling:
+ * its path is case-sensitive, and bit.ly/3XkQ and bit.ly/3xKq are two links.
+ */
+export function iocKey(ioc: Pick<Ioc, 'type' | 'value'>): string {
+  return `${ioc.type}:${ioc.type === 'url' ? ioc.value : ioc.value.toLowerCase()}`
+}
+
+/** Punctuation that closes the sentence around an indicator, ASCII or typographic. */
+const PROSE_TAIL = `),.;:!?'"]’”»›`
+
+/**
+ * An indicator found in prose, without the punctuation the sentence put after
+ * it: `“https://x.test/a”.` is the link https://x.test/a. A walk back from the
+ * end rather than a `+$` regex, which retries from every character of a long
+ * punctuation run and so takes quadratic time on one.
+ */
+export function stripProseTail(s: string): string {
+  let end = s.length
+  while (end > 0 && PROSE_TAIL.includes(s[end - 1])) end--
+  return s.slice(0, end)
 }
 
 /** Appended wherever an indicator leaves the UI (handover, copied block, report). */
@@ -160,33 +212,51 @@ export function vtWaitMs(prevVtStarts: number[], now: number): number {
   return Math.max(0, VT_PACE_MS - (now - Math.max(...prevVtStarts)))
 }
 
+/** One other case holding the same indicator. */
+export interface Sighting {
+  taskId: string
+  key: string
+  title: string
+}
+
 /**
  * Cases (other than `excludeTaskId`) whose indicators contain the same real
  * value: both sides refang (idempotent on real values) and compare
  * case-insensitively, so a defanged query still finds a real stored value and
  * vice versa. Subtasks are searched too.
  */
-export function iocSightings(
-  value: string,
-  tasks: Task[],
-  excludeTaskId: string,
-  owned: string[]
-): { taskId: string; key: string; title: string }[] {
-  const needle = refangIoc(value).toLowerCase()
-  if (!needle) return []
-  // An asset sits on half the cases by definition, so pivoting on one links
-  // every case to every other (SD-05). Still recorded, still marked, never a
-  // sighting — and the row says so rather than rendering nothing, which would
-  // read as "never seen anywhere else".
-  if (assetRule(needle, owned)) return []
-  const out: { taskId: string; key: string; title: string }[] = []
+export function iocSightings(value: string, tasks: Task[], excludeTaskId: string, owned: string[]): Sighting[] {
+  return sightingsIndex(tasks, excludeTaskId, owned)(value)
+}
+
+/**
+ * iocSightings for many values against one board: the board is walked and
+ * refanged once, and each lookup is then a map read. Asking iocSightings once
+ * per row walked the whole board per row, which at 5,000 rows on a 5,000
+ * indicator board took seconds on every render. Build one per render; the
+ * board changes between renders, so the index is not kept.
+ */
+export function sightingsIndex(tasks: Task[], excludeTaskId: string, owned: string[]): (value: string) => Sighting[] {
+  const byValue = new Map<string, Sighting[]>()
   for (const { task } of flattenTasks(tasks)) {
     if (task.id === excludeTaskId) continue
-    if (task.iocs.some((i) => refangIoc(i.value).toLowerCase() === needle)) {
-      out.push({ taskId: task.id, key: task.key, title: task.title })
+    const hit = { taskId: task.id, key: task.key, title: task.title }
+    // A case holding the value twice is still one sighting.
+    for (const v of new Set(task.iocs.map((i) => refangIoc(i.value).toLowerCase()))) {
+      const list = byValue.get(v)
+      if (list) list.push(hit)
+      else byValue.set(v, [hit])
     }
   }
-  return out
+  return (value) => {
+    const needle = refangIoc(value).toLowerCase()
+    // An asset sits on half the cases by definition, so pivoting on one links
+    // every case to every other (SD-05). Still recorded, still marked, never a
+    // sighting — and the row says so rather than rendering nothing, which would
+    // read as "never seen anywhere else".
+    if (!needle || assetRule(needle, owned)) return []
+    return [...(byValue.get(needle) ?? [])]
+  }
 }
 
 /** Classify a (refanged) indicator: hex hash, IP literal, scheme://=url, @=email, else domain. */
@@ -201,14 +271,28 @@ export function detectIocType(value: string): IocType {
 }
 
 /** Defanged-or-real fragment patterns for prose scanning. */
-// A URL stops at a control character, a brace or a backslash. None is legal
-// unencoded in a URL, and without the stop an RTF `{\*\template http://x/t.dotm}`
-// or NUL padding after a link ran on into a URL that exists nowhere.
-const RE_URL = /\bh(?:xx|tt)ps?(?:\[:\]|:)\/\/[^\s\p{Cc}<>"'){}\\]+/giu
-const RE_IP = /\b\d{1,3}(?:(?:\[\.\]|\(\.\)|\.)\d{1,3}){3}\b/g
+// A URL stops at a control character, a brace, a backslash or U+FFFD. None is
+// legal unencoded in a URL, and without the stop an RTF
+// `{\*\template http://x/t.dotm}`, NUL padding, or the replacement characters
+// a binary decodes to ran on into a URL that exists nowhere. A `)` ends it
+// too, except inside a (.) or (dot) defang, which is part of the host.
+const RE_URL = /\bh(?:xx|tt)ps?(?:\[:\/\/\]|(?:\[:\]|:)\/\/)(?:\((?:\.|dot)\)|[^\s\p{Cc}<>"'){}\\\uFFFD])+/giu
+const RE_IP = /\b\d{1,3}(?:(?:\[(?:\.|dot)\]|\((?:\.|dot)\)|\.)\d{1,3}){3}\b/gi
 const RE_HASH = /\b[a-f0-9]{64}\b|\b[a-f0-9]{40}\b|\b[a-f0-9]{32}\b/gi
-const RE_EMAIL = /\b[\w.+-]+(?:@|\[at\]|\(at\))[\w-]+(?:(?:\[\.\]|\(\.\)|\.)[\w-]+)+\b/gi
-const RE_DEFANGED_DOMAIN = /\b[\w-]+(?:(?:\[\.\]|\(\.\))[\w-]+)+\b/g
+// The email and domain patterns start only at the beginning of a run of their
+// characters: they consume the one character before it and capture the value
+// in group 1. A bare `\b[\w-]+` can start at every hyphen of `a-a-a-…` or a
+// base64url blob, scan to the end and fail each time, which is quadratic; 160 KB
+// froze Obsidian for 40 s. A later start in the same run fails exactly as the
+// first one does, so nothing is lost by not trying it. No lookbehind: iOS before
+// 16.4 cannot compile one, and the plugin would not load there.
+// ponytail: one case is dropped, never invented. An address glued to the one
+// before it by '+', '.' or '-' (a@b.com+x@c.com) is not listed as an email,
+// where it used to come out as the malformed '+x@c.com'. Its domain is still
+// listed.
+const RE_EMAIL =
+  /(?:^|[^\w.+-])[.+-]*\b([\w.+-]+(?:@|\[at\]|\(at\))[\w-]+(?:(?:\[(?:\.|dot)\]|\((?:\.|dot)\)|\.)[\w-]+)+)\b/gi
+const RE_DEFANGED_DOMAIN = /(?:^|[^\w-])-*\b([\w-]+(?:(?:\[(?:\.|dot)\]|\((?:\.|dot)\))[\w-]+)+)\b/gi
 // ponytail: bare (non-defanged) domains in prose need a TLD gate or every
 // "file.js" becomes an indicator; extend the list when a real miss shows up.
 const BARE_DOMAIN_TLDS = new Set([
@@ -236,7 +320,7 @@ const BARE_DOMAIN_TLDS = new Set([
   'tk',
   'ws'
 ])
-const RE_BARE_DOMAIN = /\b[\w-]+(?:\.[\w-]+)+\b/g
+const RE_BARE_DOMAIN = /(?:^|[^\w-])-*\b([\w-]+(?:\.[\w-]+)+)\b/g
 
 function validIp(v: string): boolean {
   return v.split('.').every((o) => Number(o) <= 255)
@@ -244,20 +328,23 @@ function validIp(v: string): boolean {
 
 /**
  * Scan free prose (a case note) for indicators — defanged or real — and
- * return the NEW ones as typed rows, deduped against `existingValues` and
- * within the scan, in order of first appearance. Conservative by design:
- * bare domains must end in a known TLD; everything else matches by shape.
+ * return the NEW ones as typed rows, deduped by iocKey against
+ * `existingValues` and within the scan, in order of first appearance.
+ * Conservative by design: bare domains must end in a known TLD; everything
+ * else matches by shape.
  */
 export function extractIocsFromText(text: string, existingValues: string[]): Ioc[] {
-  const seen = new Set(existingValues.map((v) => refangIoc(v).toLowerCase()))
+  const keyOf = (value: string) => iocKey({ type: detectIocType(value), value })
+  const seen = new Set(existingValues.map((v) => keyOf(refangIoc(v))))
   const out: Ioc[] = []
   const found: { index: number; value: string }[] = []
   const collect = (re: RegExp, filter?: (v: string) => boolean) => {
     for (const m of text.matchAll(re)) {
-      const raw = m[0].replace(/[),.;:!?'"\]]+$/, '')
-      const value = refangIoc(raw)
+      // Group 1 where the pattern also consumed the character before the value.
+      const hit = m[1] ?? m[0]
+      const value = refangIoc(stripProseTail(hit))
       if (filter && !filter(value)) continue
-      found.push({ index: m.index ?? 0, value })
+      found.push({ index: (m.index ?? 0) + m[0].length - hit.length, value })
     }
   }
   collect(RE_URL)
@@ -271,7 +358,7 @@ export function extractIocsFromText(text: string, existingValues: string[]): Ioc
   })
   found.sort((a, b) => a.index - b.index)
   for (const f of found) {
-    const key = f.value.toLowerCase()
+    const key = keyOf(f.value)
     if (seen.has(key)) continue
     // Skip fragments of an already-captured longer indicator (ip inside url is
     // kept deliberately: both are real indicators with distinct values).
@@ -294,10 +381,13 @@ export interface AssetMatch {
 /** Private, loopback and link-local IPv4 — internal by definition, never configured. */
 const BUILT_IN_V4 = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8', '169.254.0.0/16']
 
-/** A host shape: dot-separated labels ending in an alphabetic TLD. Non-ASCII labels
- *  are allowed so an IDN survives; the alphabetic TLD is what keeps a half-typed
- *  address ("198.51.100", "10") from ever becoming a live suffix rule. */
-const RE_HOST_SHAPE = /^(?=.{1,253}$)[^\s./:@]+(?:\.[^\s./:@]+)*\.[a-z¡-￿]{2,}$/i
+/** A host shape: dot-separated labels ending in an alphabetic or punycode TLD.
+ *  Non-ASCII labels are allowed so an IDN survives; the alphabetic TLD is what
+ *  keeps a half-typed address ("198.51.100", "10") from ever becoming a live
+ *  suffix rule, and no address starts with xn--. A backslash or angle bracket
+ *  is never part of a host, so a local path (dc01\c$\evil.exe) or a pasted
+ *  <addr@host> is not one. */
+const RE_HOST_SHAPE = /^(?=.{1,253}$)[^\s./:@\\<>]+(?:\.[^\s./:@\\<>]+)*\.(?:[a-z¡-￿]{2,}|xn--[a-z0-9-]{2,})$/i
 const RE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i
 
 /** Dotted quad → uint32; null when the value is not an IPv4 literal. */
@@ -365,12 +455,13 @@ function builtInV6(g: number[]): string | null {
 }
 
 /**
- * The host an indicator points at — a URL's hostname, an email's domain, or the
- * value itself — refanged, lowercased, de-ported, de-bracketed, de-zoned.
- * Canonical: an IPv6 literal comes back expanded, and an IPv4-mapped one
- * (::ffff:10.0.0.5 — what Java, nginx and Windows event logs emit for internal
- * clients, and what new URL() turns into ::ffff:a00:5) comes back as its dotted
- * quad, so it is judged on the IPv4 side.
+ * The host an indicator points at — a URL's hostname, an email's domain, a UNC
+ * path's server, or the value itself — refanged, lowercased, de-ported,
+ * de-bracketed, de-zoned. Canonical: an IPv6 literal comes back expanded, an
+ * IPv4-mapped one (::ffff:10.0.0.5 — what Java, nginx and Windows event logs
+ * emit for internal clients, and what new URL() turns into ::ffff:a00:5) comes
+ * back as its dotted quad, so it is judged on the IPv4 side, and a non-ASCII
+ * host comes back in the punycode form a browser resolves.
  *
  * A URL the parser rejects is stripped BY HAND rather than waved through:
  * returning '' there would make http://10.0.0.5:99999/a "not an asset" and send
@@ -381,6 +472,11 @@ function builtInV6(g: number[]): string | null {
  */
 export function hostOf(value: string): string {
   let v = refangIoc(value).toLowerCase()
+  // A UNC path names its server first: \\10.0.0.5\c$\x is the host 10.0.0.5.
+  // '@' ends the server too, so a WebDAV \\host@SSL\DavWWWRoot\… is not read
+  // as a mailbox whose domain is 'ssl\davwwwroot\…'.
+  const unc = /^\\\\([^\\/@]*)/.exec(v)
+  if (unc) v = unc[1]
   if (RE_SCHEME.test(v)) {
     try {
       v = new URL(v).hostname
@@ -399,7 +495,24 @@ export function hostOf(value: string): string {
   v = v.replace(/^\[([^\]]*)\](?::\d+)?$/, '$1') // [fe80::1]:443
   const port = /^(.*):\d+$/.exec(v) // an IPv6 body keeps a second colon, so it is never stripped
   if (port && !port[1].includes(':')) v = port[1]
-  v = v.replace(/\.$/, '').split('%')[0]
+  v = v.split('%')[0]
+  // IDNA: the Unicode, punycode, fullwidth and ideographic-dot spellings of one
+  // host are one host, on the rule side and the value side alike, so
+  // bücher.example matches xn--bcher-kva.example and mail。corp.example is
+  // mail.corp.example.
+  // ponytail: non-ASCII only. The URL parser also reads IPv4 shorthand and
+  // octal ('198.51.100' is 198.51.0.100), so ASCII never goes through it, and
+  // an address it makes of fullwidth digits is kept only when it is the
+  // address as written.
+  if (/[^\p{ASCII}]/u.test(v)) {
+    try {
+      const canon = new URL(`http://${v}`).hostname
+      if (ipv4(canon) === null || canon === v.normalize('NFKC').replace(/\u3002/g, '.')) v = canon
+    } catch {
+      // Not a host the parser accepts: judged as written.
+    }
+  }
+  v = v.replace(/\.$/, '')
   const g = ipv6(v)
   if (!g) return v
   const m = mappedV4(g)
