@@ -903,7 +903,7 @@ describe('text the plain scan could not see', () => {
     expect(a.inside).toContain('url: hxxps://tail-side[.]example[.]com/t')
     expect(a.inside.some((l) => /middle|edge-cut/.test(l))).toBe(false)
     const said = a.facts.find((f) => f.startsWith('the text scan for indicators')) ?? ''
-    const [head, tail, between] = [...said.matchAll(/[\d,]+/g)].map((m) => Number(m[0].replace(/,/g, '')))
+    const [head, tail, between] = [...said.matchAll(/\d[\d,]*/g)].map((m) => Number(m[0].replace(/,/g, '')))
     // No structure reader read this file, so the sentence names none.
     expect(said).toMatch(/; it did not read the [\d,]+ bytes between$/)
     expect(head).toBeLessThanOrEqual(1_000_000)
@@ -924,7 +924,7 @@ describe('text the plain scan could not see', () => {
     expect(report.indicators).toContain('url: hxxps://mid-lure[.]test/x')
     const said = a.facts.find((f) => f.startsWith('the text scan for indicators')) ?? ''
     expect(said).toMatch(
-      /^the text scan for indicators and script names read the first [\d,]+ and the last [\d,]+ bytes; it did not read the [\d,]+ bytes between; the PDF structure reader read this file separately, and its lines are listed separately$/
+      /^the text scan for indicators, script names and RTF markers read the first [\d,]+ and the last [\d,]+ bytes; it did not read the [\d,]+ bytes between; the PDF structure reader read this file separately, and its lines are listed separately$/
     )
     expect(a.facts.join(' ')).not.toContain('not scanned for indicators')
   })
@@ -1281,5 +1281,66 @@ describe('the report keeps markup and images inside code', () => {
     expect(md).toContain('beacon.test')
     expect(outsideCode).not.toMatch(/<[a-z!/?]/i)
     expect(outsideCode).not.toMatch(/!\[(?!\[)/)
+  })
+})
+
+describe('what the parts’ own headers and bytes say', () => {
+  it('files a picture sent as an attachment as one, Content-ID or not', async () => {
+    // Gmail's shape: an attachment disposition and a Content-ID. It was filed as
+    // an inline image, and the report said "Attachments: None."
+    const mail = mailWith({
+      headers: [
+        'Content-Type: image/png; name="qr.png"',
+        'Content-Disposition: attachment; filename="qr.png"',
+        'Content-ID: <f_m1abc>',
+        'X-Attachment-Id: f_m1abc'
+      ],
+      bytes: new Uint8Array([...PNG, ...ascii(' https://qr-lure.example.test/login ')])
+    })
+    const report = await analysePhishing(mail, [], [])
+    expect(report.attachments.map((a) => a.filename)).toEqual(['qr.png'])
+    expect(report.inlineImages).toHaveLength(0)
+    const md = formatPhishReport(report)
+    expect(md).not.toContain('### Attachments\n\nNone.')
+    expect(md).toContain('  - found inside the file: `url: hxxps://qr-lure[.]example[.]test/login`')
+    expect(report.attachments[0].facts).toContain('marked inline or given a Content-ID by its own headers')
+  })
+
+  it('checks the sender’s domain as written, not as its encoded words decode', async () => {
+    // Decoded first, a quote in an encoded word turned a comment into the
+    // address, and the look-alike domain the mail came from was never checked.
+    const mail =
+      'From: =?utf-8?q?PayPal_=22?= <attacker@paypa1.com> (=?utf-8?q?=22?=<service@paypal.com>)\n' +
+      'Return-Path: <service@paypal.com>\nContent-Type: text/plain\n\nhi\n'
+    const report = await analysePhishing(mail, [], ['paypal'])
+    expect(report.senderFacts).toContain('reads as "paypal" once look-alike characters are folded')
+  })
+
+  it('reads the headers of a paste that begins with blank lines', async () => {
+    const mail =
+      '\n\nReceived: from mx.evil.example (mx.evil.example [203.0.113.5])\n\tby mx.corp.test; Thu, 24 Sep 2026 08:02:11 +0000\n' +
+      'From: phisher@evil.example\nSubject: hi\nContent-Type: text/plain\n\nhello\n'
+    const report = await analysePhishing(mail, [], [])
+    const values = caseIocs(report, mail).map((i) => i.value)
+    expect(values).toContain('203.0.113.5')
+    expect(values).toContain('phisher@evil.example')
+    // A paste of a body alone, opening on a blank line, is still a body.
+    const body = await analysePhishing('\nClick http://evil.test/a now\n\nThanks', [], [])
+    expect(body.links.map((l) => l.target)).toEqual(['http://evil.test/a'])
+    // Millions of them are skipped by a search, not a repeated-group regex that overflows the stack.
+    const padded = await analysePhishing(`${'\n'.repeat(5_000_000)}From: phisher@evil.example\n\nhi`, [], [])
+    expect(padded.indicators).toContain('email: phisher[at]evil[.]example')
+  })
+
+  it('counts an RTF’s objects past the part the preview shows', async () => {
+    // Past the first 20,000 characters an Equation Editor object was stated nowhere.
+    const rtf = ascii(
+      `{\\rtf1\\ansi ${'padding '.repeat(3000)}{\\object\\objemb\\objupdate{\\*\\objclass Equation.3}{\\*\\objdata 0105000002000000}}}`
+    )
+    const report = await analysePhishing(mailWith(attached('Remittance.rtf', rtf, 'application/rtf')), [], [])
+    const census = report.attachments[0].facts.find((f) => f.startsWith('RTF object and DDEAUTO markers found:')) ?? ''
+    expect(census).toContain('\\objdata ×1')
+    expect(census).toContain('the first \\objclass reads Equation.3')
+    expect(formatPhishReport(report)).toContain('RTF object and DDEAUTO markers found: \\object ×1')
   })
 })

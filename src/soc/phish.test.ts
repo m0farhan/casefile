@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { EXECUTABLE_NAME, SCRIPT_CARRIER_NAME, SHORTCUT_NAME, entryNote } from './ooxml'
 import {
   apexDomain,
   attachmentFacts,
@@ -160,6 +161,33 @@ describe('attachmentFacts', () => {
 
   it('says only what the part’s own headers say about being inline', () => {
     expect(attachmentFacts(att('logo.png', true))).toContain('marked inline or given a Content-ID by its own headers')
+  })
+
+  it('says the same about a name at the top level as the ZIP reader says about an entry', () => {
+    // .vbe and .cpl were flagged only inside a ZIP, .pif and .apk only outside
+    // one, and .url, .chm and .xll nowhere.
+    const rows: [RegExp, string, string][] = [
+      [EXECUTABLE_NAME, 'executable or script file type', 'named like an executable or script'],
+      [SCRIPT_CARRIER_NAME, 'file type that can carry script', 'named as a file type that can carry script'],
+      [
+        SHORTCUT_NAME,
+        'shortcut-style file type — it names another location or program to open',
+        'named as a shortcut-style file that names another location or program to open'
+      ]
+    ]
+    for (const [list, fact, note] of rows) {
+      const extensions = /\(([^)]+)\)/.exec(list.source)?.[1].split('|') ?? []
+      expect(extensions.length).toBeGreaterThan(1)
+      // Each row names its file, so a failure says which extension drifted.
+      const names = extensions.map((ext) => `Invoice.${ext.toUpperCase()}`)
+      expect(names.map((name) => [name, attachmentFacts(att(name)).includes(fact), entryNote(name)])).toEqual(
+        names.map((name) => [name, true, note])
+      )
+    }
+    // A shortcut, a help file and a console file are not programs.
+    for (const name of ['a.url', 'b.chm', 'c.msc', 'd.iqy']) {
+      expect(attachmentFacts(att(name))).not.toContain('executable or script file type')
+    }
   })
 
   it('never calls anything malicious', () => {

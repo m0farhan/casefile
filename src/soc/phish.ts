@@ -1,12 +1,19 @@
-import { type Attachment, hashBytes, parseEml } from './eml'
+import { type Attachment, hashBytes, parseEml, withoutLeadingBlankLines } from './eml'
 import { md5 } from './md5'
-import { type HeaderAnalysis, addressOf, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
+import { type HeaderAnalysis, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
 import { defangIoc, detectIocType, extractIocsFromText, formatIocLine, visibleName } from './ioc'
 import { decodePercentEscapes } from './toolbox'
 import { type PdfFacts, readPdf } from './pdf'
-import { type OfficeFacts, entryNote, readZipDocument } from './ooxml'
+import {
+  EXECUTABLE_NAME,
+  type OfficeFacts,
+  SCRIPT_CARRIER_NAME,
+  SHORTCUT_NAME,
+  entryNote,
+  readZipDocument
+} from './ooxml'
 import { type CfbFacts, cfbNote, readCfb } from './cfb'
-import { markupCensus } from './markup'
+import { markupCensus, rtfCensus } from './markup'
 import { drawableType, previewKind } from './preview'
 import type { Ioc } from '../types'
 
@@ -716,7 +723,6 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
 }
 
 const MACRO_CAPABLE = /\.(docm|dotm|xlsm|xltm|xlam|pptm|potm|ppam|xls|doc|ppt)$/i
-const EXECUTABLE = /\.(exe|scr|com|pif|bat|cmd|ps1|vbs|js|jse|wsf|wsh|hta|msi|dll|lnk|jar|apk)$/i
 const ARCHIVE = /\.(zip|rar|7z|tar|gz|cab|ace|arj)$/i
 // Its own fact: a disk image is neither a program nor a script, and calling
 // it one was false. It is a container Windows opens with one double-click,
@@ -749,7 +755,13 @@ const INLINE_FACT = 'marked inline or given a Content-ID by its own headers'
 export function attachmentFacts(attachment: Attachment): string[] {
   const facts: string[] = []
   const name = attachment.filename
-  if (EXECUTABLE.test(name)) facts.push('executable or script file type')
+  // The same three name lists the ZIP reader flags entries by, so a .vbe or a
+  // .url says the same thing at the top level as inside an archive. A
+  // shortcut, a help file or a console file is not a program, and is not
+  // called one.
+  if (EXECUTABLE_NAME.test(name)) facts.push('executable or script file type')
+  if (SCRIPT_CARRIER_NAME.test(name)) facts.push('file type that can carry script')
+  if (SHORTCUT_NAME.test(name)) facts.push('shortcut-style file type — it names another location or program to open')
   if (MACRO_CAPABLE.test(name)) facts.push('file type that can carry macros')
   if (ARCHIVE.test(name)) facts.push(ARCHIVE_FACT)
   if (DISK_IMAGE.test(name)) facts.push(DISK_IMAGE_FACT)
@@ -995,12 +1007,18 @@ const STRINGS_CAP = 1_000_000
  */
 const MESSAGE_MEDIA_BUDGET = 64_000_000
 
-/** The header block of a raw message: everything before the first blank line. */
+/**
+ * The header block of a raw message: everything before the first blank line.
+ * Blank lines ahead of the first header are skipped as parseEml skips them, or
+ * one stray Enter before a paste made the block empty and every header
+ * indicator — the sender, the originating IP — dropped out of the list.
+ */
 function headerBlockOf(raw: string): string {
+  const text = withoutLeadingBlankLines(raw)
   // search, not split: split walks a 40 MB paste to cut every blank line in
   // it, only for the first piece to be kept.
-  const end = raw.search(/\n\s*\n/)
-  return end < 0 ? raw : raw.slice(0, end)
+  const end = text.search(/\n\s*\n/)
+  return end < 0 ? text : text.slice(0, end)
 }
 
 export async function analysePhishing(raw: string, owned: string[], brands: string[]): Promise<PhishReport> {
@@ -1028,9 +1046,13 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   // Content-ID and Apple Mail sends a PDF as `inline; filename=`, so the flag
   // alone filed a PDF lure under inline images, whose report block is a name
   // and a hash. Only a part whose own bytes are a picture this draws is an
-  // inline image; anything else is read as the attachment it is.
+  // inline image; anything else is read as the attachment it is. A part whose
+  // own disposition says attachment is one, Content-ID or not: a QR code
+  // sent from Gmail was filed as an inline image, and the report said
+  // "Attachments: None."
   const isInline = eml.attachments.map(
-    (a, i) => a.inline && previewKind(a.contentType, a.filename, everyPart[i].sniffed, a.bytes) === 'image'
+    (a, i) =>
+      a.inline && !a.attached && previewKind(a.contentType, a.filename, everyPart[i].sniffed, a.bytes) === 'image'
   )
   const attachments = everyPart.filter((_, i) => !isInline[i])
   const inlineImages = everyPart.filter((_, i) => isInline[i])
@@ -1038,13 +1060,11 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   // The sender's own domain gets the folding the link hosts get. Five of the
   // shipped classifications are impersonation of one kind or another, and the
   // domain being impersonated is usually in the From line, not in a link.
-  // Through addressOf, not a hand-rolled lastIndexOf('@'). The hardened reader
-  // strips quoted display names and RFC 5322 comments; slicing the raw value
-  // read the LAST @ in the line, so a comment or a display name carrying an
-  // address decided which domain got the look-alike check — the exact evasion
-  // 2.32.0 closed for the Observations panel and left open here.
-  const fromValue = headers.identities.find((i) => i.label === 'From')?.value ?? ''
-  const senderAddress = addressOf(fromValue)
+  // The address as written, from the header reader, not a re-parse of the
+  // decoded From: decoding an encoded word first let `=?utf-8?q?=22?=` build
+  // a second address out of a comment, and the look-alike check ran on the
+  // domain the sender wanted checked rather than the one they sent from.
+  const senderAddress = headers.fromAddress
   const at = senderAddress.lastIndexOf('@')
   const senderHost = at < 0 ? '' : senderAddress.slice(at + 1).toLowerCase()
   const senderFacts = senderHost ? hostFacts(senderHost, brands, senderHost) : []
@@ -1237,7 +1257,7 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
   const scanFacts = [
     ...(scan.between
       ? [
-          `the text scan for indicators and script names read the first ${count(scan.head)} and the last ${count(scan.tail)} bytes; it did not read the ${count(scan.between)} bytes between` +
+          `the text scan for indicators, script names and RTF markers read the first ${count(scan.head)} and the last ${count(scan.tail)} bytes; it did not read the ${count(scan.between)} bytes between` +
             (reader
               ? `; the ${reader} structure reader read this file separately, and its lines are listed separately`
               : '')
@@ -1252,6 +1272,14 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
   // only when it is named .html: a smuggling page arrives as .htm, .hta,
   // .shtml or .svg alike, and the sender picks the name.
   const census = previewKind(a.contentType, a.filename, sniffed, a.bytes) === 'text' ? markupCensus(scan.utf8) : null
+  // An RTF's \object and DDEAUTO, over the same windows. Past the preview's
+  // 20,000 characters an Equation Editor object was stated nowhere. Gated on
+  // the bytes beginning `{\rt`, not on the sniff (Word also opens `{\rt0`) or
+  // on the preview (an RTF carrying \bin data does not preview as text).
+  const rtf =
+    a.bytes[0] === 0x7b && a.bytes[1] === 0x5c && a.bytes[2] === 0x72 && a.bytes[3] === 0x74
+      ? rtfCensus(scan.utf8)
+      : null
 
   return {
     filename: a.filename,
@@ -1267,6 +1295,7 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
       ...(failed ? [failed] : []),
       ...scanFacts,
       ...(census ? [census] : []),
+      ...(rtf ? [rtf] : []),
       ...(wireExact
         ? []
         : ['this part carried no transfer encoding, so the hashes are of the decoded text, not of the bytes as sent'])
