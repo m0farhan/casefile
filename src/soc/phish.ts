@@ -7,7 +7,7 @@ import { type PdfFacts, readPdf } from './pdf'
 import { type OfficeFacts, entryNote, readZipDocument } from './ooxml'
 import { type CfbFacts, cfbNote, readCfb } from './cfb'
 import { markupCensus } from './markup'
-import { previewKind } from './preview'
+import { drawableType, previewKind } from './preview'
 import type { Ioc } from '../types'
 
 /**
@@ -34,10 +34,10 @@ export interface LinkFinding {
   /** Host of `target`, lowercased. */
   host: string
   /**
-   * The registrable domain — `login.paypa1.co.uk` gives `paypa1.co.uk`. It is
-   * what a block list is usually written against and what two links have in
-   * common when they share an owner, so it is stated rather than left for the
-   * reader to work out from the host.
+   * The derived domain — `login.paypa1.co.uk` gives `paypa1.co.uk`: the host's
+   * last two labels, or three under a two-label suffix. No public suffix list
+   * is consulted, so under a hosting platform (pages.dev, github.io) it names
+   * the platform, not the site's owner, and it is printed as "derived".
    */
   apexDomain: string
   /** Stated facts about the host — never a score. */
@@ -85,8 +85,14 @@ const GATEWAYS: { name: string; host: RegExp; path?: RegExp; extract(url: string
     host: /(^|\.)urldefense(\.proofpoint)?\.com$/i,
     extract: (url) => {
       // v3: …/v3/__<real url>__;<base64 of replaced chars>!!…
-      const v3 = /\/v3\/__(.+?)__;/.exec(url)
-      if (v3) return decodePercentEscapes(v3[1])
+      // indexOf, not /\/v3\/__(.+?)__;/: that lazy scan restarted at every
+      // `/v3/__` and ran to the end each time, so one long link of them froze
+      // the analyser for seconds. Only the leftmost start can match, because a
+      // later start needs a later `__;`. Not quite the old regex: this also
+      // reads across U+2028 and U+2029, which an href can carry.
+      const at = url.indexOf('/v3/__')
+      const end = at < 0 ? -1 : url.indexOf('__;', at + 7)
+      if (end > 0) return decodePercentEscapes(url.slice(at + 6, end))
       // v2: …/v2/url?u=<url with _ for / and - for %>&d=…
       const v2 = new URL(url).searchParams.get('u')
       return v2 ? decodePercentEscapes(v2.replace(/_/g, '/').replace(/-/g, '%')) : ''
@@ -200,16 +206,24 @@ const ATTR_RE = /\b(?:href|src|action|background|poster|formaction|data)\s*=\s*(
 const CSS_URL_RE = /url\(\s*["']?([^)"']+)/gi
 const SRCSET_RE = /\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
 /**
- * Anchors, with every scan BOUNDED.
+ * Anchors, with every scan BOUNDED and every tag body stopped at the next tag.
  *
  * The unbounded lazy form was quadratic: a body of anchors with no closing
  * tag made the regex engine restart the tail scan from every one of them, and
- * fifty thousand of them froze the UI thread for tens of seconds. Bounding it
- * fails toward "the anchor text was not compared", which is an absence the
- * report states — never a fabricated match.
+ * fifty thousand of them froze the UI thread for tens of seconds. Bounding
+ * alone did not end it. `[^>]` ran on past the next `<`, so each unclosed
+ * `<a href=x ` walked 2,000 characters for every `href` in reach, and a
+ * shorter bare value was retried one character at a time: 100 KB of them
+ * still took 18 seconds. Stopping at `<` and taking the bare value whole
+ * (a shorter one reaches the same `>`, so it cannot match where the whole one
+ * failed) brings every hostile shape down to milliseconds.
+ *
+ * An anchor with `<` or `>` inside a quoted attribute is not read for its
+ * text, so it gets no "shown as" fact. That is an absence the report states,
+ * never a fabricated match, and its href is still listed by ATTR_RE.
  */
 const ANCHOR_RE =
-  /<a\b[^>]{0,2000}?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))[^>]{0,2000}?>([\s\S]{0,2000}?)<\/a>/gi
+  /<a\b[^<>]{0,2000}?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+)(?![^\s"'>=`]))[^<>]{0,2000}?>([\s\S]{0,2000}?)<\/a>/gi
 
 const NAMED_ENTITIES: Record<string, string> = {
   amp: '&',
@@ -310,16 +324,19 @@ function endOfTag(html: string, lt: number): number {
  * A `<` with no `>` after it is left as the text it almost certainly is; only
  * dropElement swallows on an unterminated open, and only because everything
  * after an unclosed `<script` really is inside it.
+ *
+ * `between` stands in for each tag removed. The link scan passes a space, so
+ * the text of two table cells is never read as one URL.
  */
-function stripTags(html: string): string {
+function stripTags(html: string, between = ''): string {
   let out = ''
   let i = 0
   while (i < html.length) {
     const lt = html.indexOf('<', i)
     if (lt < 0) return out + html.slice(i)
-    out += html.slice(i, lt)
     const end = endOfTag(html, lt)
-    if (end < 0) return out + html.slice(lt)
+    if (end < 0) return out + html.slice(i)
+    out += html.slice(i, lt) + between
     i = end
   }
   return out
@@ -372,10 +389,14 @@ function dropComments(html: string): string {
   }
 }
 
-/** Elements whose end means a line ended, so the text reads as it was laid out. */
+/**
+ * Elements whose end means a line ended, so the text reads as it was laid out.
+ * A tag body stops at the next `<` for the same reason ANCHOR_RE's does. A tag
+ * these miss still loses its markup in stripTags; only its line break is lost.
+ */
 const BLOCK_TAGS =
-  /<\s*\/?\s*(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|article|header|footer|td|th|pre)\b[^>]{0,1000}>/gi
-const LINE_BREAKS = /<\s*(?:br|hr)\b[^>]{0,1000}>/gi
+  /<\s*\/?\s*(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|article|header|footer|td|th|pre)\b[^<>]{0,1000}>/gi
+const LINE_BREAKS = /<\s*(?:br|hr)\b[^<>]{0,1000}>/gi
 
 /**
  * The words the victim read, pulled out of the HTML body.
@@ -434,77 +455,78 @@ function normaliseUrl(value: string): string {
 }
 
 /**
- * Suffixes under which the registrable name is the THIRD label from the right.
- *
- * ponytail: a short hand-written list, not the public suffix list — that is a
- * 15k-entry file that would have to ship and be kept current, and this is a
- * heuristic feeding a stated fact, not a gate. Names the ceiling: a look-alike
- * under a multi-label suffix not on this list is compared against the wrong
- * label and simply gets no fact, which is an absence, not a wrong answer.
+ * A value past its leading control bytes and spaces, for TESTING its shape
+ * only. The URL parser strips that run, so `\u0001javascript:` is followed as
+ * javascript:. What is shown and listed stays as written: the control byte is
+ * the tell. \p{Cc} is wider than what the parser strips (DEL and C1 too), which
+ * only lets such a value be listed; its scheme still comes from the parser.
  */
-const TWO_LABEL_SUFFIXES = new Set([
-  'co.uk',
-  'org.uk',
-  'me.uk',
-  'gov.uk',
-  'ac.uk',
-  'net.uk',
-  'sch.uk',
-  'com.au',
-  'net.au',
-  'org.au',
-  'gov.au',
-  'edu.au',
-  'id.au',
-  'co.nz',
-  'net.nz',
-  'org.nz',
-  'govt.nz',
-  'co.za',
-  'org.za',
-  'net.za',
-  'co.jp',
-  'or.jp',
-  'ne.jp',
-  'ac.jp',
-  'go.jp',
-  'co.kr',
-  'or.kr',
-  'com.br',
-  'com.mx',
-  'com.ar',
-  'com.sg',
-  'com.hk',
-  'com.cn',
-  'net.cn',
-  'org.cn',
-  'gov.cn',
-  'co.in',
-  'net.in',
-  'org.in',
-  'com.tr',
-  'com.tw',
-  'co.il',
-  'com.pl',
-  'com.ua'
+const stripLead = (value: string): string => value.replace(/^[\s\p{Cc}]+/u, '')
+
+/**
+ * Suffixes under which the site's own name is the THIRD label from the right,
+ * beyond the rule in suffixLabels.
+ *
+ * ponytail: a short hand-written rule and list, not the public suffix list —
+ * that is a 15k-entry file that would have to ship and be kept current, and
+ * this is a heuristic feeding a stated fact, not a gate. Names the ceiling: a
+ * host under a hosting platform (pages.dev, github.io) or a multi-label suffix
+ * the rule does not cover gets the platform or the suffix as its derived
+ * domain, which is why that line says "derived" and the Links section says
+ * what it is; and a brand entry written as a domain under such a suffix is
+ * compared against the suffix's label, which can state a name match that is
+ * not one. The upgrade path is the public suffix list.
+ */
+const TWO_LABEL_SUFFIXES = new Set(['me.uk', 'id.au', 'govt.nz'])
+
+/**
+ * Second labels that make a two-letter country code a two-label suffix:
+ * co.uk, com.au, co.id, com.vn, ne.jp, gob.mx and the like, in one line.
+ */
+const GENERIC_SECOND_LEVEL = new Set([
+  'com',
+  'co',
+  'net',
+  'org',
+  'gov',
+  'edu',
+  'ac',
+  'or',
+  'ne',
+  'go',
+  'mil',
+  'gob',
+  'gouv',
+  'ltd',
+  'plc',
+  'sch',
+  'nic'
 ])
 
-/** The registrable domain: `login.paypa1.co.uk` → `paypa1.co.uk`. */
+/** How many labels on the right are suffix, not the site's own name: 1, or 2 under a two-label suffix. */
+function suffixLabels(parts: string[]): number {
+  if (parts.length < 3) return 1
+  const [second, tld] = parts.slice(-2)
+  const twoLabel =
+    TWO_LABEL_SUFFIXES.has(`${second}.${tld}`) || (/^[a-z]{2}$/.test(tld) && GENERIC_SECOND_LEVEL.has(second))
+  return twoLabel ? 2 : 1
+}
+
+/**
+ * The derived domain: `login.paypa1.co.uk` → `paypa1.co.uk`. Derived from the
+ * labels alone, never checked against the public suffix list.
+ */
 export function apexDomain(host: string): string {
   const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
   if (parts.length < 2) return parts.join('.')
-  const lastTwo = parts.slice(-2).join('.')
-  if (parts.length >= 3 && TWO_LABEL_SUFFIXES.has(lastTwo)) return parts.slice(-3).join('.')
-  return lastTwo
+  return parts.slice(-(suffixLabels(parts) + 1)).join('.')
 }
 
 /** The registrable-ish label: `login.paypa1.co.uk` → `paypa1`. */
 function brandLabel(host: string): string {
   const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
   if (parts.length < 2) return parts[0] ?? ''
-  const lastTwo = parts.slice(-2).join('.')
-  if (parts.length >= 3 && TWO_LABEL_SUFFIXES.has(lastTwo)) return parts[parts.length - 3]
-  return parts[parts.length - 2]
+  return parts[parts.length - suffixLabels(parts) - 1]
 }
 
 /**
@@ -575,23 +597,43 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
     const url = normaliseUrl(value)
     // Any scheme, not just http(s): a mail whose only link is `data:` or
     // `javascript:` used to report "None found.", which reads as a clean mail.
-    if (/^[a-z][a-z0-9+.-]{1,15}:/i.test(url)) raws.add(url)
+    // Tested past a leading control run, which the URL parser strips: an href
+    // of `&#1;javascript:` is followed as javascript: and was dropped here.
+    // The value is kept as written, so the `<U+0001>` still shows.
+    if (/^[a-z][a-z0-9+.-]{1,15}:/i.test(stripLead(url))) raws.add(url)
   }
   // Bare URLs in BOTH bodies. The HTML is scanned with its tags stripped, so a
   // URL sitting in visible text or in a <meta refresh> content= is not missed.
   // That scan is the ONLY one that can turn anchor TEXT into a candidate, so
   // what it contributed is remembered: a decoy label is dropped below, but
   // only when no other scan found the same URL as a real destination.
+  //
+  // Stripped first and decoded last, as htmlToText does, through the linear
+  // quote-aware stripTags. Decoding first turned `&lt;` into a tag opener that
+  // swallowed the visible URL after it, and `<[^>]{0,2000}>` cost seconds per
+  // megabyte of `<`. Each tag still becomes a space, as it did under that
+  // regex: glued, `https://a.test/x</td><td>more` read as a URL the mail does
+  // not hold.
+  //
+  // ponytail: a space for every tag, inline ones too, so a URL split by `<b>`
+  // is read up to the tag, as it always was. Gluing across inline tags and
+  // breaking at block tags is the upgrade if a real lure needs it.
   for (const m of text.matchAll(URL_RE)) add(m[0])
   const fromVisibleText = new Set<string>()
-  for (const m of decodeEntities(html)
-    .replace(/<[^>]{0,2000}>/g, ' ')
-    .matchAll(URL_RE)) {
+  for (const m of decodeEntities(stripTags(html, ' ')).matchAll(URL_RE)) {
     const before = raws.size
     add(m[0])
     if (raws.size > before) fromVisibleText.add(normaliseUrl(m[0]))
   }
-  for (const m of html.matchAll(ATTR_RE)) add(m[1] ?? m[2] ?? m[3] ?? '')
+  // Every URL an attribute carries is somewhere a click or a load goes, so a
+  // decoy label equal to one of them is never dropped, whether or not the
+  // anchor scan managed to read that anchor.
+  const inAttributes = new Set<string>()
+  for (const m of html.matchAll(ATTR_RE)) {
+    const value = m[1] ?? m[2] ?? m[3] ?? ''
+    add(value)
+    inAttributes.add(normaliseUrl(value))
+  }
   for (const m of html.matchAll(CSS_URL_RE)) add(m[1])
   for (const m of html.matchAll(SRCSET_RE)) {
     for (const candidate of (m[1] ?? m[2] ?? '').split(',')) add(candidate.trim().split(/\s+/)[0] ?? '')
@@ -607,7 +649,7 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
     if (href) hrefs.add(href)
     const label = normaliseUrl(
       decodeEntities(m[4] ?? '')
-        .replace(/<[^>]{0,500}>/g, '')
+        .replace(/<[^<>]{0,500}>/g, '')
         .trim()
     )
     if (href && /^https?:\/\//i.test(label)) shown.set(href, label)
@@ -619,7 +661,7 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
   // genuinely clickable in a plain-text client, and deleting it took the
   // actual phishing destination out of the links, the indicators and the case.
   for (const label of shown.values()) {
-    if (!hrefs.has(label) && fromVisibleText.has(label)) raws.delete(label)
+    if (!hrefs.has(label) && !inAttributes.has(label) && fromVisibleText.has(label)) raws.delete(label)
   }
 
   const all = [...raws]
@@ -627,13 +669,21 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
   const out: LinkFinding[] = []
   for (const raw of kept) {
     const { target, wrappedBy } = unwrapUrl(raw)
-    const scheme = (/^([a-z][a-z0-9+.-]{1,15}):/i.exec(target)?.[1] ?? '').toLowerCase()
-    // The authority as WRITTEN, before the parser punycodes or lowercases it.
-    const rawHost = (/^[a-z][a-z0-9+.-]{1,15}:\/\/(?:[^/?#@]*@)?([^/?#:]+)/i.exec(target)?.[1] ?? '').toLowerCase()
+    let scheme = (/^([a-z][a-z0-9+.-]{1,15}):/i.exec(target)?.[1] ?? '').toLowerCase()
+    // The authority as WRITTEN, before the parser punycodes or lowercases it,
+    // read past the leading control run the parser strips.
+    const rawHost = (
+      /^[a-z][a-z0-9+.-]{1,15}:\/\/(?:[^/?#@]*@)?([^/?#:]+)/i.exec(stripLead(target))?.[1] ?? ''
+    ).toLowerCase()
     let host = ''
     let userinfo = ''
     try {
       const parsed = new URL(target)
+      // The parser's own answer, not the pattern's: it strips a leading
+      // control byte or space and every tab or newline, so `%01javascript:`
+      // and `java%09script:` are javascript: links the pattern could not see.
+      // A prefix it does not strip (DEL, NBSP) throws, and gets no scheme.
+      scheme = parsed.protocol.slice(0, -1)
       host = parsed.hostname.toLowerCase()
       userinfo = parsed.username
     } catch {
@@ -680,6 +730,21 @@ const DISK_IMAGE = /\.(iso|img|vhdx?)$/i
  */
 export const ARCHIVE_FACT = 'archive — its contents are not visible from here'
 
+/** Said about a disk image from its name alone. */
+export const DISK_IMAGE_FACT = 'disk image — the files inside it are not listed here'
+
+/**
+ * What DISK_IMAGE_FACT becomes once the ZIP reader has listed entries. Not
+ * dropped, as ARCHIVE_FACT is: a ZIP at byte 0 fits in an ISO's unused first
+ * 32 KB, and the file system a double-click mounts is still unread. So the
+ * sentence scopes the list to the ZIP directory and keeps the caveat.
+ */
+export const DISK_IMAGE_AS_ZIP_FACT =
+  'named as a disk image, but the bytes begin as a ZIP — the entries listed are the ZIP directory’s; a disk image file system in the same bytes is not read here'
+
+/** Said about a part from its own headers; the Inline images heading already says it for that block. */
+const INLINE_FACT = 'marked inline or given a Content-ID by its own headers'
+
 /** Stated facts about an attachment. No scoring, no "malicious". */
 export function attachmentFacts(attachment: Attachment): string[] {
   const facts: string[] = []
@@ -687,14 +752,28 @@ export function attachmentFacts(attachment: Attachment): string[] {
   if (EXECUTABLE.test(name)) facts.push('executable or script file type')
   if (MACRO_CAPABLE.test(name)) facts.push('file type that can carry macros')
   if (ARCHIVE.test(name)) facts.push(ARCHIVE_FACT)
-  if (DISK_IMAGE.test(name)) facts.push('disk image — the files inside it are not listed here')
-  // `invoice.pdf.exe` reads as a PDF in a client that hides known extensions.
-  const doubled = /\.(pdf|doc|docx|xls|xlsx|jpg|png|txt|htm|html)\.[a-z0-9]{2,4}$/i.exec(name)
-  if (doubled) facts.push(`double extension — reads as ${doubled[1].toLowerCase()} but is not`)
+  if (DISK_IMAGE.test(name)) facts.push(DISK_IMAGE_FACT)
+  // `invoice.pdf.exe` reads as a PDF in a client that hides the last extension.
+  // Only what the name shows is said: Windows hides only registered
+  // extensions, and `Invoice.pdf.pdf` or `scan.jpg.jpeg`, which scanners write,
+  // name the same type twice, so "reads as pdf but is not" was false there.
+  const doubled = /\.(pdf|doc|docx|xls|xlsx|jpg|png|txt|htm|html)\.([a-z0-9]{2,4})$/i.exec(name)
+  // ponytail: jpeg/jpg and html/htm are the only alias pairs among these types.
+  const kind = (ext: string): string =>
+    ext
+      .toLowerCase()
+      .replace(/^jpeg$/, 'jpg')
+      .replace(/^html$/, 'htm')
+  if (doubled && kind(doubled[1]) !== kind(doubled[2])) {
+    const [first, last] = [doubled[1].toLowerCase(), doubled[2].toLowerCase()]
+    facts.push(
+      `double extension — the name ends .${first}.${last}; with the last extension hidden it reads as .${first}`
+    )
+  }
   if (/[‪-‮⁦-⁩]/.test(name)) facts.push('contains a bidirectional override character')
   // Only what the part's own headers say. Nothing here checks that the body
   // actually refers to it, so "referenced by the body" was a claim no one made.
-  if (attachment.inline) facts.push('marked inline or given a Content-ID by its own headers')
+  if (attachment.inline) facts.push(INLINE_FACT)
   return facts
 }
 
@@ -816,7 +895,10 @@ const SIGNATURES: { magic: number[]; label: string }[] = [
   { magic: [0x4d, 0x5a], label: 'Windows executable (MZ)' },
   { magic: [0x7f, 0x45, 0x4c, 0x46], label: 'Linux executable (ELF)' },
   { magic: [0x25, 0x50, 0x44, 0x46], label: 'PDF' },
-  { magic: [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1], label: 'legacy Office document (OLE)' },
+  // Those eight bytes say compound file and nothing more: a password-protected
+  // .xlsx, an .msi and the vbaProject.bin inside every .docm begin the same
+  // way, and "legacy Office document" was false about all three.
+  { magic: [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1], label: 'OLE compound file' },
   { magic: [0x50, 0x4b, 0x03, 0x04], label: 'ZIP archive or modern Office document' },
   { magic: [0x50, 0x4b, 0x05, 0x06], label: 'empty ZIP archive' },
   { magic: [0x52, 0x61, 0x72, 0x21], label: 'RAR archive' },
@@ -858,7 +940,7 @@ const EXT_EXPECTS: { ext: RegExp; label: RegExp }[] = [
   // attachmentFacts already calls out — so a .docm that is really a PE was
   // flagged as macro-capable and NOT flagged as mislabelled.
   { ext: /\.(docm|dotm|xlsm|xltm|xlam|pptm|potm|ppam)$/i, label: /ZIP/ },
-  { ext: /\.(jpg|jpeg)$/i, label: /JPEG/ },
+  { ext: /\.(jpg|jpeg|jfif)$/i, label: /JPEG/ },
   { ext: /\.png$/i, label: /PNG/ },
   { ext: /\.gif$/i, label: /GIF/ },
   { ext: /\.rtf$/i, label: /RTF/ },
@@ -1033,14 +1115,24 @@ export function caseIocs(report: PhishReport, raw: string): Ioc[] {
 }
 
 /**
- * What one part adds to the indicators: its own hash, the values the structure
- * readers found in it, and the hashes of the files inside it. Each carries the
- * note a case keeps, with the sender's names escaped for display.
+ * What one part adds to the indicators: its own hash, the headers of a
+ * forwarded message, the values the structure readers found in it, and the
+ * hashes of the files inside it. Each carries the note a case keeps, with the
+ * sender's names escaped for display.
+ *
+ * A forwarded message's headers are parsed structure, like a /URI, not a scan
+ * of arbitrary bytes: they hold the phisher's own From and originating IP,
+ * which a case opened from the reporter's mail otherwise never carried.
  */
 function partIocs(part: AttachmentReport): Ioc[] {
   const name = visibleName(part.filename)
   const out: Ioc[] = []
   if (part.sha256) out.push({ type: 'hash', value: part.sha256, note: `${name} (hashed here)` })
+  if (part.sha256 && /^message\/rfc822$/i.test(part.contentType)) {
+    for (const ioc of extractIocsFromText(headerBlockOf(utf8Text(part.bytes.subarray(0, STRINGS_CAP))), [])) {
+      out.push({ ...ioc, note: `in the headers of ${name}` })
+    }
+  }
   for (const ioc of structureIocValues(part.pdf, part.office)) out.push({ ...ioc, note: `inside ${name}` })
   for (const file of part.office?.files ?? []) {
     if (file.sha256) {
@@ -1108,7 +1200,9 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
   const wireExact = a.exact
   const { pdf, office, ole, failed } = await readStructure(a.bytes, sniffed, media)
   // The name said the contents could not be seen, and the ZIP reader has just listed them.
-  const named = office?.entries.length ? facts.filter((f) => f !== ARCHIVE_FACT) : facts
+  const named = office?.entries.length
+    ? facts.flatMap((f) => (f === ARCHIVE_FACT ? [] : f === DISK_IMAGE_FACT ? [DISK_IMAGE_AS_ZIP_FACT] : [f]))
+    : facts
 
   // Indicators carried INSIDE the file's bytes, kept as their own list and
   // never merged into the mail's own links: where an indicator was found is
@@ -1116,17 +1210,37 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
   // when it was really inside a spreadsheet has been told something untrue.
   // A value a structure reader found is already on the card beside where it
   // was found — a /URI, a relationship target — so it is not printed again.
-  const scan = scanText(a.bytes)
+  //
+  // A shortcut's strings are read by their own counts and scanned one per
+  // line, with their bytes blanked from the plain scan: read as text, each
+  // count ran on into the string before it, and `…/view.hta` followed by an
+  // icon path of 33 characters read as `…/view.hta!%SystemRoot%`.
+  const shortcut = sniffed === 'Windows shortcut (LNK)' ? lnkStrings(a.bytes) : null
+  const scan = scanText(shortcut ? shortcut.blanked : a.bytes)
   const structural = new Set(structureIocValues(pdf, office).map((ioc) => ioc.value.toLowerCase()))
-  const found = extractIocsFromText(`${scan.utf8}\n${scan.utf16}`, []).filter(
+  // A /URI literal string with an escape in it reads, raw, as the front of
+  // its URL and a tail after the escape: `(https://ev\151l.com/a)` gave
+  // `hxxps://ev` and `151l[.]com`, values the file does not hold. The reader
+  // has decoded it and it is on the card, so it is blanked here. Unescaped
+  // strings scan exactly as they decode, and the filter below drops those.
+  const utf8 = pdf
+    ? scan.utf8.replace(/\/URI\s*\((?:[^()\\]|\\[\s\S])*\)/g, (m) => (m.includes('\\') ? ' ' : m))
+    : scan.utf8
+  const found = extractIocsFromText(`${utf8}\n${scan.utf16}${shortcut ? `\n${shortcut.text}` : ''}`, []).filter(
     (ioc) => !structural.has(ioc.value.toLowerCase())
   )
   const inside = found.slice(0, 100).map((ioc) => formatIocLine(ioc, owned))
   const count = (n: number): string => n.toLocaleString('en-US')
+  // Scoped to the scan that skipped the bytes. A structure reader reads the
+  // file on its own, and what it found in those bytes is listed beside this.
+  const reader = pdf ? 'PDF' : office ? 'ZIP' : ole ? 'compound-file' : ''
   const scanFacts = [
     ...(scan.between
       ? [
-          `indicators were read from the first ${count(scan.head)} and the last ${count(scan.tail)} bytes; the ${count(scan.between)} bytes between were not scanned for indicators or script names`
+          `the text scan for indicators and script names read the first ${count(scan.head)} and the last ${count(scan.tail)} bytes; it did not read the ${count(scan.between)} bytes between` +
+            (reader
+              ? `; the ${reader} structure reader read this file separately, and its lines are listed separately`
+              : '')
         ]
       : []),
     // The list stops at 100, and says so, so the hundredth line is not read as the last.
@@ -1178,6 +1292,9 @@ export function entriesRead(n: number, directory = 'the ZIP directory'): string 
   return `${n} entr${n === 1 ? 'y' : 'ies'} read from ${directory}`
 }
 
+/** Sniffed types that hold other files or objects: the archives, a compound file, a PDF. */
+const CONTAINER = /ZIP|RAR|7-Zip|gzip|cabinet|OLE|PDF/
+
 /** One row per entry with something to say about it. The name is raw, for matching; escape it with visibleName to show it. */
 export interface FlaggedEntry {
   name: string
@@ -1215,7 +1332,11 @@ export function flaggedOleEntries(ole: CfbFacts): (FlaggedEntry & { type: string
 export function innerFileFacts(file: InnerFileReport): string {
   return [
     file.mismatch || (file.sniffed ? `bytes begin as ${file.sniffed}` : ''),
-    file.sha256 ? `SHA-256 ${file.sha256} (computed here)` : 'not read whole, so not hashed here'
+    file.sha256 ? `SHA-256 ${file.sha256} (computed here)` : 'not read whole, so not hashed here',
+    // Only the attachment itself goes through a structure reader, so an
+    // archive, compound file or PDF inside it is typed and hashed, never
+    // opened. Silence there would read as nothing inside.
+    CONTAINER.test(file.sniffed) && !file.sniffed.startsWith('empty') ? 'its own contents are not listed here' : ''
   ]
     .filter(Boolean)
     .join('; ')
@@ -1275,8 +1396,19 @@ export function structureLines(a: AttachmentReport): string[] {
   return lines
 }
 
+/**
+ * Whether an embedded stream's own bytes are a picture: one this draws, or a
+ * JPEG 2000 image it names but does not draw. A /DCTDecode stream or an entry
+ * named photo.jpg whose bytes are a program is not one, and calling it an
+ * embedded picture was false. The card uses the same rule for its wording.
+ */
+export function isPicture(sniffed: string): boolean {
+  return Boolean(drawableType(sniffed)) || /^J(P2|2K) /.test(sniffed)
+}
+
 function imageLine(image: EmbeddedImage): string {
-  return `  - embedded picture ${quoteUntrusted(visibleName(image.where))}: ${image.sniffed || 'type not recognised'}, ${image.bytes.length} bytes, SHA-256 ${image.sha256} (computed here)`
+  const noun = isPicture(image.sniffed) ? 'embedded picture' : 'embedded stream'
+  return `  - ${noun} ${quoteUntrusted(visibleName(image.where))}: ${image.sniffed || 'type not recognised'}, ${image.bytes.length} bytes, SHA-256 ${image.sha256} (computed here)`
 }
 
 /** The last segment of a relationship Type URI — `attachedTemplate`, `oleObject`, `hyperlink` — which is the part that says what it is for. */
@@ -1304,15 +1436,37 @@ async function readStructure(
   // so such a file never reached the reader and its /OpenAction and hex /URI
   // went unread with no note. Only a real header inside the window readPdf
   // itself searches counts: a text file with `endobj … %%EOF` in it is not a PDF.
-  const pdfHeader = !sniffed && /%PDF-\d\.\d/.test(String.fromCharCode(...bytes.subarray(0, 1040)))
+  // A prefix another signature recognises counts too — an MZ, JPEG or GIF
+  // stub in front is what a polyglot is — except a ZIP or compound file,
+  // which have readers of their own.
+  const pdfHeader =
+    sniffed !== 'PDF' && !/ZIP|OLE/.test(sniffed) && /%PDF-\d\.\d/.test(String.fromCharCode(...bytes.subarray(0, 1040)))
   try {
     if (sniffed === 'PDF' || pdfHeader) {
       const facts = readPdf(bytes)
-      if (!facts || (!sniffed && !facts.version)) return {}
-      const images = await identify(
-        facts.images.map((i) => ({ where: `byte ${i.offset} (${i.filter})`, bytes: i.bytes }))
-      )
-      return { pdf: { ...facts, images } }
+      if (!facts || (pdfHeader && !facts.version)) return {}
+      // PDF pictures draw on the message's budget as the ZIP reader's do.
+      // Each PDF holds up to 12 MiB of them, so twenty PDFs held 240 MB
+      // between them, every byte hashed and drawn on each render. Charged
+      // before identify(), so what is not kept is not hashed either. In order,
+      // and stopping at the first that does not fit, so "read before them" is
+      // what happened. "Image stream", not "picture": these are not sniffed
+      // yet, and a /DCTDecode stream is not always a picture.
+      const kept: typeof facts.images = []
+      for (const image of facts.images) {
+        if (image.bytes.length > media.left) break
+        media.left -= image.bytes.length
+        kept.push(image)
+      }
+      const cut = facts.images.length - kept.length
+      const notes = cut
+        ? [
+            ...facts.notes,
+            `${cut} image stream${cut === 1 ? ' was' : 's were'} extracted and not kept: this message's budget for pictures and inner files was used up by what was read before ${cut === 1 ? 'it, so it is' : 'them, so they are'} not hashed or drawn — unread, not absent.`
+          ]
+        : facts.notes
+      const images = await identify(kept.map((i) => ({ where: `byte ${i.offset} (${i.filter})`, bytes: i.bytes })))
+      return { pdf: { ...facts, notes, images } }
     }
     if (/ZIP/.test(sniffed)) {
       const facts = await readZipDocument(bytes, media)
@@ -1343,7 +1497,10 @@ async function readStructure(
     }
     return {}
   } catch {
-    return { failed: `the ${sniffed || 'PDF'} structure reader stopped on this file, so its contents are not listed` }
+    // Named for the reader that ran: a PDF behind a JPEG stub is read by the
+    // PDF reader, and there is no JPEG structure reader to have stopped.
+    const reader = pdfHeader ? 'PDF' : sniffed || 'PDF'
+    return { failed: `the ${reader} structure reader stopped on this file, so its contents are not listed` }
   }
 }
 
@@ -1355,21 +1512,28 @@ async function readStructure(
  * itself, so they join the message's indicator list and the case, and not
  * only the attachment's card.
  *
- * A template written as a UNC or file:// path names a remote host too — the
- * WebDAV form `\\host@SSL\DavWWWRoot\t.dotm` fetches from it — but the prose
- * scan knows only http(s) and a short list of TLDs, so the host is read off
- * the front of the path. Only a dotted name counts: `\\.\pipe\x`, a
- * single-label `\\fileserver` and `file:///C:/` name nothing to look up.
+ * A template or a PDF link written as a UNC or file:// path names a remote
+ * host too — the WebDAV form `\\host@SSL\DavWWWRoot\t.dotm` fetches from it,
+ * and so does a PDF link to a share — but the prose scan knows only http(s)
+ * and a short list of TLDs, so the host is read off the front of the path.
+ * The forms read are `\\host\…`, `file://host/…`, and a file URL with an
+ * empty authority followed by a UNC path: `file:///\\host\…` (how Office
+ * writes a template on a share), `file:////host/…` and `file://///host/…`.
+ * Only a dotted name counts: `\\.\pipe\x`, a single-label `\\fileserver` and
+ * `file:///C:/` name nothing to look up. `file:///opt.local/x` is a local path,
+ * not a host, and `file://user@host/` is not read, so a username is never
+ * listed as a domain.
  *
- * ponytail: the two plain prefixes only. The long form `\\?\UNC\host\…` and a
- * `file:` URL with one slash are left to the card, which shows every target
- * as written; add them here if one turns up in a real template.
+ * ponytail: the long form `\\?\UNC\host\…` and a `file:` URL with one slash
+ * are left to the card, which shows every target as written; add them here if
+ * one turns up in a real template.
  */
 function structureIocValues(pdf: PdfStructure | undefined, office: OfficeStructure | undefined): Ioc[] {
   const extra = [...(pdf?.uris ?? []), ...(office?.externalTargets.map((t) => t.target) ?? [])]
   const out = extra.length ? extractIocsFromText(extra.join('\n'), []) : []
-  for (const t of office?.externalTargets ?? []) {
-    const host = /^(?:\\\\|file:\/\/)([^\\/@:]+)/i.exec(t.target)?.[1]
+  for (const target of extra) {
+    const m = /^(?:\\\\([^\\/@:]+)|file:\/\/(?:[\\/]{2,})?([^\\/@:]+)(?=[\\/:]|$))/i.exec(target)
+    const host = m?.[1] ?? m?.[2]
     if (host && /^[\w-]+(?:\.[\w-]+)+$/.test(host)) out.push({ type: detectIocType(host), value: host })
   }
   return out
@@ -1410,6 +1574,45 @@ function scanText(bytes: Uint8Array): { utf8: string; utf16: string; head: numbe
   }
 }
 
+/**
+ * A shortcut's StringData (MS-SHLLINK 2.4), read by its own counts: the name,
+ * relative path, working directory, arguments and icon location, one per line,
+ * plus the file with those bytes zero-filled for the plain scan.
+ *
+ * The strings carry no terminator, only a count in front of each, and a count
+ * from 32 to 126 is a printable character. Read as text, the arguments' URL
+ * ran into the icon path's count and the path after it, and a count of 68
+ * ('D') glued a URL to the working directory so it was never found at all.
+ *
+ * Every read is bounded by the file's length. A layout that does not parse to
+ * the end of the strings its flags declare returns null, and the caller scans
+ * the file as it did before. Only StringData is read this way; the ID list,
+ * LinkInfo and ExtraData stay with the plain scan.
+ */
+function lnkStrings(bytes: Uint8Array): { text: string; blanked: Uint8Array } | null {
+  const u16 = (at: number): number => bytes[at] | (bytes[at + 1] << 8)
+  const flags = bytes[0x14]
+  const unicode = (flags & 0x80) !== 0
+  let at = 0x4c
+  if (flags & 0x01) at += 2 + u16(at) // HasLinkTargetIDList: a u16 size, then the list
+  if (flags & 0x02) at += u16(at) + u16(at + 2) * 0x10000 // HasLinkInfo: a u32 size that counts itself
+  const from = at
+  const strings: string[] = []
+  // HasName, HasRelativePath, HasWorkingDir, HasArguments, HasIconLocation, in that order.
+  for (let bit = 0x04; bit <= 0x40; bit <<= 1) {
+    if (!(flags & bit)) continue
+    if (at + 2 > bytes.length) return null
+    const length = u16(at) * (unicode ? 2 : 1)
+    at += 2
+    if (at + length > bytes.length) return null
+    strings.push(new TextDecoder(unicode ? 'utf-16le' : 'latin1').decode(bytes.subarray(at, at + length)))
+    at += length
+  }
+  const blanked = bytes.slice()
+  blanked.fill(0, from, at)
+  return { text: strings.join('\n'), blanked }
+}
+
 function utf8Text(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8').decode(bytes)
@@ -1443,18 +1646,56 @@ function utf16Runs(bytes: Uint8Array, cutStart: boolean, cutEnd: boolean): strin
       i += 2
       continue
     }
-    // Ended by a control byte — a NUL, a line break, the low byte of a length
-    // field — the run is whole. Ended by anything else, a letter outside ASCII
-    // or bytes that are not text, its last word may carry on past what was
-    // read: `https://ex.test/pa` read off the front of `https://ex.test/paтh`
+    // Ended by a control character — a NUL, a line break, both bytes of the
+    // code unit — the run is whole. Ended by anything else, a letter outside
+    // ASCII or bytes that are not text, its last word may carry on past what
+    // was read: `https://ex.test/pa` read off the front of `https://ex.test/paтh`
     // is a URL the file does not hold, so the run is cut back to its last space.
-    if (byte >= 0x20) run = run.slice(0, run.lastIndexOf(' ') + 1)
+    // The high byte counts: `Д` is 14 04 and `č` is 0D 01, letters whose low
+    // byte alone looked like a control, and ended a URL mid-word as if whole.
+    if (!(byte < 0x20 && bytes[i + 1] === 0)) run = run.slice(0, run.lastIndexOf(' ') + 1)
     if (run.length >= 6 && !(cutStart && start < 2)) runs.push(run)
     run = ''
     i++
   }
   if (run.length >= 6 && !cutEnd && !(cutStart && start < 2)) runs.push(run)
   return runs.join('\n')
+}
+
+/**
+ * The Links section's own words, shared by the report and the Links tab so the
+ * two cannot drift apart.
+ *
+ * Scoped to the message text, because that is all extractLinks reads: a mail
+ * whose only lure is a PDF /URI said "Links: None found." above an Attachments
+ * section listing it. The pointer to Attachments is there whenever there are
+ * attachments, whatever the readers found, because a note that appears only
+ * sometimes reads as "none" when it is missing.
+ */
+export function linksSection(report: Pick<PhishReport, 'links' | 'attachments'>): {
+  heading: string
+  none: string
+  notes: string[]
+} {
+  return {
+    heading: 'Links in the message text',
+    none: 'None found in the message text.',
+    notes: [
+      ...(report.links.some(showsDerivedDomain)
+        ? [
+            'Derived domain = the host’s last two labels, or three under a two-label suffix; no public suffix list is consulted, so under a hosting platform (pages.dev, github.io) it names the platform, not the site’s owner.'
+          ]
+        : []),
+      ...(report.attachments.length
+        ? ['Anything found inside an attachment is listed with that attachment, under Attachments.']
+        : [])
+    ]
+  }
+}
+
+/** A link row prints its derived domain only when it says something the host does not. */
+export function showsDerivedDomain(link: LinkFinding): boolean {
+  return Boolean(link.apexDomain) && link.apexDomain !== link.host
 }
 
 /**
@@ -1472,20 +1713,22 @@ export function formatPhishReport(report: PhishReport): string {
     for (const fact of report.senderFacts) lines.push(`- ${quoteUntrusted(fact)}`)
     lines.push('')
   }
-  lines.push('### Links', '')
+  const section = linksSection(report)
+  lines.push(`### ${section.heading}`, '')
   if (report.links.length) {
     for (const link of report.links) {
       const wrapped = link.wrappedBy ? ` (unwrapped from ${link.wrappedBy})` : ''
       lines.push(`- ${quoteUntrusted(defangIoc(link.target, 'url'))}${wrapped}`)
-      if (link.apexDomain && link.apexDomain !== link.host) {
-        lines.push(`  - domain ${quoteUntrusted(defangIoc(link.apexDomain, 'domain'))}`)
+      if (showsDerivedDomain(link)) {
+        lines.push(`  - derived domain ${quoteUntrusted(defangIoc(link.apexDomain, 'domain'))}`)
       }
       for (const flag of link.flags) lines.push(`  - ${quoteUntrusted(flag)}`)
     }
     if (report.droppedLinks > 0) lines.push(`- ${report.droppedLinks} further links are not listed.`)
   } else {
-    lines.push('None found.')
+    lines.push(section.none)
   }
+  for (const note of section.notes) lines.push('', note)
   lines.push('', '### Attachments', '')
   if (report.attachments.length) {
     for (const a of report.attachments) {
@@ -1502,20 +1745,26 @@ export function formatPhishReport(report: PhishReport): string {
   } else {
     lines.push('None.')
   }
+  if (report.inlineImages.length) {
+    lines.push('', '### Inline images — marked inline or given a Content-ID by their own headers', '')
+    // What the card shows, less the SHA-1, the MD5 and the one fact the
+    // heading already states: a PDF named as a picture, or a beacon URL in a
+    // picture's bytes, reached the card and neither the report nor the case.
+    for (const a of report.inlineImages) {
+      lines.push(`- ${quoteUntrusted(visibleName(a.filename))} — ${quoteUntrusted(a.contentType)}, ${a.size} bytes`)
+      if (a.sha256) lines.push(`  - SHA-256 ${a.sha256} (computed here)`)
+      if (a.sniffed) lines.push(`  - bytes begin as ${a.sniffed}`)
+      for (const fact of a.facts) if (fact !== INLINE_FACT) lines.push(`  - ${quoteUntrusted(fact)}`)
+      for (const found of a.inside) lines.push(`  - found inside the file: ${quoteUntrusted(found)}`)
+    }
+  }
+
   // The message itself. The screen told the analyst the copied report carried
   // the rest of a truncated body, and it carried none of it — the body reached
   // no section at all, so a case created from the analysis held an analysis of
   // a mail whose text was nowhere. Fenced with a backtick run longer than
   // anything inside it, so hostile markdown cannot close its own block, and
   // nothing inside a fence autolinks.
-  if (report.inlineImages.length) {
-    lines.push('', '### Inline images', '')
-    for (const a of report.inlineImages) {
-      lines.push(`- ${quoteUntrusted(visibleName(a.filename))} — ${quoteUntrusted(a.contentType)}, ${a.size} bytes`)
-      if (a.sha256) lines.push(`  - SHA-256 ${a.sha256} (computed here)`)
-    }
-  }
-
   lines.push('', '### Message body', '')
   if (report.text.trim() || report.htmlSource.trim()) {
     if (report.text.trim()) lines.push('Plain text:', '', fenced(report.text.trim()), '')
