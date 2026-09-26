@@ -63,6 +63,12 @@ export interface HeaderAnalysis {
   observations: Observation[]
   /** What this paste does not contain, said out loud. */
   notes: string[]
+  /**
+   * The From address read as written, encoded words left out (RFC 2047 allows
+   * none in an address). The sender checks read this, never the decoded From
+   * identity, whose decoded characters can pose as address syntax.
+   */
+  fromAddress: string
 }
 
 /**
@@ -412,8 +418,15 @@ function parseAuth(value: string, arc = false): AuthResult[] {
  */
 export function analyseHeaders(raw: string): HeaderAnalysis {
   const fields = parseHeaderBlock(raw)
-  const first = (name: string): string =>
-    decodeEncodedWords(fields.find((f) => f.name.toLowerCase() === name)?.value ?? '')
+  const rawOf = (name: string): string => fields.find((f) => f.name.toLowerCase() === name)?.value ?? ''
+  // Decoded, for display. Never parsed for an address: see addressIn.
+  const first = (name: string): string => decodeEncodedWords(rawOf(name))
+  // RFC 2047 allows encoded words in a display name or a comment, never in
+  // the address, so they are blanked before the address is read. Decoded
+  // first, `<security@=?utf-8?q?paypal.test?=>` read as paypal.test and an
+  // encoded `=3Csecurity@paypal.test=3E` as a second address, and both were
+  // reported as aligned with a Return-Path at paypal.test.
+  const addressIn = (name: string): string => addressOf(rawOf(name).replace(ENCODED_WORD, ' '))
   const all = (name: string): string[] => fields.filter((f) => f.name.toLowerCase() === name).map((f) => f.value)
 
   const identities: { label: string; value: string }[] = []
@@ -472,10 +485,20 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
     }
   }
 
-  const fromAddr = addressOf(first('from'))
-  const returnAddr = addressOf(first('return-path'))
-  const replyAddr = addressOf(first('reply-to'))
+  const fromAddr = addressIn('from')
+  const returnAddr = addressIn('return-path')
+  const replyAddr = addressIn('reply-to')
   const observations: Observation[] = []
+  // What decoding does to the From address, stated both ways and nothing
+  // more: mail clients differ on whether they decode words there at all.
+  const decodedFrom = addressOf(first('from'))
+  if (decodedFrom !== fromAddr) {
+    const names = (address: string): string => (domainOf(address) ? `it is ${address}` : 'it names no complete address')
+    observations.push({
+      text: `Decoding the encoded words in From changes the address it names: read as written ${names(fromAddr)}; decoded ${names(decodedFrom)}.`,
+      aligned: false
+    })
+  }
   const compare = (aLabel: string, a: string, bLabel: string, b: string): void => {
     if (!a || !b) return
     const da = domainOf(a)
@@ -532,9 +555,12 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   // The display name is everything before the real address. An address hiding
   // in there is the oldest trick in the file — a client shows the display name
   // and the reader never sees the domain the mail actually came from.
-  const fromRaw = first('from')
+  // Split where the value as written puts its last `<`, then decode only the
+  // part before it: an encoded display name still gives up the address it
+  // hides, but decoding can no longer move the split.
+  const fromRaw = rawOf('from')
   const lastAngle = fromRaw.lastIndexOf('<')
-  const displayPart = lastAngle > 0 ? fromRaw.slice(0, lastAngle) : ''
+  const displayPart = lastAngle > 0 ? decodeEncodedWords(fromRaw.slice(0, lastAngle)) : ''
   // A scan starts only where a run of address characters starts. Unanchored,
   // it restarted at every character of a long run with no `@`: seconds on a
   // 100 KB display name, even an innocent quoted one.
@@ -568,7 +594,7 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   if (!returnAddr) notes.push('No Return-Path — the envelope sender is not recorded.')
   if (hops.some((h) => !h.at)) notes.push('One or more hops stated no time, so those gaps are not measurable.')
 
-  return { identities, auth, hops, observations, notes }
+  return { identities, auth, hops, observations, notes, fromAddress: fromAddr }
 }
 
 /** The analysis as markdown, for the clipboard or a case note. */

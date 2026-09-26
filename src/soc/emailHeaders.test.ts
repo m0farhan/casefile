@@ -475,6 +475,45 @@ describe('who asserted an authentication result', () => {
   })
 })
 
+describe('encoded words never move the From address', () => {
+  const texts = (raw: string) => analyseHeaders(raw).observations.map((o) => o.text)
+
+  it('does not read an encoded word inside the address as its domain', () => {
+    const raw =
+      'Return-Path: <bounce@paypal.test>\nFrom: <security@=?utf-8?q?paypal.test?=>\n' +
+      'Authentication-Results: mx.corp.test; dkim=pass header.d=paypal.test'
+    expect(texts(raw).join('\n')).not.toMatch(/both at|which is the From domain/)
+    expect(texts(raw)).toContain(
+      'Decoding the encoded words in From changes the address it names: read as written it names no ' +
+        'complete address; decoded it is security@paypal.test.'
+    )
+    expect(analyseHeaders(raw).fromAddress).toBe('security@')
+  })
+
+  it('reads the address a receiver’s DMARC check reads when decoding forges a second one', () => {
+    const raw =
+      'Return-Path: <service@paypal.com>\n' +
+      'From: =?utf-8?q?PayPal_=22?= <attacker@paypa1.com> (=?utf-8?q?=22?=<service@paypal.com>)'
+    expect(texts(raw)).toContain('From is at paypa1.com; Return-Path is at paypal.com. They differ.')
+    expect(texts(raw)).toContain(
+      'Decoding the encoded words in From changes the address it names: read as written it is ' +
+        'attacker@paypa1.com; decoded it is service@paypal.com.'
+    )
+    expect(analyseHeaders(raw).fromAddress).toBe('attacker@paypa1.com')
+  })
+
+  it('does not take an encoded angle address after the real one', () => {
+    const raw = 'Return-Path: <bounce@paypal.test>\nFrom: <x@evil.test> =?utf-8?q?=3Csecurity@paypal.test=3E?='
+    expect(texts(raw)).toContain('From is at evil.test; Return-Path is at paypal.test. They differ.')
+  })
+
+  it('still finds an address hidden in an encoded display name, and says nothing about decoding', () => {
+    const found = texts('From: =?utf-8?q?service=40paypal.com?= <attacker@evil.test>')
+    expect(found).toContain('The display name contains an address at paypal.com, which is not the sending domain.')
+    expect(found.join('\n')).not.toContain('Decoding')
+  })
+})
+
 describe('adjacent encoded words', () => {
   it('drop the space a fold put between them', () => {
     expect(decodeEncodedWords('=?UTF-8?B?UGF5?= =?UTF-8?B?UGFs?=')).toBe('PayPal')
