@@ -139,6 +139,18 @@ describe('parseReputation - VirusTotal', () => {
     expect(parseReputation('virustotal', 200, 'not json').verdict).toBe('unknown')
     expect(parseReputation('virustotal', 200, '{}').verdict).toBe('unknown')
   })
+
+  it('marks the failures worth asking again, and only those', () => {
+    // Check all re-sends rows whose lookup got no answer. A rate limit or a
+    // server error can clear by itself; 'not found' and 'key rejected' are
+    // answers, and asking again would only spend quota.
+    expect(parseReputation('virustotal', 429, '').transient).toBe(true)
+    expect(parseReputation('abuseipdb', 503, '').transient).toBe(true)
+    expect(parseReputation('urlhaus', 500, '').transient).toBe(true)
+    expect(parseReputation('virustotal', 401, '').transient).toBeUndefined()
+    expect(parseReputation('virustotal', 404, '').transient).toBeUndefined()
+    expect(parseReputation('virustotal', 400, '').transient).toBeUndefined()
+  })
 })
 
 describe('parseReputation - AbuseIPDB', () => {

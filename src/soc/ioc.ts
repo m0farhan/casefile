@@ -107,6 +107,40 @@ export function refangIoc(value: string): string {
     .replace(/^\[\\\\\]/, '\\\\')
 }
 
+/**
+ * An activity entry's value, ready to print. Indicator rows are defanged the
+ * way every other indicator line is; the stored entry stays real, so history
+ * is untouched. An entry records no type, and a removed indicator is no longer
+ * on the task to ask, so the type is read from the value itself.
+ */
+export function activityValue(field: string, v: string): string {
+  return field === 'iocs' && v ? defangIoc(v, detectIocType(v)) : v
+}
+
+/**
+ * The key two indicators are the same by. Hosts, addresses and hashes do not
+ * depend on case, so they compare lower-cased. A URL keeps its exact spelling:
+ * its path is case-sensitive, and bit.ly/3XkQ and bit.ly/3xKq are two links.
+ */
+export function iocKey(ioc: Pick<Ioc, 'type' | 'value'>): string {
+  return `${ioc.type}:${ioc.type === 'url' ? ioc.value : ioc.value.toLowerCase()}`
+}
+
+/** Punctuation that closes the sentence around an indicator, ASCII or typographic. */
+const PROSE_TAIL = `),.;:!?'"]’”»›`
+
+/**
+ * An indicator found in prose, without the punctuation the sentence put after
+ * it: `“https://x.test/a”.` is the link https://x.test/a. A walk back from the
+ * end rather than a `+$` regex, which retries from every character of a long
+ * punctuation run and so takes quadratic time on one.
+ */
+export function stripProseTail(s: string): string {
+  let end = s.length
+  while (end > 0 && PROSE_TAIL.includes(s[end - 1])) end--
+  return s.slice(0, end)
+}
+
 /** Appended wherever an indicator leaves the UI (handover, copied block, report). */
 export const OWN_ASSET_SUFFIX = ' (own asset)'
 
@@ -160,33 +194,51 @@ export function vtWaitMs(prevVtStarts: number[], now: number): number {
   return Math.max(0, VT_PACE_MS - (now - Math.max(...prevVtStarts)))
 }
 
+/** One other case holding the same indicator. */
+export interface Sighting {
+  taskId: string
+  key: string
+  title: string
+}
+
 /**
  * Cases (other than `excludeTaskId`) whose indicators contain the same real
  * value: both sides refang (idempotent on real values) and compare
  * case-insensitively, so a defanged query still finds a real stored value and
  * vice versa. Subtasks are searched too.
  */
-export function iocSightings(
-  value: string,
-  tasks: Task[],
-  excludeTaskId: string,
-  owned: string[]
-): { taskId: string; key: string; title: string }[] {
-  const needle = refangIoc(value).toLowerCase()
-  if (!needle) return []
-  // An asset sits on half the cases by definition, so pivoting on one links
-  // every case to every other (SD-05). Still recorded, still marked, never a
-  // sighting — and the row says so rather than rendering nothing, which would
-  // read as "never seen anywhere else".
-  if (assetRule(needle, owned)) return []
-  const out: { taskId: string; key: string; title: string }[] = []
+export function iocSightings(value: string, tasks: Task[], excludeTaskId: string, owned: string[]): Sighting[] {
+  return sightingsIndex(tasks, excludeTaskId, owned)(value)
+}
+
+/**
+ * iocSightings for many values against one board: the board is walked and
+ * refanged once, and each lookup is then a map read. Asking iocSightings once
+ * per row walked the whole board per row, which at 5,000 rows on a 5,000
+ * indicator board took seconds on every render. Build one per render; the
+ * board changes between renders, so the index is not kept.
+ */
+export function sightingsIndex(tasks: Task[], excludeTaskId: string, owned: string[]): (value: string) => Sighting[] {
+  const byValue = new Map<string, Sighting[]>()
   for (const { task } of flattenTasks(tasks)) {
     if (task.id === excludeTaskId) continue
-    if (task.iocs.some((i) => refangIoc(i.value).toLowerCase() === needle)) {
-      out.push({ taskId: task.id, key: task.key, title: task.title })
+    const hit = { taskId: task.id, key: task.key, title: task.title }
+    // A case holding the value twice is still one sighting.
+    for (const v of new Set(task.iocs.map((i) => refangIoc(i.value).toLowerCase()))) {
+      const list = byValue.get(v)
+      if (list) list.push(hit)
+      else byValue.set(v, [hit])
     }
   }
-  return out
+  return (value) => {
+    const needle = refangIoc(value).toLowerCase()
+    // An asset sits on half the cases by definition, so pivoting on one links
+    // every case to every other (SD-05). Still recorded, still marked, never a
+    // sighting — and the row says so rather than rendering nothing, which would
+    // read as "never seen anywhere else".
+    if (!needle || assetRule(needle, owned)) return []
+    return [...(byValue.get(needle) ?? [])]
+  }
 }
 
 /** Classify a (refanged) indicator: hex hash, IP literal, scheme://=url, @=email, else domain. */

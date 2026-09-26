@@ -51,6 +51,12 @@ export interface RepOutcome {
    * Overrides RepRequest.link via spread order in the caller.
    */
   link?: string
+  /**
+   * The provider gave no answer yet, rather than an answer: rate limited, a
+   * server error, a network failure. Check all asks again for these rows and
+   * leaves settled ones alone ('not found' and 'key rejected' are answers).
+   */
+  transient?: true
 }
 
 export const PROVIDER_LABELS: Record<RepProvider, string> = {
@@ -199,14 +205,17 @@ export function skippedProviders(type: IocType, keys: RepKeys): RepProvider[] {
 function httpOutcome(provider: RepProvider, status: number): RepOutcome | null {
   if (status === 200) return null
   if (status === 401 || status === 403) return { verdict: 'unknown', summary: 'key rejected' }
-  if (status === 429) return { verdict: 'unknown', summary: 'rate limited — retry shortly' }
+  if (status === 429) return { verdict: 'unknown', summary: 'rate limited — retry shortly', transient: true }
   if (status === 404) {
     return {
       verdict: 'unknown',
       summary: provider === 'virustotal' ? 'not found in VirusTotal' : 'not found'
     }
   }
-  return { verdict: 'unknown', summary: `request failed (HTTP ${status})` }
+  const failed: RepOutcome = { verdict: 'unknown', summary: `request failed (HTTP ${status})` }
+  // A server error can clear on its own; any other 4xx is about the request.
+  if (status >= 500) failed.transient = true
+  return failed
 }
 
 /**

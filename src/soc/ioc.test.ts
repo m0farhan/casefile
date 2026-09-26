@@ -1,20 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
   VT_PACE_MS,
+  activityValue,
   assetRule,
   defangIoc,
   detectIocType,
   extractIocsFromText,
   formatIocLine,
   hasIocShape,
+  iocKey,
   iocSightings,
   parseIocPaste,
   refangIoc,
+  sightingsIndex,
+  stripProseTail,
   unmatchableAssetRules,
   visibleName,
   vtWaitMs
 } from './ioc'
-import { makeTask, type Ioc } from '../types'
+import { makeTask, type Ioc, type Task } from '../types'
+import { flattenTasks } from '../store/TaskTreeOps'
 
 describe('defangIoc — a defanged string must not lie about where it goes', () => {
   it('brackets unicode label separators, not just the ASCII dot', () => {
@@ -298,6 +303,114 @@ describe('iocSightings', () => {
   it('returns nothing on no match or a blank value', () => {
     expect(iocSightings('203.0.113.9', tasks, '', [])).toEqual([])
     expect(iocSightings('   ', tasks, '', [])).toEqual([])
+  })
+})
+
+describe('sightingsIndex — one board walk per render, not one per row', () => {
+  // The per-row walk iocSightings used to do, kept here as the reference.
+  const walk = (value: string, board: Task[], exclude: string, owned: string[]) => {
+    const needle = refangIoc(value).toLowerCase()
+    if (!needle || assetRule(needle, owned)) return []
+    return flattenTasks(board)
+      .map(({ task }) => task)
+      .filter((t) => t.id !== exclude && t.iocs.some((i) => refangIoc(i.value).toLowerCase() === needle))
+      .map((t) => ({ taskId: t.id, key: t.key, title: t.title }))
+  }
+
+  it('answers exactly what the per-row walk answered', () => {
+    const board = [
+      makeTask({ id: 'a', key: 'SOC1', title: 'A', iocs: [{ type: 'ip', value: '203.0.113.9' }] }),
+      makeTask({
+        id: 'b',
+        key: 'SOC2',
+        title: 'B',
+        // Held twice, once defanged: still one sighting.
+        iocs: [
+          { type: 'ip', value: '203[.]0[.]113[.]9' },
+          { type: 'ip', value: '203.0.113.9' },
+          { type: 'domain', value: 'Mail.Corp.Example' }
+        ],
+        subtasks: [makeTask({ id: 'c', key: 'SOC3', title: 'C', iocs: [{ type: 'domain', value: 'EVIL.test' }] })]
+      }),
+      makeTask({ id: 'd', key: 'SOC4', title: 'D', iocs: [{ type: 'domain', value: 'evil[.]test' }] })
+    ]
+    const owned = ['corp.example']
+    for (const exclude of ['', 'a', 'c']) {
+      const lookup = sightingsIndex(board, exclude, owned)
+      for (const v of [
+        '203.0.113.9',
+        '203[.]0[.]113[.]9',
+        'evil.TEST',
+        'mail.corp.example',
+        '10.0.0.1',
+        '',
+        'x.test'
+      ]) {
+        expect(lookup(v)).toEqual(walk(v, board, exclude, owned))
+      }
+    }
+    // The asset is on the board, and is still never a sighting.
+    expect(sightingsIndex(board, '', owned)('mail.corp.example')).toEqual([])
+  })
+
+  it('looks up 5,000 rows against a 5,000-indicator board in well under a render', () => {
+    const board = Array.from({ length: 50 }, (_, c) =>
+      makeTask({
+        id: `t${c}`,
+        key: `SOC${c}`,
+        title: `Case ${c}`,
+        iocs: Array.from({ length: 100 }, (_, i) => ({
+          type: 'domain' as const,
+          value: `h${c * 100 + i}[.]evil[.]test`
+        }))
+      })
+    )
+    const rows = Array.from({ length: 5000 }, (_, i) => `h${i * 3}.evil.test`)
+    const start = performance.now()
+    const lookup = sightingsIndex(board, 't0', [])
+    const hits = rows.filter((v) => lookup(v).length > 0).length
+    expect(performance.now() - start).toBeLessThan(200)
+    expect(hits).toBeGreaterThan(0)
+  })
+})
+
+describe('activityValue — an activity row never prints a live indicator', () => {
+  it('defangs indicator values and leaves every other field as recorded', () => {
+    expect(activityValue('iocs', 'http://evil.example/login')).toBe('hxxp://evil[.]example/login')
+    expect(activityValue('iocs', 'bad@evil.example')).toBe('bad[at]evil[.]example')
+    expect(activityValue('iocs', '')).toBe('')
+    expect(activityValue('title', 'http://evil.example/login')).toBe('http://evil.example/login')
+  })
+})
+
+describe('iocKey — the one dedupe key', () => {
+  it('folds case everywhere except a URL, whose path is case-sensitive', () => {
+    expect(iocKey({ type: 'url', value: 'https://bit.ly/3XkQ' })).not.toBe(
+      iocKey({ type: 'url', value: 'https://bit.ly/3xKq' })
+    )
+    expect(iocKey({ type: 'hash', value: 'D41D8CD98F00B204E9800998ECF8427E' })).toBe(
+      iocKey({ type: 'hash', value: 'd41d8cd98f00b204e9800998ecf8427e' })
+    )
+    expect(iocKey({ type: 'domain', value: 'EVIL.test' })).toBe(iocKey({ type: 'domain', value: 'evil.test' }))
+    expect(iocKey({ type: 'domain', value: 'evil.test' })).not.toBe(iocKey({ type: 'email', value: 'evil.test' }))
+  })
+})
+
+describe('stripProseTail', () => {
+  it('drops the sentence punctuation after an indicator, ASCII or typographic', () => {
+    expect(stripProseTail('https://x.test/verify”.')).toBe('https://x.test/verify')
+    expect(stripProseTail('https://x.test/a»')).toBe('https://x.test/a')
+    expect(stripProseTail('evil.test);')).toBe('evil.test')
+    expect(stripProseTail('https://x.test/a')).toBe('https://x.test/a')
+    expect(stripProseTail('.,;')).toBe('')
+  })
+
+  it('takes linear time on a long punctuation run', () => {
+    const s = `https://x.test/${'.'.repeat(1_000_000)}a`
+    const start = performance.now()
+    expect(stripProseTail(s)).toBe(s)
+    expect(stripProseTail(`${s}${'.'.repeat(1_000_000)}`)).toBe(s)
+    expect(performance.now() - start).toBeLessThan(1500)
   })
 })
 
