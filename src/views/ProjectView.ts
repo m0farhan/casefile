@@ -25,7 +25,7 @@ import { ViewSwitcher } from '../ui/primitives/ViewSwitcher'
 import { ProjectHeader } from '../ui/composites/ProjectHeader'
 import { setQuerySlaPolicies } from '../store/QueryParser'
 import { taskFolderForProjectPath } from '../store/layout'
-import { openPhishAnalysis } from '../modals/PhishAnalysisModal'
+import { openPhishAnalysis } from './PhishAnalysisView'
 
 export const PM_PROJECT_VIEW_TYPE = 'casefile-project'
 

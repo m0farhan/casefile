@@ -47,6 +47,18 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ## Unreleased
 
+### Changed — the phishing analyser is a tab
+
+- The analyser opens in its own workspace tab instead of a dialog. A modal
+  covered the board, capped the report at half the screen, and had to close
+  before the case it produced could be looked at. As a tab it takes the whole
+  pane: the report fills the height and scrolls on its own while the paste
+  box, the pane switcher and the actions stay put.
+- Every open is a NEW tab, so a reported mail can sit beside the one that
+  arrived an hour earlier. Reusing one tab would have thrown the first away.
+- Creating a case from the analyser no longer closes it. The case opens on
+  top, and the evidence stays on screen while it is written up.
+
 ### Fixed — four defects found by red-teaming the analyser
 
 - The text pane dropped text with no attacker involved. The element scanner

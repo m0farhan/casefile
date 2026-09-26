@@ -601,6 +601,49 @@ button.pm-verdict-cancel:hover {
   font-size: var(--font-ui-smaller);
   resize: vertical;
 }
+/* ── The analyser as a tab ───────────────────────────────────────────────
+   A column that fills the pane: title, paste box and tab strip keep their
+   size, the report takes every row that is left and scrolls on its own, and
+   the actions stay pinned at the bottom where a modal kept them. The width is
+   capped so a report on a wide monitor still reads as lines rather than as a
+   ribbon across the screen. */
+.pm-phish-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 20px 28px 16px;
+  box-sizing: border-box;
+  background: var(--gs-surface-1);
+  /* Obsidian's .view-content scrolls itself; left on, the whole page scrolls
+     and the tab strip and actions go with it. Only the report should move. */
+  overflow: hidden;
+}
+.pm-phish-view-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--gs-ink);
+}
+.pm-phish-view > .pm-headers-input {
+  flex: 0 0 auto;
+  min-height: 96px;
+}
+/* The modal capped the report at 54vh because it shared the screen with a
+   dialog frame. In a tab that cap only wastes the space it was opened for. */
+.pm-phish-view > .pm-headers-out {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+.pm-phish-view > .pm-modal-btn-row {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gs-hairline);
+}
+
 /* The analysis is what gets read; the paste box is a doorway. */
 .pm-headers-out {
   max-height: 54vh;

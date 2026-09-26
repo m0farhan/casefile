@@ -1,4 +1,4 @@
-import { ButtonComponent, Modal, Notice, SuggestModal, type TFile, setTooltip } from 'obsidian'
+import { ButtonComponent, ItemView, Notice, SuggestModal, type TFile, type WorkspaceLeaf, setTooltip } from 'obsidian'
 import type PMPlugin from '../main'
 import { formatDelay } from '../soc/emailHeaders'
 import { IMAGE_CAP, hexDump, imageDataUrl, previewKind, previewText } from '../soc/preview'
@@ -30,7 +30,16 @@ const BODY_PREVIEW = 4000
 
 type TabId = 'message' | 'links' | 'attachments' | 'body' | 'indicators'
 
-class PhishAnalysisModal extends Modal {
+export const PHISH_VIEW_TYPE = 'casefile-phish-analysis'
+
+/**
+ * A tab, not a dialog. It began as a modal, and a modal is the wrong shape for
+ * the work: it covers the board, it caps the report at a fraction of the
+ * screen, and it has to close before the case it produced can be looked at.
+ * As a workspace view it takes the whole pane, sits beside the case it feeds,
+ * and two of them can be open at once to compare one message with another.
+ */
+export class PhishAnalysisView extends ItemView {
   private report: PhishReport | null = null
   private raw = ''
   /** Monotonic: a slow run must never overwrite the result of a newer one. */
@@ -39,15 +48,33 @@ class PhishAnalysisModal extends Modal {
   private tab: TabId = 'message'
   private tabStrip: HTMLElement | null = null
 
-  constructor(private plugin: PMPlugin) {
-    super(plugin.app)
+  constructor(
+    leaf: WorkspaceLeaf,
+    private plugin: PMPlugin
+  ) {
+    super(leaf)
   }
 
-  onOpen(): void {
+  getViewType(): string {
+    return PHISH_VIEW_TYPE
+  }
+
+  getDisplayText(): string {
+    return 'Phishing analysis'
+  }
+
+  getIcon(): string {
+    return 'fish'
+  }
+
+  async onOpen(): Promise<void> {
     const { contentEl } = this
-    this.modalEl.addClass('pm-modal', 'pm-modal--headers')
-    contentEl.addClass('pm-headers')
-    this.setTitle('Analyse a phishing email')
+    contentEl.empty()
+    // pm-root carries the design tokens. As a modal the analyser got them from
+    // `.pm-modal`; as a view without this, every colour in it is undefined and
+    // the bands, the observations and the auth results all render flat.
+    contentEl.addClass('pm-root', 'pm-headers', 'pm-phish-view')
+    contentEl.createEl('h2', { cls: 'pm-phish-view-title', text: 'Analyse a phishing email' })
     contentEl.createEl('p', {
       cls: 'pm-headers-meta',
       text: 'Paste the headers or the whole message, or load a .eml from the vault. Nothing is rendered, resolved or sent — every line below is read from what you gave it.'
@@ -186,7 +213,8 @@ class PhishAnalysisModal extends Modal {
           }
           throw err
         }
-        this.close()
+        // The analysis stays open. A modal had to close to show the case; a tab
+        // is exactly where the evidence should sit while the case is written.
         openTaskModal(this.plugin, project, { task, onSave: () => {} })
       })()
     })
@@ -449,7 +477,7 @@ class PhishAnalysisModal extends Modal {
     })
   }
 
-  onClose(): void {
+  async onClose(): Promise<void> {
     // Cancel the pending parse and retire the run token: a debounce that fires
     // after close would analyse into a DOM that no longer exists, and a run
     // already in flight must not paint its result on the way out.
@@ -502,6 +530,12 @@ function resultClass(result: string): string {
   return 'pm-headers-neutral'
 }
 
+/**
+ * Open the analyser in a NEW tab every time. Reusing one tab would throw away
+ * the message already in it, and comparing a reported mail with the one that
+ * arrived an hour earlier is ordinary work, not an edge case.
+ */
 export function openPhishAnalysis(plugin: PMPlugin): void {
-  new PhishAnalysisModal(plugin).open()
+  const leaf = plugin.app.workspace.getLeaf('tab')
+  void leaf.setViewState({ type: PHISH_VIEW_TYPE, active: true })
 }
