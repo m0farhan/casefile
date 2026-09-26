@@ -45,11 +45,11 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
-## Unreleased
+## [2.40.0] - 2026-09-27
 
 ### Added — alert kinds you can see, record and edit
 
-- An incident with no kind tag now shows the kind its title names. A case made
+- On a case board, an incident with no kind tag now shows the kind its title names. A case made
   by hand, such as `77 - SOC138 - Detected Suspicious Xls File`, used to show
   the generic incident siren everywhere; it now shows Suspicious file, drawn
   faded with a dashed ring so it cannot be taken for a recorded kind. The
@@ -69,14 +69,19 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   reordered by dragging or with the arrows (the order is precedence: when a
   case matches several kinds, the first wins) and deleted. Deleting a kind
   asks first and never edits a case. A tag ID another kind already answers
-  to, or one with a space in it, is refused. Open boards redraw as you edit.
+  to, or one with a space in it, is refused, and so is a label or match word
+  another kind already answers to — the notice names that kind — so one word
+  never names two kinds and no existing case changes kind behind your back.
+  Open boards redraw as you edit. A kind's icon can also be an emoji.
 - An icon picker for the kinds: a search over Obsidian's own icons, each one
   drawn in the list.
 - A new built-in kind, **Suspicious connection**, for outbound and inbound
   connections, connection attempts and blocked connections. Your saved list
   is never rewritten on its own, so an existing vault gets it from **Add
   missing built-in kinds**, which adds each shipped kind your list lacks at
-  the end and leaves the rest exactly as it is.
+  the end and leaves the rest exactly as it is. A built-in that a kind in your
+  list already answers to (a renamed Phishing, say) is skipped, and the notice
+  says why.
 
 ### Added — reset the Reports tab
 
@@ -724,6 +729,51 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Controls that appear on hover show on touch screens, the table's row
   checkbox shows when it has keyboard focus, and **Remove link** in Linked
   cases appears on hover as it was meant to.
+
+### Fixed — found by the final verification pass
+
+- Adding a journal entry to a case from the side panel no longer silently
+  fails after the board refreshes itself (after an archive, or a Sync or git
+  change), and editing the description in that state no longer wipes the
+  case's journal.
+- Archiving or restoring a case no longer makes the open board reload every
+  other case.
+- Saving board settings, a saved view or a collapsed column while the board
+  note has been changed elsewhere (Sync, git, a hand edit) keeps that outside
+  change, such as a team member added on another device.
+- Adding or renaming a subtask in its parent's editor to the name of a note
+  that already exists is refused up front, instead of leaving the board unable
+  to save.
+- Moving tasks in from TaskNotes keeps their links to project and blocker
+  notes and any time entry still running, and logged time lands on the local
+  day it was worked.
+- Table: a half-typed due date left by clicking away keeps the old date instead
+  of erasing it.
+- Board settings: saving redraws the filter bar, and a board switched to plain
+  drops a verdict filter it can no longer show.
+- Gantt: Day view draws bars for cases far from today again, and a hovered task
+  title stays readable.
+- Keyboard: the Tags, Assignees and Depends-on pickers keep focus after a pick,
+  and expanding or collapsing subtasks keeps focus on the toggle.
+- The description editor no longer stalls on a very long pasted line.
+- Alert intake fences a quoted, called-out or indented code block exactly like
+  a top-level one, so no pasted `dataviewjs` block can run in a case note.
+- A hostile run of `![` in a description no longer freezes the case on open.
+- A responded or resolved time earlier than the clock's start is reported as
+  not computable, not as met, in the case report and in compliance.
+- A value starting with `=` or `$=` in any report or handover code span shows
+  its `=` as `<U+003D>`, so opening the note can never run it as a Dataview
+  query or JavaScript.
+- A UNC path or `domain\user` value is no longer sent to VirusTotal or URLhaus,
+  and a private IPv4 written in fullwidth digits is recognised as your own.
+- Read as a timestamp labels a short offset such as `GMT+2` as a stated zone and
+  gives no reading for a day that does not exist (2026-02-30).
+- A crafted email whose Received comment runs to many megabytes produces a
+  report instead of crashing.
+- Phishing analyser: Create case says why when a case cannot be created, a long
+  subject never ends the title in half an emoji, the .eml picker escapes hidden
+  direction characters in file names, and the Links tab points to finds inside
+  inline images.
 
 ## [2.39.0] - 2026-09-24
 
