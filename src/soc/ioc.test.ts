@@ -617,6 +617,9 @@ describe('assetRule — the boundary that decides what is never sent', () => {
     expect(assetRule('mail.\uFF43\uFF4F\uFF52\uFF50.example', ['corp.example'])).not.toBeNull()
     expect(assetRule('mail.corp.xn--p1ai', ['corp.рф'])).not.toBeNull()
     expect(assetRule('\uFF11\uFF10.\uFF10.\uFF10.\uFF15', [])?.builtIn).toBe(true)
+    // A trailing dot, ASCII or ideographic, used to spoil the as-written check.
+    expect(assetRule('\uFF11\uFF19\uFF12.\uFF11\uFF16\uFF18.\uFF11.\uFF11\uFF10.', [])?.builtIn).toBe(true)
+    expect(assetRule('\uFF11\uFF10.\uFF10.\uFF10.\uFF15\u3002', [])?.builtIn).toBe(true)
     expect(unmatchableAssetRules(['corp.xn--p1ai', 'corp.рф'])).toEqual([])
     // Still a label boundary.
     expect(assetRule('evilbücher.example', ['bücher.example'])).toBeNull()

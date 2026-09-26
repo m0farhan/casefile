@@ -507,7 +507,13 @@ export function hostOf(value: string): string {
   if (/[^\p{ASCII}]/u.test(v)) {
     try {
       const canon = new URL(`http://${v}`).hostname
-      if (ipv4(canon) === null || canon === v.normalize('NFKC').replace(/\u3002/g, '.')) v = canon
+      // The trailing dot comes off the written form too, or '１９２.１６８.１.１０.'
+      // is never the address as written and escapes the built-in ranges.
+      const written = v
+        .normalize('NFKC')
+        .replace(/\u3002/g, '.')
+        .replace(/\.$/, '')
+      if (ipv4(canon) === null || canon === written) v = canon
     } catch {
       // Not a host the parser accepts: judged as written.
     }
