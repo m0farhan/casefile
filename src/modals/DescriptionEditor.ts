@@ -461,7 +461,7 @@ export function renderDescriptionEditor(
     placeLikeSourceLines()
   }
 
-  const showEdit = (caret?: number) => {
+  const showEdit = (caret?: number, at?: { x: number; y: number }) => {
     descPreview.classList.add('pm-hidden')
     editBtn.el.classList.add('pm-hidden')
     descToolbar.classList.remove('pm-hidden')
@@ -475,7 +475,14 @@ export function renderDescriptionEditor(
       const pos = Math.min(caret, view.state.doc.length)
       view.dispatch({ selection: { anchor: pos } })
     }
-    window.setTimeout(() => view.focus(), 0)
+    window.setTimeout(() => {
+      // The editor lays text out exactly where the preview had it, so the
+      // point that was clicked is over the same character in both. Asking the
+      // editor for it is exact where mapping rendered text back to markdown
+      // is not (a heading's '### ', a bullet's '- ' are not in the preview).
+      if (at) view.dispatch({ selection: { anchor: view.posAtCoords(at, false) } })
+      view.focus()
+    }, 0)
   }
 
   descSection.addEventListener('dragover', (e) => {
@@ -563,7 +570,7 @@ export function renderDescriptionEditor(
     if (selection && !selection.isCollapsed && descPreview.contains(selection.anchorNode)) return
 
     // Click on non-link text = edit
-    showEdit(clickedSourceOffset(e))
+    showEdit(clickedSourceOffset(e), { x: e.clientX, y: e.clientY })
   })
 
   if (hasContent()) {

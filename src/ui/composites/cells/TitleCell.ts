@@ -1,7 +1,7 @@
 import { DEFAULT_ISSUE_TYPES, type IssueTypeConfig, type Task } from '../../../types'
 import { Chip } from '../../primitives/Chip'
 import { IconButton } from '../../primitives/IconButton'
-import { renderIssueTypeIcon, renderKeyChip } from '../issueMeta'
+import { type AlertKindInput, renderIssueTypeIcon, renderKeyChip } from '../issueMeta'
 import { renderTagChip } from '../tagChip'
 import { makeInlineEdit } from './inlineEdit'
 
@@ -11,6 +11,8 @@ export interface TitleCellProps {
   showTagColors: boolean
   /** Resolved issue-type catalog (configFor(project).issueTypes). Defaults apply when absent. */
   issueTypes?: IssueTypeConfig[]
+  /** The case's tags, title and the kinds list, so the glyph matches the board card's. */
+  alert?: AlertKindInput
   onTitleClick: () => void
   onTitleSave: (newTitle: string) => Promise<void>
   onAddSubtask: () => void
@@ -26,7 +28,8 @@ export class TitleCell {
 
     renderIssueTypeIcon(
       this.el,
-      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
+      (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType),
+      { alert: props.alert }
     )
     if (task.key) renderKeyChip(this.el, task.key)
 

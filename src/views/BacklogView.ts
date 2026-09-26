@@ -66,7 +66,10 @@ export class BacklogView implements SubView {
 
         renderIssueTypeIcon(
           row,
-          cfg.issueTypes.find((t) => t.id === task.issueType)
+          cfg.issueTypes.find((t) => t.id === task.issueType),
+          {
+            alert: { tags: task.tags, title: task.title, categories: this.plugin.settings.alertCategories }
+          }
         )
         if (task.key) renderKeyChip(row, task.key)
         row.createSpan({ cls: 'pm-backlog-title', text: task.title })

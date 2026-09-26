@@ -1,7 +1,7 @@
 import { Menu, Notice, setIcon, setTooltip } from 'obsidian'
 import { getStatusConfig, dueUrgency, isTerminalStatus, safeAsync, stringifyCustomValue } from '../../utils'
 import { totalLoggedHours } from '../../store/TaskTreeOps'
-import { DEFAULT_ISSUE_TYPES, type ResolvedProjectConfig, type Task } from '../../types'
+import { type ResolvedProjectConfig, type Task } from '../../types'
 import { renderSlaChip } from '../../soc/slaTicker'
 import { guardVerdictOnClose } from '../../soc/verdictGuard'
 import { updateSelectCheckboxes, getVisibleTaskIds } from './TableRenderer'
@@ -9,7 +9,6 @@ import type { TableContext, TableState } from './TableRenderer'
 import { openTaskModal } from '../../ui/ModalFactory'
 import { buildTaskContextMenu } from '../../ui/TaskContextMenu'
 import { TaskRow } from '../../ui/composites/TaskRow'
-import { renderIssueTypeIcon } from '../../ui/composites/issueMeta'
 import { ActionsCell } from '../../ui/composites/cells/ActionsCell'
 import { AssigneesCell } from '../../ui/composites/cells/AssigneesCell'
 import { CustomFieldCell } from '../../ui/composites/cells/CustomFieldCell'
@@ -89,6 +88,7 @@ export function renderTaskRow(
     depth,
     showTagColors: ctx.plugin.settings.showTagColors,
     issueTypes: cfg?.issueTypes,
+    alert: { tags: task.tags, title: task.title, categories: ctx.plugin.settings.alertCategories },
     onTitleClick: () => {
       openTaskModal(ctx.plugin, ctx.project, {
         task,
@@ -123,19 +123,6 @@ export function renderTaskRow(
       })
     }
   })
-  // TitleCell draws the plain issue-type glyph: it takes no tags or title.
-  // The row redraws it through the helper the board card uses, so the table
-  // and the board never disagree about a case's kind or whether it is derived.
-  // ponytail: a DOM swap — pass the kind input through TitleCellProps when
-  // that file is next open, and this goes.
-  const plainGlyph = titleCell.el.querySelector('.pm-issuetype-icon')
-  if (plainGlyph) {
-    const typeCfg = (cfg?.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType)
-    const alert = { tags: task.tags, title: task.title, categories: ctx.plugin.settings.alertCategories }
-    const kindGlyph = renderIssueTypeIcon(titleCell.el, typeCfg, { alert })
-    if (kindGlyph) plainGlyph.replaceWith(kindGlyph)
-  }
-
   if (task.flagged) {
     // Leads the title cell (before the type icon) — TitleCell exposes el for
     // exactly this kind of rider (renderSlaChip on severityCell precedent).

@@ -150,12 +150,17 @@ export class TaskModal extends Modal {
    * the analyst then answers with Keep. An existing case saves on the way out
    * (UX-01). */
   private readonly closeThen = safeAsync(async (go: () => void) => {
-    if (!(await this.confirmLeave())) return
+    if (await this.leave()) go()
+  })
+
+  /** Closes for somewhere else; false when the analyst chose to keep a new draft. */
+  private async leave(): Promise<boolean> {
+    if (!(await this.confirmLeave())) return false
     this.saved = false
     this.cancelled = this.isNew
     this.close()
-    go()
-  })
+    return true
+  }
 
   onClose(): void {
     if (this.plugin.settings.saveTaskOnClose && !this.isNew && !this.cancelled && !this.saved) {
@@ -497,14 +502,9 @@ export class TaskModal extends Modal {
       plugin: this.plugin,
       project: this.project,
       task: this.task,
-      // Called just before the editor opens the link itself, so it cannot
-      // wait: close() asks over a new draft, and the note opens behind the
-      // prompt either way.
-      onNavigateAway: () => {
-        this.saved = false
-        this.cancelled = false
-        this.close()
-      }
+      // The editor waits for this before it opens the link, so a new draft
+      // asks first and nothing opens behind the prompt; Keep opens nothing.
+      onNavigateAway: () => this.leave()
     })
 
     // ── Evidence (files referenced in description/comments) ─────────────────

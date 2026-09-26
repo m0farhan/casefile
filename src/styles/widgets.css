@@ -283,6 +283,15 @@
   --icon-size: 12px;
   font-size: 11px;
 }
+/* An alert kind read from the title, not recorded on the case: the same glyph,
+   faded and ringed with a dashed line, so it never reads as a kind the analyst
+   set. Shared by the board card, table row, backlog, side panel and dialog. */
+.pm-issuetype-icon--derived {
+  opacity: 0.6;
+  outline: 1px dashed currentColor;
+  outline-offset: 1px;
+  border-radius: 3px;
+}
 .pm-key-chip {
   font-family: var(--gs-font-mono);
   font-size: 11px;

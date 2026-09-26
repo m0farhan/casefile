@@ -957,8 +957,8 @@ a.pm-ioc-rep--unknown {
      (DescriptionEditor sets --pm-gap per block and --pm-trail at the end).
    Colours stay on the plugin's tokens, except where Obsidian's own heading
    and emphasis rules already colour the preview; the editor copies those.
-   These rules replace the older description rules in task-modal.css and
-   widgets.css, which they outrank by source order or specificity. */
+   These are the only rules that size and space description text; the older
+   copies in task-modal.css and widgets.css are gone. */
 .pm-modal-desc-section {
   /* One line of body text, the same length wherever it is used. */
   --pm-desc-line: calc(var(--font-text-size) * var(--line-height-normal));

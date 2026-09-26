@@ -598,3 +598,13 @@ describe('format characters in the report', () => {
     expect(md).toContain('From is at <U+202E>moc.lapyap; Return-Path is at evil.test. They differ.')
   })
 })
+
+describe('report wording when no host is named', () => {
+  it('does not print "asserted by no asserting host stated"', () => {
+    const report = formatHeaderReport(
+      analyseHeaders('Received-SPF: pass (sender SPF authorized)\nFrom: a@b.test\nSubject: x\n')
+    )
+    expect(report).not.toContain('asserted by no asserting host stated')
+    expect(report).toMatch(/SPF: pass — Received-SPF, no asserting host stated/)
+  })
+})

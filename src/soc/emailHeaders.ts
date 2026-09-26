@@ -649,9 +649,14 @@ export function formatHeaderReport(a: HeaderAnalysis): string {
   lines.push('', '### Authentication', '')
   if (a.auth.length) {
     for (const r of a.auth) {
+      // Same wording as the screen: when no host is named, "asserted by no
+      // asserting host stated" says nothing twice. A host a header names is
+      // one token, so it can never contain the phrase.
+      const by = r.assertedBy.includes('no asserting host stated')
+        ? r.assertedBy
+        : `asserted by ${quoteUntrusted(r.assertedBy)}`
       lines.push(
-        `- ${r.mechanism.toUpperCase()}: ${r.result} — asserted by ${quoteUntrusted(r.assertedBy)}` +
-          `${r.detail ? ` — ${quoteUntrusted(r.detail)}` : ''}`
+        `- ${r.mechanism.toUpperCase()}: ${r.result} — ${by}` + `${r.detail ? ` — ${quoteUntrusted(r.detail)}` : ''}`
       )
     }
   } else {
