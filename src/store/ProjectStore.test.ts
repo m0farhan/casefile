@@ -1231,6 +1231,17 @@ describe('issue keys', () => {
         .sort()
     ).toEqual(['Alpha', 'XX-1: Beta'])
   })
+
+  it('adoptIssueKeys keys a case with no recorded creation time after the dated ones', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Undated', 'Projects')
+    const undated = await addNamed(store, project, 'Undated')
+    const dated = await addNamed(store, project, 'Dated')
+    undated.createdAt = ''
+    dated.createdAt = '2026-07-01T00:00:00Z'
+    await store.adoptIssueKeys(project, 'SOC')
+    expect([dated.key, undated.key]).toEqual(['SOC-1', 'SOC-2'])
+  })
 })
 
 describe('activity log + incident lifecycle stamps', () => {

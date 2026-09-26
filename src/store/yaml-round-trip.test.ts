@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { parseAlertPaste } from '../soc/alertIntake'
+import { slaState } from '../soc/sla'
+import { lastUpdated } from '../views/table/TableFilters'
+import { sinceBaseline } from '../views/reports/reportData'
 import {
   DEFAULT_SEVERITIES,
+  DEFAULT_SLA_POLICIES,
   DEFAULT_STATUSES,
   makeProject,
   makeTask,
@@ -700,5 +704,20 @@ describe('colours from a board note', () => {
     expect(p.config?.issueTypes?.[0].color).toBe('#8a94a0')
     expect(safeColor('#ABC', 'x')).toBe('#ABC')
     expect(safeColor(42, 'x')).toBe('x')
+  })
+})
+
+describe('a note that does not record when the case was created', () => {
+  it('hydrates createdAt as unknown, never as the load time', () => {
+    const { task } = hydrateTaskFromFile(
+      { 'pm-task': true, id: 'u1', issueType: 'incident', severity: 'sev1' },
+      '',
+      'Projects/Tasks/U/u1.md'
+    )
+    expect(task.createdAt).toBe('')
+    expect(lastUpdated(task)).toBeNull()
+    expect(sinceBaseline([task], '2026-09-01T00:00:00.000Z').undated).toBe(1)
+    expect(slaState(task, DEFAULT_SLA_POLICIES, Date.now())).toBeNull()
+    expect(hydrateProjectFromFrontmatter({ 'pm-project': true }, '', 'P/P.md', 'P').createdAt).toBe('')
   })
 })

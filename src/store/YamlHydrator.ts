@@ -248,8 +248,11 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
         : {},
     collapsed: r.collapsed === true,
     // createdAt is the SLA anchor for any case with no detection stamp
-    // (slaAnchor), so a non-string must not survive as an object.
-    createdAt: str(r.createdAt, new Date().toISOString()),
+    // (slaAnchor). A note that does not record it hydrates as '' (unknown),
+    // never as the load time: that restarted the response clock on every
+    // load, counted an old case as opened this week and after a reports
+    // reset, and the first save wrote the invented time to disk.
+    createdAt: str(r.createdAt, ''),
     updatedAt: str(r.updatedAt, new Date().toISOString()),
     ...overrides
   })
@@ -319,7 +322,8 @@ export function hydrateProjectFromFrontmatter(
     teamMembers: strList(frontmatter.teamMembers),
     keyPrefix: typeof frontmatter.keyPrefix === 'string' ? frontmatter.keyPrefix : '',
     nextKeySeq: typeof frontmatter.nextKeySeq === 'number' && frontmatter.nextKeySeq >= 1 ? frontmatter.nextKeySeq : 1,
-    createdAt: str(frontmatter.createdAt, new Date().toISOString()),
+    // Not recorded stays unknown, as on a task.
+    createdAt: str(frontmatter.createdAt, ''),
     updatedAt: str(frontmatter.updatedAt, new Date().toISOString()),
     filePath,
     savedViews: hydrateSavedViews((frontmatter.savedViews as unknown[]) ?? []),

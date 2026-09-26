@@ -1343,9 +1343,14 @@ export class ProjectStore implements TaskSource {
       for (const sub of t.subtasks) this.markDirty(project, [sub.id], 'full')
     }
 
-    // Pass 2: fresh keys for the keyless, oldest first.
+    // Pass 2: fresh keys for the keyless, oldest first. A case whose creation
+    // time is not recorded goes last: '' would otherwise sort as the oldest.
     let nextSeq = usedSeqs.size ? Math.max(...usedSeqs) + 1 : 1
-    const keyless = flat.filter((t) => !t.key).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    const keyless = flat
+      .filter((t) => !t.key)
+      .sort(
+        (a, b) => (a.createdAt === '' ? 1 : 0) - (b.createdAt === '' ? 1 : 0) || a.createdAt.localeCompare(b.createdAt)
+      )
     for (const t of keyless) {
       t.key = `${prefix}-${nextSeq++}`
       assigned++
