@@ -125,45 +125,44 @@ export class GanttView implements SubView {
   private renderGantt(): void {
     const wrapper = this.container.createDiv('pm-gantt-wrapper')
 
-    // Left panel: task labels
+    // Left panel: task labels. The width is the user's preference; the
+    // stylesheet caps what is drawn at 45% so a phone keeps a usable timeline.
     const leftPanel = wrapper.createDiv('pm-gantt-left')
     leftPanel.style.width = `${this.labelWidth}px`
-    leftPanel.style.minWidth = `${this.labelWidth}px`
     const leftHeader = leftPanel.createDiv('pm-gantt-left-header')
     leftHeader.style.height = `${HEADER_HEIGHT}px`
     leftHeader.createSpan({ text: 'Task', cls: 'pm-gantt-left-header-label' })
     const leftBody = leftPanel.createDiv('pm-gantt-left-body')
 
-    // Resize handle
+    // Resize handle. Pointer events with capture, so a finger drags it as well
+    // as a mouse and the moves keep arriving when the pointer leaves the handle.
     const resizeHandle = wrapper.createDiv('pm-gantt-resize-handle')
     let resizing = false
     let startX = 0
     let startWidth = 0
-    resizeHandle.addEventListener('mousedown', (e: MouseEvent) => {
+    resizeHandle.addEventListener('pointerdown', (e: PointerEvent) => {
       e.preventDefault()
+      resizeHandle.setPointerCapture(e.pointerId)
       resizing = true
       startX = e.clientX
-      startWidth = this.labelWidth
+      // Start from the drawn width, not the stored one, so there is no dead zone while the 45% cap applies.
+      startWidth = leftPanel.getBoundingClientRect().width
       activeDocument.body.addClass('pm-resize-active')
     })
-    const onMouseMove = (e: MouseEvent) => {
+    resizeHandle.addEventListener('pointermove', (e: PointerEvent) => {
       if (!resizing) return
       const newWidth = Math.max(150, Math.min(600, startWidth + (e.clientX - startX)))
       this.labelWidth = newWidth
       leftPanel.style.width = `${newWidth}px`
-      leftPanel.style.minWidth = `${newWidth}px`
-    }
-    const onMouseUp = () => {
+    })
+    const endResize = () => {
       if (!resizing) return
       resizing = false
       activeDocument.body.removeClass('pm-resize-active')
     }
-    activeDocument.addEventListener('mousemove', onMouseMove)
-    activeDocument.addEventListener('mouseup', onMouseUp)
-    this.cleanupFns.push(() => {
-      activeDocument.removeEventListener('mousemove', onMouseMove)
-      activeDocument.removeEventListener('mouseup', onMouseUp)
-    })
+    resizeHandle.addEventListener('pointerup', endResize)
+    resizeHandle.addEventListener('pointercancel', endResize)
+    this.cleanupFns.push(endResize)
 
     // Right panel: timeline
     const rightPanel = wrapper.createDiv('pm-gantt-right')
@@ -211,6 +210,17 @@ export class GanttView implements SubView {
         cancelLink(this.link)
       }
       if (this.drag.isDragging) return
+      // Undo keys typed into a text field, a modal or a menu belong to that
+      // control's own text undo, never to the last date drag on disk. A key an
+      // inner editor already handled is left alone too.
+      const t = e.target as HTMLElement | null
+      if (
+        e.defaultPrevented ||
+        t?.isContentEditable ||
+        t?.closest?.('input, textarea, select, .modal-container, .menu')
+      ) {
+        return
+      }
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const key = e.key.toLowerCase()

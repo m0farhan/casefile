@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type PMPlugin from '../../main'
 import { today } from '../../dates'
 import { flattenTasks } from '../../store/TaskTreeOps'
-import { makeProject, makeTask, type Project, type Task } from '../../types'
+import { makeDefaultFilter, makeProject, makeTask, type Project, type Task } from '../../types'
 import { openTaskModal } from '../../ui/ModalFactory'
 import { attachDragHandle, makeDragState } from './GanttDragHandler'
 import { handleLinkDotClick, makeLinkState } from './GanttLinkHandler'
 import type { RendererContext } from './GanttRenderer'
 import { renderDependencyArrows, renderMilestoneLabels, renderTaskBar, spanX } from './GanttTaskBarRenderer'
+import { GanttView } from './GanttView'
+import { renderTaskLabel } from './TaskLabelRenderer'
 import { buildTimelineConfig, dateToX, getSnapPoints } from './TimelineConfig'
 
 // The aliased obsidian stub has no ButtonComponent; the view-layer siblings the
@@ -266,6 +268,50 @@ function rendererCtx(
   return { ctx, svg, header }
 }
 
+// -- a53: undo keys in text fields ------------------------------------------
+
+describe('GanttView undo keys', () => {
+  function renderView(): { leaf: FakeEl; undoLastAction: Mock<() => Promise<void>> } {
+    const leaf = new FakeEl('div')
+    leaf.addClass('workspace-leaf', 'mod-active')
+    const container = leaf.createDiv()
+    const { plugin, undoLastAction } = fakePlugin()
+    new GanttView(asEl(container), boardWith([]), plugin, async () => {}, makeDefaultFilter()).render()
+    return { leaf, undoLastAction }
+  }
+
+  const cmdZ = (target: FakeEl): Record<string, unknown> => ({
+    key: 'z',
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    defaultPrevented: false,
+    target
+  })
+
+  it('leaves Cmd+Z in the board search box to the text field', () => {
+    const { leaf, undoLastAction } = renderView()
+    doc.fire('keydown', cmdZ(leaf.createEl('input')))
+    expect(undoLastAction).not.toHaveBeenCalled()
+  })
+
+  it('leaves Cmd+Z inside a modal and in rich-text editors alone', () => {
+    const { leaf, undoLastAction } = renderView()
+    const modal = doc.body.createDiv('modal-container').createDiv()
+    doc.fire('keydown', cmdZ(modal))
+    const editable = leaf.createDiv()
+    editable.isContentEditable = true
+    doc.fire('keydown', cmdZ(editable))
+    expect(undoLastAction).not.toHaveBeenCalled()
+  })
+
+  it('still undoes the last drag when the chart itself has focus', () => {
+    const { leaf, undoLastAction } = renderView()
+    doc.fire('keydown', cmdZ(leaf))
+    expect(undoLastAction).toHaveBeenCalledOnce()
+  })
+})
+
 // -- a54: left handle past the due date -------------------------------------
 
 describe('left resize handle', () => {
@@ -392,5 +438,28 @@ describe('a date outside the chart range', () => {
     expect(byClass(g, 'pm-gantt-out-of-range')[0]?.textContent).toContain('due 9999-12-31')
     expect(svg.querySelectorAll('line')).toHaveLength(0)
     expect(byClass(header, 'pm-gantt-milestone-label')).toHaveLength(0)
+  })
+})
+
+// -- a142: gantt titles by keyboard -----------------------------------------
+
+describe('gantt task title', () => {
+  it('is a focusable button that opens the task on Enter or Space', () => {
+    const container = new FakeEl('div')
+    const { plugin } = fakePlugin()
+    const task = makeTask({ title: 'Phish triage' })
+    renderTaskLabel(asEl(container), task, 0, 0, {
+      plugin,
+      project: boardWith([task]),
+      statuses: [],
+      onRefresh: async () => {}
+    })
+    const title = byClass(container, 'pm-gantt-label-title')[0]
+    expect(title.getAttribute('role')).toBe('button')
+    expect(title.getAttribute('tabindex')).toBe('0')
+    title.fire('keydown', { key: 'Enter' })
+    title.fire('keydown', { key: ' ' })
+    title.fire('keydown', { key: 'a' })
+    expect(openTaskModal).toHaveBeenCalledTimes(2)
   })
 })

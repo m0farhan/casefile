@@ -75,10 +75,20 @@ export function renderTaskLabel(
   // Color dot
   renderStatusDot(el, task.status, ctx.statuses, 'pm-gantt-label-dot')
 
-  // Title
-  const titleEl = el.createSpan({ text: task.title, cls: 'pm-gantt-label-title' })
-  titleEl.addEventListener('click', () => {
-    openTaskModal(ctx.plugin, ctx.project, { task, onSave: () => ctx.onRefresh() })
+  // Title. A focusable button (the KanbanCard pattern), so the keyboard can
+  // open the task as a click does.
+  const titleEl = el.createSpan({
+    text: task.title,
+    cls: 'pm-gantt-label-title',
+    attr: { role: 'button', tabindex: '0' }
+  })
+  const openTask = () => openTaskModal(ctx.plugin, ctx.project, { task, onSave: () => ctx.onRefresh() })
+  titleEl.addEventListener('click', openTask)
+  titleEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      openTask()
+    }
   })
 
   // Progress %
