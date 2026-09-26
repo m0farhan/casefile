@@ -47,6 +47,61 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ## Unreleased
 
+### Added — alert kinds you can see, record and edit
+
+- An incident with no kind tag now shows the kind its title names. A case made
+  by hand, such as `77 - SOC138 - Detected Suspicious Xls File`, used to show
+  the generic incident siren everywhere; it now shows Suspicious file, drawn
+  faded with a dashed ring so it cannot be taken for a recorded kind. The
+  tooltip gives the word that matched and says the kind is not recorded on the
+  case. Nothing is written to the case, and a kind its tags record always wins.
+  The board card, the table row, the side panel and the case dialog header all
+  draw the same icon; the dialog header did not show one before.
+  **Derive the alert kind from the title** (on by default) turns this off.
+- An **Alert kind** property on incidents on case boards, in the case dialog
+  and the side panel. The list shows each kind with its icon, plus None.
+  Choosing a kind records it as the case's one kind tag and removes any other
+  tag that names a kind; None removes the kind tags. A kind that is only
+  derived from the title shows as, say, "Suspicious file (derived from title)"
+  in the muted unset style until one is chosen.
+- A **Settings → Alert kinds** section to edit the kinds themselves: label, tag
+  ID, colour, icon and match words, one card per kind. Kinds can be added,
+  reordered by dragging or with the arrows (the order is precedence: when a
+  case matches several kinds, the first wins) and deleted. Deleting a kind
+  asks first and never edits a case. A tag ID another kind already answers
+  to, or one with a space in it, is refused. Open boards redraw as you edit.
+- An icon picker for the kinds: a search over Obsidian's own icons, each one
+  drawn in the list.
+- A new built-in kind, **Suspicious connection**, for outbound and inbound
+  connections, connection attempts and blocked connections. Your saved list
+  is never rewritten on its own, so an existing vault gets it from **Add
+  missing built-in kinds**, which adds each shipped kind your list lacks at
+  the end and leaves the rest exactly as it is.
+
+### Added — reset the Reports tab
+
+- **Reset reports** on the Reports tab makes every chart and headline number
+  count only cases created from that moment. Nothing is deleted and nothing
+  is asked: the cases stay on the board and **Show all time** puts them back.
+  The moment is stored on the board note, so each board keeps its own.
+- The bar above the numbers says what is counted and what is left out —
+  cases created earlier, cases with no readable creation time — and how many
+  of those are still open, because a zero after a reset reads exactly like a
+  quiet week. Weeks before the reset are not drawn, and **Open incidents by
+  severity** says when open incidents are left out rather than that there are
+  none.
+- A save that fails puts the old value back, so the screen never shows a
+  reset the board note does not hold.
+
+### Added — severity on plain boards
+
+- Severity is the one urgency dial, and a plain board — goals, projects — had
+  no way to say which card matters most. It now shows in the task form, on
+  the card with its coloured edge, in the side panel and as a table column on
+  every board. Plain boards still run no response clocks and record no
+  verdicts or indicators, so their table sorts that column by severity only,
+  with no Breach sort.
+
 ### Added — see inside an attachment without opening it
 
 - A PDF attachment shows the JPEG pictures it carries, drawn from their own
@@ -56,41 +111,59 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   picture is listed and hashed but not drawn. A picture stored any other way —
   `/FlateDecode`, which is how most PNG-sourced pictures are stored — is not
   read, and when nothing was lifted out the card says which streams are, so an
-  empty space is not taken for a PDF without pictures. Alongside the pictures:
-  the links the PDF declares (`/URI`, escapes and hex strings decoded, then
-  defanged), a count of the action names in it (`/JavaScript`,
-  `/OpenAction`, …), and where the scan is blind, said in words.
-- A PDF with bytes in front of its `%PDF` header — a space, a byte-order mark —
-  is read as a PDF when the header is within its first kilobyte, as Acrobat
-  reads it. Its actions and hex-written links went unread before, with no
-  note; the card now says where the header is.
+  empty space is not taken for a PDF without pictures. A stream whose own
+  bytes are not a picture — a program stored under `/DCTDecode` — is called a
+  stream, not a picture ("Stream at …" on the card, "embedded stream" in the
+  report), and says what its bytes begin as.
+- Alongside the pictures: the links the PDF declares (`/URI`, escapes and hex
+  strings decoded, then defanged, and listed once), a count of the action
+  names in it (`/JavaScript`, `/OpenAction`, …), and where the scan is blind,
+  said in words.
+- A PDF with bytes in front of its `%PDF` header — a space, a byte-order mark,
+  or a program, JPEG or GIF stub in front of a real PDF — is read as a PDF
+  when the header is within its first kilobyte, as Acrobat reads it. The card
+  says where the header is, and if the reader breaks it says it was the PDF
+  reader that stopped.
 - A Word, Excel or PowerPoint file, or any other ZIP, shows the PNG, JPEG and
   GIF pictures it holds, wherever they sit in the archive — the "enable content
-  to view this document" banner is a picture. Alongside them: the external
-  targets its relationships declare (a remote template, a linked object), and
-  any entry named like a macro project, an OLE object, an external workbook
-  link, an ActiveX control, an embedded file, a program or script, a disk
-  image, or a web page, SVG or OneNote file. The entry list sits behind a
-  disclosure headed by how many entries were read from the ZIP directory — not
-  how many it declares, because a listing that stopped early is not the
-  archive's whole contents — and each entry says whether it is encrypted.
+  to view this document" banner is a picture. An entry is drawn only when it is
+  named as a picture, its bytes begin as one, and it was read whole at the size
+  the ZIP directory declares; one named as a picture whose bytes are something
+  else is listed as a file. Alongside the pictures: the external targets
+  its relationships declare (a remote template, a linked object), and any entry
+  named like a macro project, an OLE object, an external workbook link, an
+  ActiveX control, an embedded file, an executable or script, a file type that
+  can carry script (`.chm`, `.msc`), a shortcut-style file (`.url`, `.iqy`,
+  `.library-ms`, …), a disk image, or a web page, SVG or OneNote file. The
+  entry list sits behind a disclosure headed by how many entries were read
+  from the ZIP directory — not how many it declares, because a listing that
+  stopped early is not the archive's whole contents — and each entry says
+  whether it is encrypted.
 - The other files inside a ZIP — in a plain archive every file that is not a
   picture, in an Office document every part that is not XML, such as
   `vbaProject.bin` — are typed from their own first bytes and, when read
-  whole, hashed. A program named `Invoice.pdf` inside `files.zip` is caught by
-  its bytes: "named .pdf but the bytes begin as Windows executable (MZ)". A
+  whole, hashed. A program named `Invoice.pdf` or `photo.jpg` inside
+  `files.zip` is caught by its bytes: "named .jpg but the bytes begin as
+  Windows executable (MZ)", and its hash reaches Indicators and the case. A
   file too large to read whole gets what its first bytes are and no hash,
-  because a hash of part of a file is not that file's hash. Archives inside
-  archives are not opened.
+  because a hash of part of a file is not that file's hash. An empty file is
+  left out, so the empty-file SHA-256 never reaches Indicators. Archives
+  inside archives are not opened, and an archive, compound file or PDF found
+  inside one says its own contents are not listed.
 - The ZIP reader opens at most 24 entries and reads at most 32 MB out of one
-  file, and one message's attachments share 64 MB between them, read in order.
-  What it did not read is counted in a note that says why.
+  file. One message's attachments share 64 MB between them for pictures and
+  inner files, PDF pictures included, read in order. What was not read is
+  counted in a note that says why — a budget used up by what was read before
+  it, encryption, damage, an entry named as a picture that holds 0 bytes —
+  with one note per reason rather than one per entry.
 - A legacy `.doc`, `.xls`, `.ppt` or `.msg` lists what its compound-file
   directory holds, storages and streams, and names the entries that say what
   they are: `Macros`, `VBA`, `_VBA_PROJECT`, `_VBA_PROJECT_CUR` and `PROJECT`
   as VBA macro storage, `\x01Ole10Native` as an embedded OLE package,
-  `ObjectPool` as embedded objects. No stream is opened. The card used to show
-  only the 512-byte header, where no name ever appears.
+  `ObjectPool` as embedded objects, and `EncryptedPackage` as an encrypted
+  Office package whose contents cannot be read here — which is what a
+  password-protected `.docx`, `.xlsx` or `.pptx` is. No stream is opened. The
+  card used to show only the 512-byte header, where no name ever appears.
 - A Windows shortcut, a OneNote file and a cabinet are recognised by their
   headers, so a shortcut named `Invoice.pdf` says "named .pdf but the bytes
   begin as Windows shortcut (LNK)". JPEG 2000 is recognised too, and named JP2
@@ -100,25 +173,75 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   instead of saying nothing.
 - Plain ASCII text stored as UTF-16 — a shortcut's command line, the text of a
   `.msg` or a OneNote file — is scanned for indicators too, even when it starts
-  at an odd byte.
+  at an odd byte. A shortcut's own strings are read by the lengths it records,
+  so the link or command it holds is found whole rather than glued to the
+  string after it.
 - Every attachment is scanned for indicators whole up to 2,000,000 bytes, and
   past that at both ends — at most the first and the last 1,000,000 — with a
-  fact giving the exact bytes read and skipped. An HTML smuggling page puts a
-  megabyte of base64 first and its script last, and only the head used to be
-  read. A file read as text also gets a count of any script and markup names
-  in it —
-  `<script`, `atob(`, `new Blob`, `createObjectURL`, `.download`,
-  `window.location`, … — counted as text, not parsed, and the line says so.
+  fact giving the exact bytes the text scan read and skipped, and naming the
+  PDF, ZIP or compound-file reader when one read the file separately. An HTML
+  smuggling page puts a megabyte of base64 first and its script last, and only
+  the head used to be read. A file read as text also gets a count of any script
+  and markup names in it — `<script`, `atob(`, `new Blob`, `createObjectURL`,
+  `.download`, `window.location`, … — counted as text, not parsed, and the line
+  says so. An RTF file gets a count of its `\object`, `\objdata` and DDEAUTO
+  markers over the same bytes, not only over the 20,000 characters the preview
+  shows, with the first `\objclass` named when it is a short plain class name.
 - The list of what was found inside a file stops at 100 and says how many more
   there were, so the hundredth line is not read as the last.
 - A disk image (`.iso`, `.img`, `.vhd`, `.vhdx`) is called a disk image whose
-  files are not listed, not an executable. A `.zip` whose entries were listed
-  no longer also says its contents are not visible.
+  files are not listed, not an executable. One whose bytes are a ZIP says the
+  entries listed are the ZIP directory's, and that a disk-image file system in
+  the same bytes is not read. A `.zip` whose entries were listed no longer also
+  says its contents are not visible.
 - A forwarded message attached as `.eml` has "Analyse this message in a new
   tab", so its own Received chain and authentication results are read as
   headers rather than as body text.
-- Reset clears the message and its analysis to start another. Nothing is
+- The readers are bounded so a hostile file cannot stall the analyser: a PDF
+  built so that every search for `endstream` fails is read in one pass, every
+  byte a ZIP inflates counts against its budget whether it is kept or not, a
+  `.docx` whose relationships repeat `<!DOCTYPE>` thousands of times is read
+  in linear time, and each byte of a PDF goes into at most one picture.
+
+### Changed — the phishing analyser is a tab
+
+- The analyser opens in its own workspace tab instead of a dialog. A modal
+  covered the board, capped the report at half the screen, and had to close
+  before the case it produced could be looked at. As a tab it takes the whole
+  pane: the report fills the height and scrolls on its own while the paste
+  box, the pane switcher and the actions stay put.
+- Every open is a NEW tab, so a reported mail can sit beside the one that
+  arrived an hour earlier. Reusing one tab would have thrown the first away.
+  The tab and the pane's own title read "Phish: " and the subject — escaped,
+  and cut to 40 characters — so two analyses can be told apart, and go back
+  to "Phishing analysis" after Reset.
+- Creating a case from the analyser no longer closes it. The case opens on
+  top, and the evidence stays on screen while it is written up.
+- **Reset** clears the message and its analysis to start another. Nothing is
   asked first: nothing here was saved, and a loaded `.eml` is untouched.
+- A `.eml` loaded from the vault is analysed in full but no longer copied
+  into the paste box, where a large mail cost seconds of layout before the
+  analysis began and again on every keystroke. A line under the box names the
+  file and its size and says it was analysed in full and is not shown; typing
+  a paste or Reset clears it.
+- The layout is fitted to a tab rather than carried over from the dialog. The
+  pane switcher no longer sits on the paste box's bottom edge. "asserted by"
+  follows the result it qualifies instead of being pushed to the far edge,
+  which in a full-width tab put 550px between a claim and its source. Hop
+  timestamps never split inside themselves in a narrow pane — the text beside
+  them wraps instead. The dialog-era caps on body text (180px) and images
+  (420px) are lifted, so a message body is no longer a scroll box inside a
+  scroll box. In a pane narrower than about 550px the buttons wrap instead of
+  sliding off the left edge, and long values wrap instead of running past the
+  card or the report.
+- The section headings are banded. IDENTITIES, AUTHENTICATION, PATH,
+  OBSERVATIONS and SENDER DOMAIN were drawn in the same colour as the field
+  labels beneath them, so a section title and "Subject" were the same shade
+  and the whole report read as one long list. Each heading now sits on its own
+  surface with an accent edge and white text, so the report reads as blocks you
+  can jump between. The accent carries no meaning: in this panel amber marks a
+  fact that differs, and green and red are the words an authentication header
+  actually stated, so furniture stays out of those three.
 
 ### Changed — the attachment card
 
@@ -135,7 +258,10 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   lines, on the card and in the copied report: the card keeps the rest behind
   "N more", and the report counts them. The found-inside list does the same on
   the card. A ZIP of 200 encrypted programs was some four hundred flagged
-  lines, and the next attachment was screens away.
+  lines, and the next attachment was screens away. Past 50 attachments the
+  rest wait behind "N more" too, and hidden rows and entry lists are drawn
+  only when opened, so a mail of thousands of parts opens its Attachments tab
+  at once.
 - The PDF line says "/Encrypt present", as the report does. It used to turn one
   matched name into a claim about what the scan could see.
 - "No whole picture was found in this file to draw" is gone. It appeared on
@@ -149,145 +275,455 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
   entry that does not exist.
 - "Analyse this message in a new tab" sits under the type line, has a
   tooltip, and looks like a button. It was filled in the card's own colour
-  with no visible edge, so it read as plain text.
-- The tab is titled "Phish: " and the subject — escaped, and cut to 40
-  characters — so two analyses open side by side can be told apart. It goes
-  back to "Phishing analysis" after Reset.
+  with no visible edge, so it read as plain text. In a narrow pane its label
+  wraps inside the card.
 - The Attachments tab counts inline images in words — "Attachments (3,
-  1 inline)", not "(3+1)" — and their heading says only what is known: "Inline
-  images — marked inline by their own headers".
+  1 inline)", not "(3+1)" — and their heading says only what is known:
+  "Inline images — marked inline or given a Content-ID by their own headers".
 
-### Fixed — evidence that never reached Indicators or the case
+### Changed — case descriptions read the same while you edit them
 
-- A PDF or Office file marked inline — Gmail gives ordinary attachments a
-  Content-ID, and Apple Mail sends a PDF as `inline; filename=` — was filed as
-  an inline image. Its lure reached neither Indicators, the report nor the
-  case, and when it was the only attachment the report's Attachments section
-  said None. Only a part whose own bytes are a picture this draws is an inline
-  image now. Anything else marked inline is an attachment, and says it was
-  "marked inline or given a Content-ID by its own headers". A part that would
-  not decode is an attachment too, and says "size not recorded", never
-  "0 bytes".
-- Create case carries the same indicators as the Indicators tab: the links the
-  PDF and Office readers found, and the hashes of inline parts and of the files
-  inside archives, each with a note naming the attachment it came from. It
-  used to leave out everything a structure reader found.
-- A remote template written as a UNC or `file://` path —
-  `\\files.corp-share.app@SSL\DavWWWRoot\t.dotm` — puts its host in
-  Indicators and the case. A path to a local or single-label name adds nothing.
-- A URL a PDF or Office reader found is no longer printed a second time on the
-  card as "found inside the file".
-
-### Fixed — reads that ran away or said the wrong thing
-
-- A 12 MB PDF built so that each failed search for `endstream` searched again
-  froze the analyser for tens of seconds. All the searches together are now one
-  pass over the file.
-- A small `.docx` whose directory points thousands of times at one compressed
-  stream froze it for tens of seconds, because pictures the reader threw away
-  were never charged to its budget. Every inflate now counts, kept or not.
-- A mail under 1 MB could make the archive reader hold 640 MB of pictures. That
-  is the 64 MB per message above, and a card whose pictures did not fit says
-  the budget was used up by what was read before it.
-- A picture inside a ZIP was judged whole by its last bytes: a broken stream
-  that happened to end like a GIF or a JPEG was drawn and hashed as the
-  picture, and a whole JPEG with bytes after its end was dropped. It is kept
-  now only when the bytes read match the size the directory declares.
-- The ZIP reader's skip notes gave the wrong reason and a wrong "first 24 of
-  N". A picture that did not fit the budget is said to be that, not damaged.
-- A JPEG 2000 stream found by searching for `endstream` was accepted on its
-  first bytes. It now has to begin and end as one.
-- The report said "the ZIP directory lists N entries" when no directory had
-  been found or the listing had stopped early. It says how many were read.
+- Clicking into a case description no longer moves the text. The preview and
+  the editor used to lay it out differently — different heading sizes, the
+  list text 30px apart, tighter lines, a smaller box under an extra toolbar
+  row — so the whole section jumped on every click. Both now share one layout
+  read from Obsidian's own typography settings, and headings, paragraphs,
+  lists, checkboxes, quotes and code blocks stay where they were. Links and
+  embeds still show as source while you edit, and tables and lists inside
+  quotes are not matched exactly.
+- The description is set in your note text font and size, as a note is,
+  instead of the smaller interface type it used before.
+- Lists hang their bullet, checkbox or number where the preview draws it, and
+  nested items indent by their real depth. The raw `- ` shown on the line the
+  cursor is on sits exactly where the dot was. Blank lines between blocks
+  give the same space in both modes, and a line wraps at the same word.
+  Heading lines still shift their text by the `### ` marker when the cursor
+  is on them, as Obsidian's own live preview does.
+- A checkbox with any mark in it draws as a checkbox in the editor too,
+  ticked for anything but a space; only `x` is struck through, in both modes.
+- The format toolbar sits in the section's heading row, so switching to edit
+  adds no row above the text. Beside it, an **Edit description** button opens
+  a description that already has text from the keyboard.
 
 ### Changed — defanging, scanning and previews
 
-- Every scheme except http, https and ftp loses its colon when defanged —
-  `ms-msdt[:]`, `search-ms[:]`, `ms-word[:]` — where a list of six names used
-  to decide. An IPv6 address keeps its colons. A leading UNC `\\` becomes
-  `[\\]`, so a dotless `\\fileserver\share` is inert too. Refanging reverses
-  both.
-- The Links tab shows each link, and its domain, in the same defanged form as
-  the report and the Indicators tab — `hxxps://`, and `[:]` for the colon of
-  any other scheme. It only bracketed the dots.
-- An indicator scan stops a URL at a control character, `{`, `}` and a
-  backslash, so an RTF template `{\*\template http://evil.example/t.dotm}`
-  yields exactly that URL, and NUL padding no longer rides along on the end.
+- Every scheme except http and https loses its colon when defanged —
+  `ftp[:]`, `ms-msdt[:]`, `search-ms[:]`, `ms-word[:]` — where a list of six
+  names used to decide. An IPv6 address keeps its colons. A leading UNC `\\`
+  becomes `[\\]`, so a dotless `\\fileserver\share` is inert too. A row typed
+  as a hash is defanged by its value like any other, so a pasted
+  `javascript:` in a hash row no longer stays live. Refanging reverses all of
+  it.
+- The Links tab shows each link, and its derived domain, in the same defanged
+  form as the report and the Indicators tab — `hxxps://`, and `[:]` for the
+  colon of any other scheme. It only bracketed the dots.
+- An indicator scan stops a URL at a control character, `{`, `}`, a
+  backslash and the replacement character, so an RTF template
+  `{\*\template http://evil.example/t.dotm}` yields exactly that URL, and NUL
+  padding no longer rides along on the end.
 - An RTF file or a script with a `#!` line previews as text when it is text,
   not as a hex dump.
 - Reading a large paste does less work: the header reader no longer scans the
-  whole raw message for a list of indicators nothing used.
+  whole raw message for a list of indicators nothing used, and MD5 is several
+  times faster.
 
-### Fixed
+### Changed — documentation
 
-- Clearing the paste box left the previous message's tabs and counts on
-  screen over an empty pane.
-- A PDF image cut at its declared `/Length` carried a note saying it might be
-  a prefix of the real image, found by searching for `endstream`. It was
-  exact. The note now appears only for images whose end really was searched
-  for.
+- The README and INSTALL describe what the plugin does today: one folder per
+  board, where boards are found, the features that write, move or read case
+  data, and the minimum Obsidian version.
+- The shipped `main.js` carries the MIT licence notices of the date and time
+  library it bundles.
 
-### Changed — the phishing analyser is a tab
+### Fixed — boards filed outside the default folder
 
-- The analyser opens in its own workspace tab instead of a dialog. A modal
-  covered the board, capped the report at half the screen, and had to close
-  before the case it produced could be looked at. As a tab it takes the whole
-  pane: the report fills the height and scrolls on its own while the paste
-  box, the pane switcher and the actions stay put.
-- Every open is a NEW tab, so a reported mail can sit beside the one that
-  arrived an hour earlier. Reusing one tab would have thrown the first away.
-- Creating a case from the analyser no longer closes it. The case opens on
-  top, and the evidence stays on screen while it is written up.
-- The layout is fitted to a tab rather than carried over from the dialog. The
-  pane switcher no longer sits on the paste box's bottom edge. "asserted by"
-  follows the result it qualifies instead of being pushed to the far edge,
-  which in a full-width tab put 550px between a claim and its source. Hop
-  timestamps never split inside themselves in a narrow pane — the text beside
-  them wraps instead. The dialog-era caps on body text (180px) and images
-  (420px) are lifted, so a message body is no longer a scroll box inside a
-  scroll box. Checked at full width and split in half.
+- 2.39.0 let a board live in any folder, but every screen still looked for
+  boards only in the default folder, so a board filed elsewhere vanished from
+  the boards list, notifications, the shift handover and the dashboard at
+  once. Boards are now also found through every note Obsidian has indexed as
+  a board, and every board opened or saved this session, without reading any
+  file to find them. A board that arrives by Sync outside the default folder
+  appears once Obsidian has indexed it.
+- The Boards pane redraws when a board outside the default folder changes.
 
-### Fixed — four defects found by red-teaming the analyser
+### Fixed — boards and cases
 
-- The text pane dropped text with no attacker involved. The element scanner
-  matched `<head` against `<header`, so an ordinary marketing or phishing mail
-  lost its header block and everything in it — usually the lure. The same
-  scanner had no quote awareness, so `<img alt="<script>">` swallowed the rest
-  of the message, and the final tag strip left a stray `">` behind as if the
-  sender had written it. One tag walker now serves all of it: names must end at
-  a boundary, and quoted attribute values are skipped whole.
-- A defanged indicator could lie about where it went. `defangIoc` bracketed
-  only the ASCII dot, so `paypal。com.evil。co` — which Chromium resolves as
-  paypal.com.evil.co — came back with the decoy marked and the real apex
-  looking untouched. It now treats the ideographic, fullwidth and halfwidth
-  full stops as separators, strips bidi overrides and isolates, and takes the
-  colon off `javascript:`, `data:` and every other scheme that is not a web
-  one. `data:text/html,<script>…</script>` previously passed through
-  completely unchanged.
-- Remote-content scrubbing was a nine-tag list, and lists are what get
-  bypassed: `<div style="background-image:url(…)">`, `<image>`, `<input
-  type=image>`, `<table background=…>`, inline SVG and reference-style
-  markdown images all walked past it. Alongside the list there is now a rule
-  that removes any tag naming a remote resource, whatever the element is.
-- A pasted alert that quotes a message is fenced when it is written, not
-  scrubbed when it is rendered. The scrub only ever ran inside the plugin;
-  opened as an ordinary note, nothing guarded it, and a reported-phish alert
-  is attacker-written markup by definition. Fencing keeps every byte verbatim
-  and renders none of it anywhere. Alerts without markup stay prose.
-- Inline parts and attachments are split by position, not by filename. A
-  message whose real attachment shared a name with its own inline logo put
-  both on one side, hiding one of them.
+- A change made outside the open board — a colleague's edit arriving by
+  Sync, a hand edit to a case note, a folder dragged in the file explorer —
+  now refreshes the board in place. Before, the board view, the side panel,
+  the case dialog and the SLA check could each hold an older copy of the
+  board, and the next save from one of them erased what the other had
+  written: breach entries, activity rows, journal entries, a changed status.
+- The board settings dialog edits a draft and saves the board itself. Saving
+  it could revert settings, erase breach entries, lose a description edit and
+  bring back an old board.
+- A board note renamed or moved in the file explorer is followed: the open
+  board, its tab and its view mode move with it. It used to detach every case
+  and bring back the old paths. A board whose cases folder is missing says
+  "Cases not found", takes no new case and is never saved over, so the list of
+  cases it records is kept.
+- Deleting a board no longer trashes another board filed inside its folder,
+  and creating or moving a board into another board's folder is refused with
+  the reason. After Delete board, a side panel still open can no longer
+  recreate the board.
+- Properties you add to a board note by hand — tags, aliases, cssclasses —
+  are kept when the board is saved. The board description is no longer copied
+  into the board note again on every save.
+- A property such as `Ticket: ref` on a case no longer breaks it on the next
+  save, and a list property with an empty item no longer blocks every later
+  save of the board. A value of the wrong kind written by hand — a number as a
+  title, a single tag that is not a list — is read as written instead of
+  hiding the board or failing its saves. A note saved with Windows line
+  endings loads instead of vanishing.
+- Two case notes with the same id — "Make a copy", a sync-conflict copy — no
+  longer hide the original and block every save of the board: the note whose
+  name matches its title wins, and the others are named once in a notice and
+  never written. A subtask loop no longer makes a board unloadable, and a case
+  listed twice shows once.
+- A new case or a rename that collides with an existing note is refused
+  before anything changes, and says why. It used to leave a ghost card that
+  failed every later save of the board.
+- Case keys are never handed out twice: the next key skips past every key
+  already on the board, and running **Adopt issue keys for a board** again
+  never reissues a deleted case's key. The command asks which prefix to use
+  first, and a CVE or APT id in a title is no longer taken for a key and cut
+  out of the title.
+- Retitling, moving or archiving a case renames its note with Obsidian's
+  link-aware rename. It used to create a new note and delete the old one, which
+  broke links you had written to it and closed its open tab.
+- A case titled `Archive` or `attachments` gets ` (task)` in its file name, so
+  deleting it can no longer trash the board's Archive.
+- The subtasks of an archived parent stay with it in and out of Archive.
+- A case file name is never cut in the middle of an emoji, and a tab or line
+  break in a title becomes a space in the file name.
+- A due date shows its own day for analysts west of UTC; it read a day early.
+- A case whose note records no creation time is treated as unknown, not as
+  created at load time. It no longer shows as updated today, counts as opened
+  this week, or restarts its SLA clock on every load.
+- An incident moved from a closing status back to an open one has its
+  resolution time cleared, and the change logged, so its clock runs again and
+  can breach; it used to stay "met" for good. Hand edits to a case's lifecycle
+  times — occurred, detected, responded, contained, resolved — and to its type
+  are recorded in the activity log, since they decide SLA outcomes.
+- An investigation journal can no longer be taken over by a `## Comments` line
+  in a pasted description, and a line inside an entry that looks like a time
+  stamp stays in that entry instead of splitting off as a back-dated one.
+- Hand-written `Project: [[…]]` or `Parent: [[…]]` lines in a description are
+  kept on save; only the link the plugin writes itself is removed. **Remove
+  board backlinks from task notes** no longer skips notes.
+- **Import notes as tasks** imports into the board you are looking at, not the
+  first one open, and names it. It no longer offers board notes or case notes,
+  and a board note is never turned into a case. An imported note keeps its own
+  properties and tags, TaskNotes time entries come across as time logs, a
+  notice names any property a move had to replace, and a note that opens with
+  a `---` rule keeps its first paragraph. The picker draws at most 200 rows and
+  says how many more match. A TaskNotes task that repeats on several days of
+  the week is imported without a repeat rather than as "Repeats weekly".
+- A board in the old single-note layout is labelled with the folder it is in,
+  not "Vault root", and **Move each board into its own folder** moves each
+  board in place instead of back to the vault root, and keeps your default
+  folder setting.
+- A default folder you deleted is no longer recreated every few minutes, and
+  startup no longer reads every note at the vault root from disk.
+- Board colours from a board note accept only hex values and colour names, so
+  a board note cannot make the dashboard fetch a remote address.
 
-### Changed
+### Fixed — the board, table and Gantt
 
-- The phishing analyser's section headings are banded. IDENTITIES,
-  AUTHENTICATION, PATH, OBSERVATIONS and SENDER DOMAIN were drawn in the same
-  colour as the field labels beneath them, so a section title and "Subject"
-  were the same shade and the whole report read as one long list. Each heading
-  now sits on its own surface with an accent edge and white text, so the report
-  reads as blocks you can jump between. The accent carries no meaning: in this
-  panel amber marks a fact that differs, and green and red are the words an
-  authentication header actually stated, so furniture stays out of those three.
+- Changing a filter no longer clears the board's swimlanes. A saved view
+  keeps its own copy of its filter, so clicking a filter no longer rewrites
+  the saved view on disk, and its sort order is applied. Renaming or moving a
+  board keeps the view you had open.
+- A case renamed or created outside the board shows up on it; dragging a card
+  afterwards used to recreate the old file as a duplicate case.
+- Clicking away from the board title with it empty or unchanged no longer
+  saves it.
+- Search matches every free word, not the words as one phrase. On a Sunday,
+  **This week** and `due:this-week` no longer take in the whole next week.
+  `due:!<date>` no longer hides every undated task, and a word such as
+  `constructor:` is not read as a field.
+- A column's WIP limit counts every unarchived case in that status, not only
+  those in the lane and filter on screen, and shows both numbers when they
+  differ.
+- A card dropped into another swimlane keeps its new status and says that
+  lanes follow the case's field, instead of silently snapping back.
+- Undoing a bulk close or a drag into a closing status restores the completion
+  date and the response and resolution times exactly, so the SLA clock runs
+  again.
+- A plain board never asks for or writes a verdict: no prompt on close, no
+  **Set verdict** in the bulk bar, no Verdict filter. On a case board, a bulk
+  verdict change touches incidents only, and a bulk close asks "Verdict for
+  these N incidents?" rather than "this incident".
+- The table forgets a case deleted from its row menu, so bulk counts are true.
+  Shift-click after the range anchor has gone selects the row it ticks. Enter
+  and Backspace on a focused button do what the button does instead of opening
+  or deleting the row. Clicking a due date that carries a time, then clicking
+  away, no longer erases it.
+- A card whose description holds a long hostile paste no longer stalls the
+  board on every render.
+- Gantt: Cmd/Ctrl+Z in a text field or a dialog undoes the typing, not the
+  last date drag. The left handle cannot drag a start past the due date. A
+  mistyped year no longer makes the chart loop over tens of thousands of days;
+  a date far outside the chart is stated in words at its edge ("Outside the
+  chart range: due 2206-09-26"). A link that would make a dependency loop is
+  refused. Arrows reach due-only tasks and milestones where they are drawn,
+  and **+ milestone** saves only a due date.
+- Undoing a date drag shows one message, which names the case and the board,
+  and, when auto-scheduling had moved other tasks, says how many so their
+  dates can be checked. The commands are now **Undo last gantt date change**
+  and **Redo last gantt date change**, which is all they ever undid; they say
+  what they reverted, are hidden when there is nothing to undo, and refuse
+  when the case is no longer on the board.
+- The Gantt label column takes at most 45% of the width, where a fixed 280px
+  left a phone about 90px of timeline, and its resize handle works by touch.
+
+### Fixed — the case dialog and side panel
+
+- The side panel's autosave never writes a close you have not answered the
+  verdict prompt for. It used to stamp a resolution that never happened.
+- The side panel saves every edit: assignees, tags, dependencies, multi-select
+  fields and checkbox ticks were lost when nothing scheduled an autosave.
+  Ticking a box in the description preview starts the autosave. After the
+  first save, subtask ticks are written and indicator and assignee changes are
+  logged.
+- The dialog and panel no longer revert subtask changes made on the board,
+  delete their activity rows, or bring deleted subtasks back as empty cards.
+- Archive and Unarchive in the case dialog run the same checks as Save,
+  verdict prompt included, and ticking an incident subtask's checkbox asks
+  for its verdict and stamps its resolution.
+- After a failed Archive, later saves in the dialog land. Shift+Enter in the
+  title saves again instead of adding a line break. Closing the dialog with a
+  title that collides keeps the old title and says why, instead of discarding
+  every other edit.
+- Closing a new case you have typed into — the X, Esc, a click outside, Open
+  as note, an indicator pivot, a subtask or a linked case — asks first.
+- The date picker never erases a date on close: only Clear clears, and a date
+  with a time survives opening the picker.
+- Clearing a number field removes it; it used to be saved as the text "NaN".
+- A severity the board's list does not know shows its id — on the card, in the
+  table, the dialog, the panel and Reports — instead of reading as no
+  severity. Its badge says "Not in the severity list".
+- Evidence opens from a case only when Obsidian can show the file itself.
+  Anything else — a dropped executable, an archive — offers **Copy path —
+  opens outside Obsidian**, and a link or embed to such a file in a
+  description or comment copies its path instead of handing it to the system.
+- A description or journal comment that could load anything remote — raw
+  HTML, a `![](…)` image — is shown as its source in the case views, every
+  byte kept and none of it rendered. 2.39.0 cut a list of tags and remote
+  markdown images out before rendering, and lists are what get bypassed: a
+  styled background, `<image>`, `<input type=image>`, inline SVG and
+  reference-style images all walked past it. The price is that a description
+  holding ordinary HTML or a markdown image shows as source too.
+  `![[embeds]]` are unaffected.
+- The lifecycle panel no longer says the clock "runs from case creation" when
+  there is no creation time or no clock; it says the SLA has no start.
+
+### Fixed — case reports, handover, reports and notifications
+
+- A case report or shift handover writes case titles and indicator notes
+  escaped, so a sender-written title can no longer turn into a live image,
+  embed or link in the note it opens. Indicator values sit in code spans, so a
+  UNC path keeps its backslashes and underscores are not read as emphasis.
+- The handover prints status, severity and verdict names instead of their
+  ids, defangs indicator values in its activity rows, and prints "(unset)" for
+  an empty side. The case timeline defangs them too, and sorts Completed at the
+  close instead of at midnight UTC, usually before the case was even created.
+- The case report says "Target set — no clock" or "not computable" when a
+  target exists but a time is missing or unreadable, where it used to say "No
+  target set." or "met (NaNm inside target)". It notes that journal entry
+  times are local and carry no time zone, and its footer says the date is UTC.
+  On a plain board it gives its refusal sentence instead of "Something went
+  wrong".
+- An SLA target of 0 runs no clock, rather than breaching every incident at
+  that severity the moment it is created.
+- A missed target is logged in the case's activity even with notifications
+  off. More than three notices at once fold into one summary, and archived
+  cases no longer raise overdue notices.
+- Reports: a late response counts as a breach in **Targets met**, even when
+  the case was resolved in time. Weeks follow your local calendar, so a case
+  can no longer close a week before it opened. **Time in open statuses**
+  (renamed from Time in status) measures every case the same way and leaves
+  closing statuses out. The "no detection time" notes say how many incidents
+  they are out of.
+- The SLA chip's tooltip says a running clock never pauses, whatever the
+  status.
+
+### Fixed — indicators and reputation
+
+- A UNC path is judged by its server, so `\\10.0.0.5\c$\evil.exe` is one of
+  your own assets and is never sent to VirusTotal or URLhaus. An owned domain
+  written in Unicode or with an ideographic dot matches its rule, so it is not
+  sent either. A value with no address, host or hash shape — a local path, a
+  bracketed address — is never sent, and **Check reputation** says "Not an
+  address, host or hash a provider can look up — nothing sent" instead of
+  asking for keys you already have.
+- **Check all indicators** asks again for rows whose last lookup was
+  rate-limited or failed on the network.
+- AbuseIPDB marks an address clean only when it is whitelisted; a low score
+  with abuse reports stays unknown and keeps its numbers. An abuse.ch reply
+  that was read correctly names the provider's answer instead of saying
+  "unreadable response".
+- The indicator scan is linear on hostile text; a 160 KB paste froze
+  Obsidian for about 40 seconds and ran again on every keystroke. The
+  Indicators section finds sightings in other cases in one pass per render.
+- A defanged value can no longer lie about where it goes: `paypal。com.evil。co`
+  has every dot bracketed, ideographic and fullwidth full stops included; bidi
+  overrides are stripped; `javascript:` and `data:` lose their colon, even
+  behind a control character.
+- Pasted `[dot]`, `(dot)` and `[://]` are read, and a URL with `(.)` in it is
+  no longer cut short. A bare URL no longer carries a closing curly quote or
+  sentence punctuation. Two URLs that differ only in the case of their path
+  are both kept.
+- Indicator values in the activity log and the handover are shown defanged.
+- Toolbox: read-as-timestamp no longer makes up dates — a syslog stamp without
+  a year, a version string or `09/10/2026` gives no reading, and each reading
+  says whether its zone was stated. Refang and defang handle lists and
+  `label: value` lines whole. Percent-decoding decodes what it can when one
+  escape is malformed, and says so.
+
+### Fixed — alert intake
+
+- A pasted alert that quotes markup is fenced when the case is written, every
+  byte kept and none of it rendered, so it is inert in the plugin, in reading
+  view and in an exported file. Markdown and reference-style images, embeds,
+  code fences (`dataviewjs` included) and inline `$=` queries are fenced too;
+  they used to reach the case note live. Alerts without markup stay prose.
+- A time with no zone is marked in the preview as read in your local time;
+  it used to be taken as a definite instant without a word. A date with no
+  time is not taken as a time at all, rather than given an invented midnight.
+- A paste with long runs of spaces no longer hangs the dialog, and a title is
+  never cut in the middle of an emoji. A bulleted `- Key : Value` paste has its
+  rule, event time and severity read.
+- The suggested kind follows the title as you edit it, and the dialog names
+  the board the case goes to ("New case on …"). A case the board refuses says
+  why.
+
+### Fixed — the phishing analyser
+
+- An ordinary attachment with a Content-ID — Gmail gives them one, and Apple
+  Mail sends a PDF as `inline; filename=` — was filed as an inline image, so
+  its lure reached neither Indicators, the report nor the case, and a mail
+  whose only attachment it was said "Attachments: None". Only a part whose own
+  bytes are a picture this draws, and whose own headers do not say attachment,
+  is an inline image now. A part that would not decode is an attachment that
+  says "size not recorded", never "0 bytes". Inline parts and attachments are
+  split by position, so a real attachment sharing a name with the inline logo
+  is no longer hidden.
+- A forwarded message attached to the report keeps its own text. Its body
+  sits under "Text of the attached message", followed by its name, on the Body
+  tab and in the report; its links say "in the body of" it, the files inside it
+  say "inside" it, and the sender and originating IP in its headers reach
+  Indicators and the case, noted "in the headers of" it — each time with its
+  name as written. Before, its text and links were merged into the reporter's
+  with no mark, and its headers never reached Indicators.
+- Create case carries exactly the indicators the Indicators tab lists, from
+  one collector: the links the PDF and Office readers found, the hashes of
+  inline parts and of files inside archives, the addresses and domains in the
+  text of an HTML-only mail, and hosts in remote templates and PDF links
+  written as `file://` or UNC shares. It used to drop some of these and could
+  drop a URL that differed from another only in case. Create case also takes
+  its title, indicators and description from one message, and Copy report,
+  Copy indicators and Create case wait while a new message is analysed.
+- The sender look-alike check reads the From address as written, before
+  encoded words are decoded. An encoded word could make the analyser read a
+  different From domain from the one the mail carries, call it aligned with
+  the Return-Path, and skip the look-alike check. `Return-Path: <>` is
+  reported as a null sender, not a missing header.
+- Authentication-Results names the host that asserted it, including for
+  Microsoft 365 and ARC headers, and says "no asserting host stated" when
+  there is none. A Received hop shows its from-clause as the receiving server
+  wrote it, with the address that server recorded, where it used to show the
+  sender's HELO literal as the hop's address.
+- Encoded subjects and file names no longer gain spaces the mail client never
+  shows, so a double extension split across encoded words is caught.
+  Quoted-printable text keeps its non-ASCII letters instead of inventing a URL
+  that is not in the mail (`pаypal` read as `p0ypal`). A charset that cannot be
+  decoded says so instead of being read as UTF-8 without a word, and a
+  multipart whose boundary never appears says so instead of "headers only".
+- MIME parameters honour quoted strings, so a sender cannot hide a second
+  boundary or file name inside one, and a file name split into several pieces
+  is joined the way mail clients join it.
+- A paste that starts with a blank line keeps its headers and attachments.
+- A hash over a part rebuilt from its text — no transfer encoding, or
+  quoted-printable with hard line breaks — says its size and hashes may not
+  match the file as sent, on the card and in the case note. The hash line
+  reads "hashes computed here".
+- The HTML text pane dropped text with no attacker involved: `<head` matched
+  `<header`, so a mail lost its header block and usually the lure, and an
+  attribute holding `<script>` swallowed the rest of the message. Quoted
+  attribute values are now skipped whole.
+- The Links tab and the report head their list "Links in the message text"
+  and point to Attachments whenever there are any, so a lure inside a PDF no
+  longer sits under "None found." The domain beside a link is labelled
+  "derived domain", with a note that it is the host's last two or three labels
+  and names the platform under a hosting service such as `pages.dev`.
+- The double-extension fact says only what the name shows, and not at all for
+  `Invoice.pdf.pdf`. `.vbe`, `.cpl`, `.pif`, `.apk`, `.xll`, `.url`, `.iqy`,
+  `.library-ms`, `.chm` and `.msc` get the same facts at the top level and
+  inside a ZIP. A compound file is called "OLE compound file", not "legacy
+  Office document".
+- Sender-written text — header values, hop names, parser notes, the case
+  title, copied indicators — is shown with control, format and direction
+  characters written out as `<U+XXXX>`, on screen and in the copied report, so
+  a direction override can no longer reverse the tool's own sentences. The
+  report's Inline images block carries each part's facts and what was found
+  inside it, as the card does.
+- Parser notes sit under their own heading on the Indicators tab, not under
+  "Not in this paste". A hop flagged as earlier than the one before it no
+  longer collapses into a column of single letters.
+- Clearing the paste box clears the previous message's tabs and counts.
+- Large and hostile mails no longer freeze the analyser: link scans, the MIME
+  reader, Proofpoint unwrapping and header parsing each ran for seconds to
+  minutes on crafted input and are now linear.
+
+### Fixed — settings
+
+- Deleting a status, verdict, severity or type asks first and says how many
+  cases use it. A deleted status's cases move to another status of the same
+  kind — closing to closing — and the last status of a kind cannot be
+  deleted; the move is logged but stamps no completion, response or
+  resolution time. The board settings dialog does the same for a board's own
+  statuses.
+- Dragging a palette entry onto another list is ignored; it could put an empty
+  entry there that stopped the plugin loading. Each entry also has up and down
+  buttons.
+- Clearing every SLA target or deleting every incident template is kept after
+  a restart; the defaults used to come back. An SLA row with one side blank is
+  refused with a hint, since it saved a 0-minute target.
+- The auto-archive days field saves when you leave it: typing `400` saved 40
+  and `1.5` saved 1.
+- A board's type can be changed in its settings, which alert intake already
+  told you to do. Renaming and moving a board at once is checked before
+  either happens.
+- Setting descriptions say what the settings do: the SLA clock counts
+  calendar time and never pauses, not even in User Response; notifications
+  cover missed targets, which are logged either way; **Save tasks on close**
+  covers existing cases, since a new case is created only by its button; and
+  the auto-archive, handover and Gantt settings say exactly what they change.
+- The incident template editor has a border, a background and a focus ring.
+- Notices, commands and the boards pane say board, not project.
+
+### Fixed — accessibility and narrow panes
+
+- Every icon button works with Enter and Space. The Activity log header is one
+  keyboard button, and the subtask collapse toggles can be reached and
+  operated by keyboard.
+- Board cards, backlog rows, Gantt titles and **Open as note** can be focused
+  and opened from the keyboard, and Shift+F10 or the menu key opens a board
+  card's menu.
+- Filter and select lists move focus into their options, arrow keys step
+  through them, and focus goes back to the button on close.
+- The phishing analyser's pane tabs say which one is selected and keep focus
+  when chosen from the keyboard, and its disclosures show a focus ring.
+- Obsidian's light theme no longer leaks into the plugin's dark surfaces,
+  where it left an invisible caret, unreadable selects on hover and faint
+  icons. Information text, report figures included, meets 4.5:1 contrast.
+- In the right sidebar, property values, indicator values and the lifecycle
+  Now and Clear buttons no longer collapse or run off-screen. Reports and the
+  bulk action bar wrap in narrow panes instead of scrolling sideways.
+- Controls that appear on hover show on touch screens, the table's row
+  checkbox shows when it has keyboard focus, and **Remove link** in Linked
+  cases appears on hover as it was meant to.
 
 ## [2.39.0] - 2026-09-24
 
