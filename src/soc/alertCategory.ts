@@ -115,13 +115,53 @@ export function setKindTag(tags: readonly string[], categories: readonly AlertCa
 }
 
 /**
- * The built-in kinds a saved list lacks, by id, as fresh copies. Only ever
- * appended on the analyst's click: an existing vault's list is theirs, and a
- * new default must not silently rewrite it or bring back one they deleted.
+ * The kind other than `kind` that already answers to `term`, if any. One kind
+ * per word is the rule every edit keeps: a tag that two kinds answer to reads
+ * as whichever comes first, so picking the other would show the wrong one and
+ * cases already tagged would change kind. `kind` undefined = a kind not yet in
+ * the list.
  */
-export function missingBuiltInKinds(categories: readonly AlertCategoryConfig[]): AlertCategoryConfig[] {
+export function kindAnswering(
+  term: string,
+  kind: AlertCategoryConfig | undefined,
+  kinds: readonly AlertCategoryConfig[]
+): AlertCategoryConfig | undefined {
+  return categoryForTags(
+    [term],
+    kinds.filter((k) => k !== kind)
+  )
+}
+
+/** A built-in kind left out because a kind in the list already answers to one of its words. */
+export interface SkippedKind {
+  kind: AlertCategoryConfig
+  by: AlertCategoryConfig
+  term: string
+}
+
+/**
+ * The built-in kinds a saved list lacks, as fresh copies. Only ever appended
+ * on the analyst's click: an existing vault's list is theirs, and a new default
+ * must not silently rewrite it or bring back one they deleted. A built-in whose
+ * id, label or match word another kind already answers to is `skipped`, not
+ * added — a renamed built-in (id `phish`, label Phishing) is still Phishing.
+ */
+export function missingBuiltInKinds(categories: readonly AlertCategoryConfig[]): {
+  add: AlertCategoryConfig[]
+  skipped: SkippedKind[]
+} {
   const have = new Set(categories.map((c) => c.id.trim().toLowerCase()))
-  return DEFAULT_ALERT_CATEGORIES.filter((c) => !have.has(c.id)).map((c) => ({ ...c, match: [...c.match] }))
+  const add: AlertCategoryConfig[] = []
+  const skipped: SkippedKind[] = []
+  for (const c of DEFAULT_ALERT_CATEGORIES) {
+    if (have.has(c.id)) continue
+    const hit = categoryTerms(c)
+      .map((term) => ({ kind: c, term, by: kindAnswering(term, undefined, categories) }))
+      .find((h): h is SkippedKind => h.by !== undefined)
+    if (hit) skipped.push(hit)
+    else add.push({ ...c, match: [...c.match] })
+  }
+  return { add, skipped }
 }
 
 /**

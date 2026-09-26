@@ -14,10 +14,10 @@ import { confirmDialog } from './ui/ModalFactory'
 import { IconButton } from './ui/primitives/IconButton'
 import { IconPickerModal, iconLabel } from './ui/IconPickerModal'
 import { setAlertKindDerivation } from './ui/composites/issueMeta'
-import { categoryForTags, missingBuiltInKinds } from './soc/alertCategory'
+import { kindAnswering, missingBuiltInKinds } from './soc/alertCategory'
 import { unmatchableAssetRules } from './soc/ioc'
 import { safeColor } from './store'
-import { safeAsync } from './utils'
+import { isIconName, safeAsync } from './utils'
 
 export type { PMSettings }
 export { DEFAULT_SETTINGS }
@@ -422,15 +422,18 @@ export class PMSettingTab extends PluginSettingTab {
       )
       .addButton((btn) =>
         btn.setButtonText('Add missing kinds').onClick(() => {
-          const missing = missingBuiltInKinds(this.plugin.settings.alertCategories)
-          if (!missing.length) {
-            new Notice('Every built-in kind is already in the list.')
+          const { add, skipped } = missingBuiltInKinds(this.plugin.settings.alertCategories)
+          const why = skipped
+            .map((s) => ` Skipped ${s.kind.label}: the kind "${s.by.label}" already answers to "${s.term}".`)
+            .join('')
+          if (!add.length) {
+            new Notice(skipped.length ? `Nothing added.${why}` : 'Every built-in kind is already in the list.')
             return
           }
-          this.plugin.settings.alertCategories.push(...missing)
+          this.plugin.settings.alertCategories.push(...add)
           this.kindsChanged()
           this.renderAlertKindList(kindsContainer)
-          new Notice(`Added at the end of the list: ${missing.map((c) => c.label).join(', ')}.`)
+          new Notice(`Added at the end of the list: ${add.map((c) => c.label).join(', ')}.${why}`)
         })
       )
 
@@ -956,6 +959,8 @@ export class PMSettingTab extends PluginSettingTab {
           }).open()
         )
       icon.el.setCssStyles({ color: kind.color })
+      // An emoji (hand-edited or synced data.json) draws as text, as it does on the card.
+      if (kind.icon && !isIconName(kind.icon)) icon.el.setText(kind.icon)
 
       const label = head.createEl('input', {
         type: 'text',
@@ -964,9 +969,12 @@ export class PMSettingTab extends PluginSettingTab {
         attr: { 'aria-label': 'Label' }
       })
       label.addEventListener('change', () => {
+        // A label is a word the kind answers to, so it takes the tag ID's rule.
         const next = label.value.trim()
-        if (!next) {
+        const other = next ? kindAnswering(next, kind, kinds) : undefined
+        if (!next || other) {
           label.value = kind.label
+          if (other) new Notice(`Not saved: the kind "${other.label}" already answers to "${next}".`)
           return
         }
         kind.label = next
@@ -985,10 +993,7 @@ export class PMSettingTab extends PluginSettingTab {
         // match word): the tag would then read as whichever kind comes first,
         // and picking this kind could show the other.
         const next = id.value.trim().replace(/^#+/, '')
-        const other = categoryForTags(
-          [next],
-          kinds.filter((k) => k !== kind)
-        )
+        const other = kindAnswering(next, kind, kinds)
         if (!next || /\s/.test(next) || other) {
           id.value = kind.id
           new Notice(
@@ -1055,11 +1060,19 @@ export class PMSettingTab extends PluginSettingTab {
       })
       match.placeholder = 'Comma separated'
       match.addEventListener('change', () => {
+        // A word another kind answers to is left out, the rest saved: kept, it
+        // would re-kind every case tagged with it.
+        const refused: string[] = []
         kind.match = match.value
           .split(',')
           .map((t) => t.trim())
-          .filter(Boolean)
+          .filter((t) => {
+            const other = t ? kindAnswering(t, kind, kinds) : undefined
+            if (other) refused.push(`the kind "${other.label}" already answers to "${t}"`)
+            return t !== '' && !other
+          })
         match.value = kind.match.join(', ')
+        if (refused.length) new Notice(`Not saved: ${refused.join('; ')}.`)
         this.kindsChanged()
       })
     })

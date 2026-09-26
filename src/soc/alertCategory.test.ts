@@ -3,6 +3,7 @@ import { DEFAULT_ALERT_CATEGORIES } from '../types'
 import {
   alertKindOf,
   categoryForTags,
+  kindAnswering,
   missingBuiltInKinds,
   normalizeAlertCategories,
   setKindTag,
@@ -144,15 +145,30 @@ describe('setKindTag', () => {
   })
 })
 
+describe('kindAnswering', () => {
+  it('names the other kind that answers to a word, never the kind itself', () => {
+    expect(kindAnswering('malware', CATS[0], CATS)?.id).toBe('malware')
+    expect(kindAnswering('Phishing', CATS[0], CATS)).toBeUndefined()
+    expect(kindAnswering('phishing', undefined, CATS)?.id).toBe('phishing')
+  })
+})
+
 describe('missingBuiltInKinds', () => {
   it('offers only the built-ins a saved list lacks, as copies, and leaves the list alone', () => {
     const saved = CATS.filter((c) => c.id !== 'suspicious-connection').map((c) => ({ ...c, label: 'edited' }))
     const before = JSON.stringify(saved)
-    const missing = missingBuiltInKinds(saved)
-    expect(missing.map((c) => c.id)).toEqual(['suspicious-connection'])
+    const { add } = missingBuiltInKinds(saved)
+    expect(add.map((c) => c.id)).toEqual(['suspicious-connection'])
     expect(JSON.stringify(saved)).toBe(before)
-    missing[0].match.push('mutated')
+    add[0].match.push('mutated')
     expect(CATS.at(-1)?.match).not.toContain('mutated')
-    expect(missingBuiltInKinds(CATS)).toEqual([])
+    expect(missingBuiltInKinds(CATS)).toEqual({ add: [], skipped: [] })
+  })
+
+  it('skips a built-in a kind in the list already answers to, so a renamed one is not added twice', () => {
+    const saved = CATS.map((c) => (c.id === 'phishing' ? { ...c, id: 'phish' } : c))
+    const { add, skipped } = missingBuiltInKinds(saved)
+    expect(add).toEqual([])
+    expect(skipped).toEqual([{ kind: CATS[0], by: saved[0], term: 'phishing' }])
   })
 })
