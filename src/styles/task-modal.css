@@ -666,6 +666,28 @@ button.pm-verdict-cancel:hover {
 .pm-headers-panel > .pm-headers-h:first-child {
   margin-top: 6px;
 }
+/* A band that ends in a name flows as one sentence, so a long name wraps
+   under the words rather than squeezing them into a column beside it. */
+.pm-headers-h--named {
+  display: block;
+}
+/* A name the sender wrote, inside a band: shown as written. The band's
+   capitals would turn a ß into SS and quote a name the mail does not hold. */
+.pm-headers-h-name {
+  overflow-wrap: anywhere;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+/* Which of an attached message's bodies follows, under that message's band. */
+.pm-headers-sub {
+  padding: 2px 0;
+  color: var(--gs-ink-subtle);
+  font-size: var(--font-ui-smaller);
+}
+.pm-headers-sub:not(:first-child) {
+  margin-top: 8px;
+}
 .pm-headers-row {
   display: flex;
   gap: 8px;

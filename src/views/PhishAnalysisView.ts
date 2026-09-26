@@ -13,7 +13,10 @@ import {
   flaggedOleEntries,
   formatPhishReport,
   innerFileFacts,
-  relationshipType
+  isPicture,
+  linksSection,
+  relationshipType,
+  showsDerivedDomain
 } from '../soc/phish'
 import { defangIoc, visibleName } from '../soc/ioc'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
@@ -222,7 +225,9 @@ export class PhishAnalysisView extends ItemView {
     )
     iocBtn.onClick(
       safeAsync(async () => {
-        const lines = this.report?.indicators ?? []
+        // Escaped as the tab draws them: a soft hyphen in a host is invisible,
+        // and a block list pasted from the clipboard then never matches.
+        const lines = (this.report?.indicators ?? []).map(visibleName)
         if (!lines.length) return
         await navigator.clipboard.writeText(lines.join('\n'))
         new Notice(`Copied ${lines.length} indicator${lines.length === 1 ? '' : 's'}`)
@@ -388,7 +393,11 @@ export class PhishAnalysisView extends ItemView {
           // rendering of a stated result, not a judgement on the mail.
           line.createSpan({ cls: `pm-headers-result ${resultClass(r.result)}`, text: r.result })
           line.createSpan({ cls: 'pm-headers-detail', text: visibleName(r.detail) })
-          line.createSpan({ cls: 'pm-headers-by', text: `asserted by ${visibleName(r.assertedBy)}` })
+          // The parser's own words for a missing host read as a host after
+          // "asserted by". A host a header names is one token and cannot hold
+          // this phrase, so matching it never swallows a real one.
+          const by = r.assertedBy.includes('no asserting host stated') ? '' : 'asserted by '
+          line.createSpan({ cls: 'pm-headers-by', text: `${by}${visibleName(r.assertedBy)}` })
         }
       } else {
         auth.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
@@ -441,11 +450,11 @@ export class PhishAnalysisView extends ItemView {
     }
 
     if (this.tab === 'links') {
-      const links = section('Links')
-      if (!report.links.length) {
-        links.createDiv({ cls: 'pm-headers-empty', text: 'None found.' })
-        return
-      }
+      // The heading, the empty text and the notes are the report's own, from
+      // one helper, so the tab and the copied report cannot drift apart.
+      const words = linksSection(report)
+      const links = section(words.heading)
+      if (!report.links.length) links.createDiv({ cls: 'pm-headers-empty', text: words.none })
       for (const link of report.links) {
         const line = links.createDiv('pm-headers-link')
         // Defanged and inert: this is a phishing link and it is never clickable.
@@ -453,14 +462,18 @@ export class PhishAnalysisView extends ItemView {
         // the dots left `http` live and the colon on any other scheme, so a
         // link copied off this pane was not the inert string the report gives.
         line.createDiv({ cls: 'pm-headers-ioc', text: visibleName(defangIoc(link.target, 'url')) })
-        if (link.apexDomain && link.apexDomain !== link.host) {
+        // A link in an attached message says so, or the phisher's link reads
+        // as one the reporter sent.
+        if (link.origin) line.createDiv({ cls: 'pm-headers-note', text: `in the body of ${visibleName(link.origin)}` })
+        if (showsDerivedDomain(link)) {
           line.createDiv({
             cls: 'pm-headers-note',
-            text: `domain ${visibleName(defangIoc(link.apexDomain, 'domain'))}`
+            text: `derived domain ${visibleName(defangIoc(link.apexDomain, 'domain'))}`
           })
         }
         if (link.wrappedBy) line.createDiv({ cls: 'pm-headers-note', text: `unwrapped from ${link.wrappedBy}` })
-        for (const flag of link.flags) line.createDiv({ cls: 'pm-headers-flag', text: flag })
+        // A flag can quote the host as written, before the URL parser cleaned it.
+        for (const flag of link.flags) line.createDiv({ cls: 'pm-headers-flag', text: visibleName(flag) })
       }
       if (report.droppedLinks > 0) {
         links.createDiv({
@@ -468,6 +481,7 @@ export class PhishAnalysisView extends ItemView {
           text: `${report.droppedLinks} further links are in this message and are not listed.`
         })
       }
+      for (const note of words.notes) links.createDiv({ cls: 'pm-headers-note', text: note })
       return
     }
 
@@ -479,22 +493,19 @@ export class PhishAnalysisView extends ItemView {
       // always means an image. Nothing checks that the body uses them, so the
       // heading says only what their own headers say.
       if (report.inlineImages.length) {
-        this.renderAttachments(section('Inline images — marked inline by their own headers'), report.inlineImages)
+        this.renderAttachments(
+          section('Inline images — marked inline or given a Content-ID by their own headers'),
+          report.inlineImages
+        )
       }
       return
     }
 
     if (this.tab === 'body') {
-      const showBody = (title: string, value: string): void => {
-        const trimmed = value.trim()
-        const body = section(title)
-        if (!trimmed) {
-          body.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
-          return
-        }
-        body.createEl('pre', { cls: 'pm-headers-pre', text: trimmed.slice(0, BODY_PREVIEW) })
+      const showText = (host: HTMLElement, trimmed: string): void => {
+        host.createEl('pre', { cls: 'pm-headers-pre', text: trimmed.slice(0, BODY_PREVIEW) })
         if (trimmed.length > BODY_PREVIEW) {
-          body.createDiv({
+          host.createDiv({
             cls: 'pm-headers-note',
             text: `Showing the first ${NUMBER.format(BODY_PREVIEW)} of ${NUMBER.format(trimmed.length)} characters here. The copied report and the case carry all of it.`
           })
@@ -503,9 +514,34 @@ export class PhishAnalysisView extends ItemView {
       // Most readable first: on an HTML-only mail the first section is empty
       // and the lure used to be somewhere inside several kilobytes of markup,
       // past the preview cut.
-      showBody('Plain text', report.text)
-      showBody('Text extracted from the HTML — not rendered', report.htmlText)
-      showBody('HTML source — read, never rendered', report.htmlSource)
+      const blocks = (b: { text: string; htmlText: string; htmlSource: string }): [string, string][] => [
+        ['Plain text', b.text.trim()],
+        ['Text extracted from the HTML — not rendered', b.htmlText.trim()],
+        ['HTML source — read, never rendered', b.htmlSource.trim()]
+      ]
+      for (const [title, trimmed] of blocks(report)) {
+        const body = section(title)
+        if (trimmed) showText(body, trimmed)
+        else body.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
+      }
+      // An attached message's text is its own block under its own name, as in
+      // the report: joined to the outer text, the phisher's sentence read as
+      // the reporter's. The name is the sender's, so it sits in a span that
+      // keeps its case — the band's capitals would turn a ß into SS.
+      for (const f of report.forwarded) {
+        const heading = panel.createEl('h4', {
+          cls: 'pm-headers-h pm-headers-h--named',
+          text: 'Text of the attached message '
+        })
+        heading.createSpan({ cls: 'pm-headers-h-name', text: visibleName(f.origin) })
+        const body = panel.createDiv('pm-headers-body')
+        const present = blocks(f).filter(([, trimmed]) => trimmed)
+        if (!present.length) body.createDiv({ cls: 'pm-headers-empty', text: 'Not recorded.' })
+        for (const [title, trimmed] of present) {
+          body.createDiv({ cls: 'pm-headers-sub', text: title })
+          showText(body, trimmed)
+        }
+      }
       return
     }
 
@@ -553,6 +589,11 @@ export class PhishAnalysisView extends ItemView {
     capped(host, list, (at, attachment) => {
       const card = at.createDiv('pm-att-card')
       card.createDiv({ cls: 'pm-att-name', text: visibleName(attachment.filename) })
+      // Found inside an attached message: said first, or the phisher's payload
+      // reads as something the reporter sent.
+      if (attachment.origin) {
+        card.createDiv({ cls: 'pm-headers-note', text: `inside ${visibleName(attachment.origin)}` })
+      }
       // An undecoded part has no size and no first bytes, and its own fact says
       // why, so the line shows neither rather than a "0 bytes" it never had.
       const begins = attachment.sniffed ? ` · bytes begin as ${attachment.sniffed}` : ''
@@ -583,7 +624,10 @@ export class PhishAnalysisView extends ItemView {
         hashRow(card, 'SHA-256', attachment.sha256)
         hashRow(card, 'SHA-1', attachment.sha1)
         hashRow(card, 'MD5', attachment.md5)
-        card.createDiv({ cls: 'pm-headers-note', text: 'hashes computed here, from the bytes in the file' })
+        // Not "from the bytes in the file": a 7bit, 8bit or hard-broken
+        // quoted-printable part's bytes were rebuilt here from its text, and
+        // its facts above say so.
+        card.createDiv({ cls: 'pm-headers-note', text: 'hashes computed here' })
       }
       // After the hashes: this list can hold a hundred lines, and it must never
       // push the hashes off the screen.
@@ -691,12 +735,16 @@ export class PhishAnalysisView extends ItemView {
     return true
   }
 
-  /** One picture from inside a document — drawn only when its own bytes say it is a raster image. */
+  /**
+   * One picture from inside a document — drawn only when its own bytes say it
+   * is a raster image. A /DCTDecode stream whose bytes are a program is called
+   * a stream, by the rule the report uses, so the two cannot disagree.
+   */
   private renderEmbedded(host: HTMLElement, image: EmbeddedImage): void {
     const where = visibleName(image.where)
     host.createDiv({
       cls: 'pm-headers-note',
-      text: `Picture at ${where} · ${NUMBER.format(image.bytes.length)} bytes`
+      text: `${isPicture(image.sniffed) ? 'Picture' : 'Stream'} at ${where} · ${NUMBER.format(image.bytes.length)} bytes`
     })
     hashRow(host, 'SHA-256', image.sha256)
     const url =
