@@ -1,5 +1,5 @@
 import { App, ButtonComponent, ExtraButtonComponent, Menu, Modal, Notice, setIcon, setTooltip } from 'obsidian'
-import { iocSightings } from '../soc/ioc'
+import { sightingsIndex } from '../soc/ioc'
 import type PMPlugin from '../main'
 import { type Project, type Task, makeTask } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
@@ -425,8 +425,7 @@ export class TaskModal extends Modal {
           ...this.plugin.reputationKeys()
         },
         ownedAssets: () => this.plugin.settings.ownedAssets,
-        findSightings: (value) =>
-          iocSightings(value, this.project.tasks, this.task.id, this.plugin.settings.ownedAssets),
+        findSightings: () => sightingsIndex(this.project.tasks, this.task.id, this.plugin.settings.ownedAssets),
         onPivot: (value) => {
           // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
           this.saved = false

@@ -1,5 +1,5 @@
 import { ItemView, Notice, WorkspaceLeaf, TFile, setIcon } from 'obsidian'
-import { activityValue, iocSightings } from '../soc/ioc'
+import { activityValue, sightingsIndex } from '../soc/ioc'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from '../modals/DescriptionEditor'
@@ -438,7 +438,7 @@ export class TaskDetailView extends ItemView {
           ...this.plugin.reputationKeys()
         },
         ownedAssets: () => this.plugin.settings.ownedAssets,
-        findSightings: (value) => iocSightings(value, project.tasks, task.id, this.plugin.settings.ownedAssets)
+        findSightings: () => sightingsIndex(project.tasks, task.id, this.plugin.settings.ownedAssets)
       })
     }
     this.commentsSection?.destroy()
