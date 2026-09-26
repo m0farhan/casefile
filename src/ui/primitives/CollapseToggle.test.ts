@@ -1,18 +1,74 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CollapseToggle } from './CollapseToggle'
+
+/** Observers watching the fake document; a test fires them the way a redraw would. */
+const observers = new Set<{ fn: () => void }>()
+const timers: (() => void)[] = []
+const doc = {
+  body: null as unknown as FakeEl,
+  focused: null as FakeEl | null,
+  // As a browser does: a focused element taken out of the document leaves focus on the body.
+  get activeElement(): FakeEl {
+    return this.focused?.isConnected ? this.focused : this.body
+  },
+  defaultView: {
+    MutationObserver: class {
+      constructor(readonly fn: () => void) {}
+      observe(): void {
+        observers.add(this)
+      }
+      disconnect(): void {
+        observers.delete(this)
+      }
+    },
+    setTimeout: (fn: () => void) => timers.push(fn),
+    clearTimeout: () => {}
+  }
+}
+const redrawn = () => {
+  for (const o of observers) o.fn()
+}
 
 // The suite runs in plain node, so this models only what CollapseToggle touches.
 class FakeEl {
   attrs = new Map<string, string>()
   classes = new Set<string>()
+  dataset: Record<string, string> = {}
   listeners: { type: string; fn: (e: unknown) => void }[] = []
   parent: FakeEl | null = null
-  createDiv(info: { cls: string; attr?: Record<string, string> }): FakeEl {
+  children: FakeEl[] = []
+  mounted = false
+  readonly ownerDocument = doc
+  createDiv(info: { cls: string; attr?: Record<string, string> } = { cls: '' }): FakeEl {
     const el = new FakeEl()
     el.parent = this
-    for (const c of info.cls.split(' ')) el.classes.add(c)
+    this.children.push(el)
+    for (const c of info.cls.split(' ')) if (c) el.classes.add(c)
     for (const [k, v] of Object.entries(info.attr ?? {})) el.attrs.set(k, v)
     return el
+  }
+  get parentElement(): FakeEl | null {
+    return this.parent
+  }
+  get isConnected(): boolean {
+    return this.parent ? this.parent.isConnected : this.mounted
+  }
+  empty(): void {
+    for (const c of this.children) c.parent = null
+    this.children = []
+  }
+  focus(): void {
+    doc.focused = this
+  }
+  /** Only the selectors CollapseToggle uses: `[data-task-id]` and `.cls`. */
+  matches(sel: string): boolean {
+    return sel === '[data-task-id]' ? this.dataset.taskId !== undefined : this.classes.has(sel.slice(1))
+  }
+  closest(sel: string): FakeEl | null {
+    return this.matches(sel) ? this : (this.parent?.closest(sel) ?? null)
+  }
+  querySelectorAll(sel: string): FakeEl[] {
+    return this.children.flatMap((c) => [...(c.matches(sel) ? [c] : []), ...c.querySelectorAll(sel)])
   }
   toggleClass(c: string, on: boolean): void {
     if (on) this.classes.add(c)
@@ -93,5 +149,83 @@ describe('CollapseToggle keyboard', () => {
     el.fire(key('ArrowDown'))
     expect(onToggle).not.toHaveBeenCalled()
     expect(hostKeys).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('CollapseToggle focus across a redraw', () => {
+  beforeEach(() => {
+    observers.clear()
+    timers.length = 0
+    doc.body = new FakeEl()
+    doc.body.mounted = true
+    doc.focused = null
+  })
+
+  /** A table body holding one row per task id, drawn again from scratch the way the table and gantt do. */
+  function table(ids: string[]) {
+    const view = doc.body.createDiv({ cls: 'pm-table-view' })
+    const tbody = view.createDiv()
+    const draw = () => {
+      tbody.empty()
+      return ids.map((id) => {
+        const row = tbody.createDiv()
+        row.dataset.taskId = id
+        return new CollapseToggle(row.createDiv() as unknown as HTMLElement, { collapsed: true, onToggle: () => {} })
+          .el as unknown as FakeEl
+      })
+    }
+    return { draw }
+  }
+
+  it('puts focus back on the same row after a keyboard toggle', () => {
+    const { draw } = table(['a', 'b', 'c'])
+    const old = draw()[1]
+    old.focus()
+    old.fire(key('Enter'))
+    const now = draw()[1]
+    redrawn()
+    expect(doc.activeElement).toBe(now)
+    expect(observers.size).toBe(0)
+  })
+
+  it('waits out a redraw that empties the rows before it draws them again', () => {
+    const { draw } = table(['a', 'b'])
+    const old = draw()[0]
+    old.focus()
+    old.fire(key(' '))
+    old.parent?.parent?.empty()
+    redrawn()
+    expect(observers.size).toBe(1)
+    const now = draw()[0]
+    redrawn()
+    expect(doc.activeElement).toBe(now)
+  })
+
+  it('leaves focus alone once it has moved on, and after a pointer click', () => {
+    const { draw } = table(['a'])
+    const old = draw()[0]
+    old.focus()
+    old.fire(key('Enter'))
+    const elsewhere = doc.body.createDiv()
+    elsewhere.focus()
+    draw()
+    redrawn()
+    expect(doc.activeElement).toBe(elsewhere)
+    expect(observers.size).toBe(0)
+
+    const again = draw()[0]
+    again.click()
+    expect(observers.size).toBe(0)
+  })
+
+  it('stops watching a host that flips in place', () => {
+    const { draw } = table(['a'])
+    const el = draw()[0]
+    el.focus()
+    el.fire(key('Enter'))
+    redrawn()
+    expect(doc.activeElement).toBe(el)
+    for (const t of timers) t()
+    expect(observers.size).toBe(0)
   })
 })
