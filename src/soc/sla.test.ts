@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { makeTask, type SlaPolicy } from '../types'
 import { defangIoc } from './ioc'
+import { anchorDisclosure } from './LifecyclePanel'
 import { formatSlaRemaining, slaAtRisk, slaState } from './sla'
 
 const POLICIES: Record<string, SlaPolicy> = {
@@ -76,6 +77,21 @@ describe('slaState', () => {
     for (const resolvedAt of ['unknown', '30/07/2026 09:00']) {
       expect(slaState(incident({ resolvedAt }), POLICIES, T0 + 9999 * MIN)).toBeNull()
     }
+  })
+})
+
+describe('anchorDisclosure (lifecycle panel)', () => {
+  it('says the clock runs from creation only when a clock and a creation time exist', () => {
+    const t = (over: Parameters<typeof makeTask>[0]) => incident({ detectedAt: '', ...over })
+    expect(anchorDisclosure(t({ createdAt: '2026-07-30T08:00:00.000Z' }), POLICIES)).toBe(
+      'SLA runs from case creation — detection time not recorded'
+    )
+    expect(anchorDisclosure(t({ createdAt: '' }), POLICIES)).toBe(
+      'SLA has no start — no readable detection or creation time'
+    )
+    expect(anchorDisclosure(incident(), POLICIES)).toBeNull()
+    // A blank target is no clock, so there is nothing to disclose.
+    expect(anchorDisclosure(t({}), { sev1: { responseMins: 0, resolutionMins: 240 } })).toBeNull()
   })
 })
 

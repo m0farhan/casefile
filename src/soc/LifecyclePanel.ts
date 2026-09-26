@@ -1,5 +1,5 @@
 import type { SlaPolicy, Task } from '../types'
-import { formatSlaRemaining, slaAnchor } from './sla'
+import { formatSlaRemaining, slaAnchor, slaPolicy } from './sla'
 
 const FIELDS = [
   { key: 'occurredAt', label: 'Occurred' },
@@ -23,6 +23,21 @@ export function localInputToIso(value: string): string {
   if (!value) return ''
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? '' : d.toISOString()
+}
+
+/**
+ * SD-03 disclosure for the panel summary, or null. With no detection stamp the
+ * clock runs from creation, and the durations are measured from there too.
+ * Gated on a clock existing at all (slaPolicy), not on severity: a severity
+ * whose policy was deleted or left with a blank target has none, and the chip
+ * renders nothing for it. With no readable creation time either, the clock
+ * has no start, and saying it runs from creation would be false.
+ */
+export function anchorDisclosure(task: Task, policies: Record<string, SlaPolicy>): string | null {
+  if (task.detectedAt || !slaPolicy(task, policies)) return null
+  return Number.isNaN(Date.parse(task.createdAt))
+    ? 'SLA has no start — no readable detection or creation time'
+    : 'SLA runs from case creation — detection time not recorded'
 }
 
 /**
@@ -57,16 +72,8 @@ export function renderLifecyclePanel(
     line('Response time', task.respondedAt)
     line('Containment time', task.containedAt)
     line('Resolution time', task.resolvedAt)
-    // SD-03 disclosure: with no detection stamp the clock runs from creation,
-    // and the durations above are measured from there too. Gated on a real
-    // policy, not on severity — a severity whose policy was deleted in settings
-    // has no clock at all, and the chip renders nothing for it.
-    if (!task.detectedAt && opts.slaPolicies[task.severity]) {
-      summary.createSpan({
-        cls: 'pm-lc-summary-item',
-        text: 'SLA runs from case creation — detection time not recorded'
-      })
-    }
+    const disclosure = anchorDisclosure(task, opts.slaPolicies)
+    if (disclosure) summary.createSpan({ cls: 'pm-lc-summary-item', text: disclosure })
   }
 
   for (const f of FIELDS) {
