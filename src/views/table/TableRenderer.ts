@@ -211,6 +211,12 @@ function fillTableBody(ctx: TableContext): void {
   })
 
   const filteredIds = new Set(flat.map((f) => f.task.id))
+  // A task deleted from the row menu (or anywhere else) leaves the selection,
+  // so the bar's count and its notices state live numbers. A task the filter
+  // hides stays selected on purpose.
+  for (const id of ctx.state.selectedTaskIds) {
+    if (!ctx.project.taskIndex.has(id)) ctx.state.selectedTaskIds.delete(id)
+  }
 
   // Pre-group by parentId once: O(N) tree walk instead of O(N^2).
   // Orphans whose parent got filtered out get promoted to root.
@@ -388,6 +394,15 @@ export function handleTableKeyDown(e: KeyboardEvent, ctx: TableContext): void {
   }
 
   if (isInput) return
+  // A focused button owns these keys: Enter is its own click, and Delete or
+  // Backspace on it must not start deleting the highlighted row.
+  if (
+    (e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace') &&
+    active instanceof HTMLElement &&
+    active.closest('button, [role="button"]')
+  ) {
+    return
+  }
 
   const rows = getVisibleTaskIds(ctx.state)
   if (!rows.length) return

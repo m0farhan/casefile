@@ -1,4 +1,4 @@
-import { Menu, setIcon, setTooltip } from 'obsidian'
+import { Menu, Notice, setIcon, setTooltip } from 'obsidian'
 import { getStatusConfig, dueUrgency, isTerminalStatus, safeAsync, stringifyCustomValue } from '../../utils'
 import { totalLoggedHours } from '../../store/TaskTreeOps'
 import type { ResolvedProjectConfig, Task } from '../../types'
@@ -50,18 +50,20 @@ export function renderTaskRow(
     onClick: (e) => {
       const cb = e.target as HTMLInputElement
       const checked = cb.checked
-      if (e.shiftKey && ctx.state.lastCheckedTaskId) {
-        const ids = getVisibleTaskIds(ctx.state)
-        const curIdx = ids.indexOf(task.id)
-        const lastIdx = ids.indexOf(ctx.state.lastCheckedTaskId)
-        if (curIdx !== -1 && lastIdx !== -1) {
-          const [from, to] = curIdx < lastIdx ? [curIdx, lastIdx] : [lastIdx, curIdx]
-          for (let i = from; i <= to; i++) {
-            if (checked) ctx.state.selectedTaskIds.add(ids[i])
-            else ctx.state.selectedTaskIds.delete(ids[i])
-          }
-          updateSelectCheckboxes(ctx.state)
+      // Shift extends from the last ticked row. When that anchor is no longer
+      // listed (filtered out, deleted) the click toggles this row alone, so
+      // the selection always matches the box the browser just ticked.
+      const anchor = e.shiftKey ? ctx.state.lastCheckedTaskId : null
+      const ids = anchor ? getVisibleTaskIds(ctx.state) : []
+      const curIdx = ids.indexOf(task.id)
+      const lastIdx = anchor ? ids.indexOf(anchor) : -1
+      if (curIdx !== -1 && lastIdx !== -1) {
+        const [from, to] = curIdx < lastIdx ? [curIdx, lastIdx] : [lastIdx, curIdx]
+        for (let i = from; i <= to; i++) {
+          if (checked) ctx.state.selectedTaskIds.add(ids[i])
+          else ctx.state.selectedTaskIds.delete(ids[i])
         }
+        updateSelectCheckboxes(ctx.state)
       } else if (checked) {
         ctx.state.selectedTaskIds.add(task.id)
       } else {
@@ -95,6 +97,19 @@ export function renderTaskRow(
       })
     },
     onTitleSave: async (title) => {
+      // Same rules as the detail panel's title: an empty title, or one whose
+      // note name is already taken, is not saved, and the refresh puts the
+      // old title back.
+      if (!title.trim()) {
+        await ctx.onRefresh()
+        return
+      }
+      const conflict = ctx.plugin.store.findTaskFileConflict(ctx.project, { ...task, title })
+      if (conflict) {
+        new Notice(`Title not saved: a note named "${conflict.fileName}" already exists.`)
+        await ctx.onRefresh()
+        return
+      }
       await ctx.plugin.store.updateTask(ctx.project, task.id, { title })
       await ctx.onRefresh()
     },
