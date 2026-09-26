@@ -2000,6 +2000,54 @@ describe('ProjectStore stale editor clone safety', () => {
     expect(saved.subtasks[1].title).toBe('Alpha renamed')
   })
 
+  /** A parent with S1 and S2, and the editor's snapshot and working copy of it. */
+  async function panelOpen() {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Panel', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const s1 = await addNamed(store, project, 'S1', parent.id)
+    const s2 = await addNamed(store, project, 'S2', parent.id)
+    const other = await addNamed(store, project, 'Other')
+    const snapshot = JSON.parse(JSON.stringify(parent)) as Task
+    const working = JSON.parse(JSON.stringify(parent)) as Task
+    const renameS2 = async (): Promise<void> => {
+      expectDefined(working.subtasks.find((t) => t.id === s2.id)).title = 'S2 renamed'
+      await store.updateTask(project, parent.id, { subtasks: working.subtasks }, { subtaskBase: snapshot.subtasks })
+    }
+    return { store, vault, app, project, parent, s1, s2, other, renameS2 }
+  }
+
+  it('a board change to one subtask survives a panel rename of another, activity included', async () => {
+    const { store, vault, app, project, parent, s1, renameS2 } = await panelOpen()
+    await store.updateTask(project, s1.id, { status: 'done' })
+    await renameS2()
+    const live = expectDefined(findTask(project.tasks, s1.id))
+    expect([live.status, live.activity.map((a) => a.field)]).toEqual(['done', ['status']])
+    expect(expectDefined(findTask(project.tasks, parent.id)).subtasks.map((t) => t.title)).toEqual(['S1', 'S2 renamed'])
+    const again = await reload(app, vault, project.filePath)
+    expect(findTask(again.tasks, s1.id)?.status).toBe('done')
+  })
+
+  it('a subtask deleted on the board is not recreated by a panel save', async () => {
+    const { store, vault, project, s1, renameS2 } = await panelOpen()
+    const path = expectDefined(s1.filePath)
+    await store.deleteTask(project, s1.id)
+    await renameS2()
+    expect(findTask(project.tasks, s1.id)).toBeNull()
+    expect(vault.getAbstractFileByPath(path)).toBeNull()
+  })
+
+  it('a subtask moved on the board is not duplicated by a panel save', async () => {
+    const { store, project, s1, other, renameS2 } = await panelOpen()
+    await store.moveTask(project, s1.id, other.id)
+    await renameS2()
+    expect(
+      flattenTasks(project.tasks)
+        .filter((f) => f.task.id === s1.id)
+        .map((f) => f.parentId)
+    ).toEqual([other.id])
+  })
+
   it('keeps an activity entry appended to the live task when a stale whole-clone patch saves', async () => {
     const { store } = newStore()
     const project = await store.createProject('Audit', 'Projects')

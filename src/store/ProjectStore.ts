@@ -1340,7 +1340,10 @@ export class ProjectStore implements TaskSource {
     project: Project,
     taskId: string,
     patch: Partial<Task>,
-    opts?: { removedSubtaskIds?: string[] }
+    /** removedSubtaskIds: subtasks the editor removed on purpose.
+     *  subtaskBase: the editor's subtask array as it was when it opened,
+     *  which makes the subtask merge three-way (mergeMissingSubtasks). */
+    opts?: { removedSubtaskIds?: string[]; subtaskBase?: Task[] }
   ): Promise<void> {
     const task = findTaskById(project, taskId)
     const oldTitle = task?.title
@@ -1359,7 +1362,7 @@ export class ProjectStore implements TaskSource {
     // removal therefore needs explicit intent (opts.removedSubtaskIds); live
     // subtasks the patch merely doesn't know about are preserved.
     if (task && patch.subtasks !== undefined) {
-      patch.subtasks = mergeMissingSubtasks(task, patch.subtasks, opts?.removedSubtaskIds ?? [])
+      patch.subtasks = mergeMissingSubtasks(task, patch.subtasks, opts?.removedSubtaskIds ?? [], opts?.subtaskBase)
     }
     // Snapshot the pre-edit subtree to diff against once the tree has the new one.
     const oldSubtree = task && patch.subtasks !== undefined ? flattenTasks(task.subtasks).map((f) => f.task) : []

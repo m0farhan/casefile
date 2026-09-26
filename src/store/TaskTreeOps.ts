@@ -157,17 +157,31 @@ export function repointDescendantFiles(task: Task, from: string, to: string): { 
  * listed in `removedIds`. Destructive removal always requires explicit intent;
  * a stale clone alone can never delete a subtask created elsewhere meanwhile.
  * Preserved nodes re-attach under their old parent (appended after the
- * patched siblings); patched order and edits win for everything the patch
- * does contain. Mutates and returns `patched`.
+ * patched siblings); patched order wins for everything the patch does
+ * contain. Returns the merged array.
+ *
+ * With `base` — the editor's subtask array as it was when the editor opened —
+ * the merge is three-way, so a stale clone never overwrites what changed on
+ * the board meanwhile:
+ *  - still live under this parent: a NEW object from the live one, with only
+ *    the fields the editor changed since `base` (never activity, subtasks or
+ *    filePath, which the store owns). A board status change and its activity
+ *    row survive a rename in the side panel. New objects, so the caller can
+ *    still diff old against new.
+ *  - in `base` but gone from this parent (deleted or moved on the board):
+ *    dropped, never resurrected as an empty shell or duplicated.
+ *  - in neither: a subtask the editor created, inserted as is.
+ * Without `base`, patched nodes are taken whole (the old two-way behaviour).
  *
  * ponytail: a removed id nested inside a PRESERVED (patch-unknown) ancestor is
  * not detached — the editor can only remove subtasks its clone contains, so
  * that state is unreachable from the UI; revisit if a non-editor caller ever
  * passes removals for nodes outside its own patch.
  */
-export function mergeMissingSubtasks(live: Task, patched: Task[], removedIds: Iterable<string>): Task[] {
+export function mergeMissingSubtasks(live: Task, patched: Task[], removedIds: Iterable<string>, base?: Task[]): Task[] {
+  const merged = base ? mergeAgainstBase(live, patched, base) : patched
   const removed = new Set(removedIds)
-  const present = new Set(flattenTasks(patched).map((f) => f.task.id))
+  const present = new Set(flattenTasks(merged).map((f) => f.task.id))
   for (const { task, parentId } of flattenTasks(live.subtasks)) {
     if (removed.has(task.id)) {
       // Explicit removal takes the live descendants with it (matching how the
@@ -180,10 +194,44 @@ export function mergeMissingSubtasks(live: Task, patched: Task[], removedIds: It
     // descendants ride along, so mark them present too.
     present.add(task.id)
     for (const d of flattenTasks(task.subtasks)) present.add(d.task.id)
-    const parent = parentId ? findTask(patched, parentId) : null
-    ;(parent ? parent.subtasks : patched).push(task)
+    const parent = parentId ? findTask(merged, parentId) : null
+    ;(parent ? parent.subtasks : merged).push(task)
   }
-  return patched
+  return merged
+}
+
+/** Keys the store owns on a subtask; an editor's copy of them is never applied. */
+const STORE_OWNED = new Set(['activity', 'subtasks', 'filePath'])
+
+function mergeAgainstBase(live: Task, patched: Task[], base: Task[]): Task[] {
+  const liveById = new Map(flattenTasks(live.subtasks).map((f) => [f.task.id, f.task]))
+  const baseById = new Map(flattenTasks(base).map((f) => [f.task.id, f.task]))
+  const walk = (nodes: Task[]): Task[] => {
+    const out: Task[] = []
+    for (const node of nodes) {
+      const current = liveById.get(node.id)
+      const was = baseById.get(node.id)
+      if (current) {
+        const next: Task = { ...current }
+        const fields = was ? new Set([...Object.keys(node), ...Object.keys(was)]) : Object.keys(node)
+        for (const k of fields) {
+          if (STORE_OWNED.has(k)) continue
+          const key = k as keyof Task
+          if (!was || JSON.stringify(node[key]) !== JSON.stringify(was[key])) {
+            ;(next as unknown as Record<string, unknown>)[k] = node[key]
+          }
+        }
+        next.subtasks = walk(node.subtasks)
+        out.push(next)
+      } else if (!was) {
+        node.subtasks = walk(node.subtasks)
+        out.push(node)
+      }
+      // else: in base, gone from this parent on the board — dropped.
+    }
+    return out
+  }
+  return walk(patched)
 }
 
 /** Move a task before or after another task in the tree (same level) */
