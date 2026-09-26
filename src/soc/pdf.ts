@@ -759,11 +759,19 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
   }
   // Only the images whose end was SEARCHED for. One cut at its declared
   // /Length is exact, and saying otherwise about it is a wrong fact.
+  //
+  // Worded for what the scan knows, not for what the file declared. This used
+  // to say each image "declared no direct /Length", and two ordinary files make
+  // that false: `/Length 40 /DecodeParms << … >> /Filter /DCTDecode` hides its
+  // /Length behind the inner `>>` (see dictBefore), and a direct /Length that is
+  // simply wrong does not land on `endstream`. Both reach this count.
   if (bySearch) {
     notes.push(
-      `${bySearch} extracted image(s) declared no direct /Length, so each was cut at the next 'endstream' keyword ` +
-        'and kept only because it begins and ends as a complete image. One whose data held those nine bytes would ' +
-        'still be cut there, so its hash could be of a prefix of the image in the document.'
+      `${bySearch} extracted image(s) had no direct /Length this scan could read (none, an indirect reference, ` +
+        "or one written where this scan does not look for it), or had one that did not end at an 'endstream' " +
+        "keyword, so each was cut at the next 'endstream' keyword and kept only because it begins and ends as a " +
+        'complete image. One whose data held those nine bytes would still be cut there, so its hash could be of a ' +
+        'prefix of the image in the document.'
     )
   }
   // Said here rather than left to whoever shows the result: an empty list from
@@ -791,18 +799,19 @@ function directLength(window: string): number | null {
  * Opening this window at the filter name — which is what it used to do — reads
  * only the keys written after it, and key order in a dictionary is not
  * significant. Quartz writes `/Length 6625 /Filter /DCTDecode`, and against that
- * ordering the comparison found no /Length at all and the mismatch note silently
- * never fired: the detector worked on the half of the world that happens to
- * write the keys the other way round.
+ * ordering no /Length was found at all: the reader worked on the half of the
+ * world that happens to write the keys the other way round.
  *
  * So the window opens BEFORE the name and is cut at the nearest `obj`, `stream`
  * or `>>` in front of it. Past one of those the /Length belongs to some other
- * object or some other dictionary, and comparing that number against these bytes
- * would print a mismatch that is not one. The cut can also land in front of a
- * /Length that IS this stream's (`/Length 40 /DecodeParms << … >> /Filter …`),
- * and then no note is printed — which is the right way round to be wrong here: a
- * missing note leaves the analyst where they were, a false one sends them off
- * after a stream that is exactly what it says it is.
+ * object or some other dictionary, and cutting these bytes at that number could
+ * hand back a run that is not this stream. The cut can also land in front of a
+ * /Length that IS this stream's (`/Length 40 /DecodeParms << … >> /Filter …`).
+ * Then the end is searched for instead, the run has to prove itself as a whole
+ * image, and the note readImages prints for it says the scan could not read a
+ * /Length — never that the file declared none. That is the right way round to
+ * be wrong here: a /Length missed costs a search, a /Length misread cuts another
+ * object's bytes as this one's.
  */
 function dictBefore(text: string, filterAt: number, dataAt: number): string {
   const from = Math.max(0, filterAt - STREAM_LOOKAHEAD)
@@ -842,18 +851,20 @@ function streamDataStart(text: string, from: number): number {
 }
 
 /**
- * Where the data ends.
+ * Where the data ends, when a direct /Length did not decide it.
  *
- * ponytail: found by searching for `endstream`, not by reading /Length.
- * /Length is usually an indirect reference (`/Length 12 0 R`), and resolving
- * one means parsing the xref table and following it into the object graph —
- * a parser, which is the thing this module exists not to be. Ceiling: a stream
- * whose compressed data happens to contain the nine bytes `endstream` is cut
- * short there, and the caller's sniffer sees a truncated JPEG. Upgrade path:
- * take /Length when it is a direct integer, bounds-check it against the real
- * file length, and use it only when the bytes at that offset are `endstream`.
- * Until then a direct /Length that disagrees is at least reported — readImages
- * compares the two and says so.
+ * ponytail: found by searching for `endstream`. readImages takes a direct
+ * /Length first and uses it only where closesAt confirms it; this is the
+ * fallback for everything else — no /Length, an indirect one (`/Length 12 0 R`,
+ * the common case), one dictBefore could not see, or one that did not land on
+ * `endstream`. Resolving an indirect one means parsing the xref table and
+ * following it into the object graph — a parser, which is the thing this module
+ * exists not to be. Ceiling: a stream whose data happens to contain the nine
+ * bytes `endstream` is cut short there. The run must then begin and end as a
+ * whole image to be kept, and readImages says of every image kept this way that
+ * its hash could be of a prefix. Upgrade path if real files hit it: look up
+ * `12 0 obj <integer> endobj` for an indirect /Length by a byte search — a
+ * lookup, not a graph walk.
  *
  * The memo is what makes every search together one pass over the file, found
  * or not. A failing search fails the same way for every later offset, so one

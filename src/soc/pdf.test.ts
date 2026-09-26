@@ -490,6 +490,25 @@ describe('notes that would otherwise be wrong', () => {
     expect(facts?.notes.join(' ')).toContain("cut at the next 'endstream' keyword")
   })
 
+  it('does not say an image declared no direct /Length when it declared one this scan missed or found wrong', () => {
+    // Both files DO declare a direct /Length. The first hides it behind the
+    // inner `>>` of /DecodeParms, where the dictionary window is cut; the second
+    // declares 12 for a 15-byte stream, so it does not land on `endstream`. Both
+    // are cut by search, and the note used to say each "declared no direct
+    // /Length" — a false sentence about each file, on the card and in the report.
+    for (const dict of [
+      '<< /Length 15 /DecodeParms << /ColorTransform 1 >> /Filter /DCTDecode >>',
+      '<< /Length 12 /Filter /DCTDecode >>'
+    ]) {
+      const facts = readPdf(pdf(`%PDF-1.5\n${dict}\nstream\n`, JPEG, '\nendstream\nendobj', TRAILER))
+      expect([...(facts?.images[0]?.bytes ?? [])]).toEqual([...JPEG])
+      const notes = facts?.notes.join(' ') ?? ''
+      expect(notes).not.toContain('declared no direct /Length')
+      expect(notes).toContain("cut at the next 'endstream' keyword")
+      expect(notes).toContain('had no direct /Length this scan could read')
+    }
+  })
+
   it('does not say an image cut at its declared /Length could be a prefix', () => {
     const facts = readPdf(pdf('%PDF-1.5\n<< /Filter /DCTDecode /Length 15 >>\nstream\n', JPEG, '\nendstream', TRAILER))
     expect(facts?.images).toHaveLength(1)
