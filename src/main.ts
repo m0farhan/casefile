@@ -36,6 +36,7 @@ import {
 import { safeAsync, withUserResponse } from './utils'
 import { categoryForTags, normalizeAlertCategories, suggestCategory } from './soc/alertCategory'
 import { tickAllSlaChips } from './soc/slaTicker'
+import { setAlertKindDerivation } from './ui/composites/issueMeta'
 import { PHISH_VIEW_TYPE, PhishAnalysisView, openPhishAnalysis } from './views/PhishAnalysisView'
 import { openToolbox } from './modals/ToolboxModal'
 
@@ -500,6 +501,7 @@ export default class PMPlugin extends Plugin {
       (saved as { alertCategories?: unknown } | null)?.alertCategories
     )
     for (const c of this.settings.alertCategories) c.color = safeColor(c.color, '#8a94a0')
+    setAlertKindDerivation(this.settings.deriveAlertKind)
     this.settings.ownedAssets = Array.isArray(this.settings.ownedAssets)
       ? this.settings.ownedAssets.filter((v): v is string => typeof v === 'string')
       : []

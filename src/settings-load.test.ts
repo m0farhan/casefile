@@ -103,4 +103,23 @@ describe('loadSettings', () => {
     expect(settings.severities[0].color).toBe('#ff0000')
     expect(settings.alertCategories[0].color).toBe('#8a94a0')
   })
+
+  it('a saved "derive the alert kind" off reaches the icons, and a saved kinds list gains no new built-in', async () => {
+    const own = { id: 'phish', label: 'Phishing', color: '#56ccf2', icon: 'fish', match: [] }
+    const { settings, saved } = await launch({
+      statusDefaultsUpgraded: true,
+      deriveAlertKind: false,
+      alertCategories: [own]
+    })
+    // The same module graph the launch used, so this is the flag every icon reads.
+    const { shownAlertKind } = await import('./ui/composites/issueMeta')
+    const kind = shownAlertKind({
+      tags: [],
+      title: 'SOC120 - Phishing Mail Detected',
+      categories: settings.alertCategories
+    })
+    expect(kind).toBeUndefined()
+    expect(settings.alertCategories).toEqual([own])
+    expect(saved).toBeNull()
+  })
 })

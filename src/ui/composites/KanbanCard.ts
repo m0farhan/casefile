@@ -122,7 +122,13 @@ export class KanbanCard {
     renderIssueTypeIcon(
       chips,
       (props.issueTypes ?? DEFAULT_ISSUE_TYPES).find((t) => t.id === task.issueType),
-      { alert: { tags: task.tags, categories: socConfig?.alertCategories ?? DEFAULT_ALERT_CATEGORIES } }
+      {
+        alert: {
+          tags: task.tags,
+          title: task.title,
+          categories: socConfig?.alertCategories ?? DEFAULT_ALERT_CATEGORIES
+        }
+      }
     )
     if (task.key) renderKeyChip(chips, task.key, { plain: true })
     // Severity shows on every board — it is the one urgency dial, and a plain
