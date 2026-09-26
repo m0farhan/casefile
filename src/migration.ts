@@ -17,8 +17,14 @@ export async function migrateProjects(plugin: PMPlugin): Promise<void> {
   let migrated = 0
 
   for (const file of files) {
+    // A warm cache already knows each note's frontmatter, or that it has none,
+    // so only an old-format board, or a note Obsidian has not indexed yet, is
+    // read. Null means "not indexed"; an entry without frontmatter means "not
+    // a board". This runs on every launch over every root note by default.
+    const cache = plugin.app.metadataCache.getFileCache(file)
+    if (cache && (cache.frontmatter?.['pm-project'] !== true || !isOldFormat(cache.frontmatter))) continue
     try {
-      const content = await plugin.app.vault.read(file)
+      const content = await plugin.app.vault.cachedRead(file)
       const { frontmatter } = parseFrontmatter(content)
       if (!frontmatter || frontmatter['pm-project'] !== true) continue
       if (!isOldFormat(frontmatter)) continue
