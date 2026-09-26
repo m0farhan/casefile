@@ -47,6 +47,38 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ## Unreleased
 
+### Added — see inside an attachment without opening it
+
+- A PDF attachment shows the pictures it carries, drawn from their own bytes
+  only when those bytes say they are a JPEG, PNG or GIF. The QR-code PDF
+  phish is one page-sized picture with nothing else in it; it is now on
+  screen. Alongside it: the links the PDF declares (`/URI`, defanged), a count
+  of the action names in it (`/JavaScript`, `/OpenAction`, …), and where the
+  scan is blind, said in words.
+- A Word, Excel or PowerPoint attachment shows the pictures under `media/` —
+  the "enable content to view this document" banner is a picture — plus every
+  external target its relationships declare (a remote template, a linked
+  object), and any entry named like a macro project, an OLE object, an
+  external workbook link, an ActiveX control or an executable. The full entry
+  list sits behind a disclosure.
+- Links found this way reach the Indicators tab, Copy indicators and the case,
+  not only the attachment's card. A remote-template URL lives in a compressed
+  part, where the plain text scan never saw it.
+- A forwarded message attached as `.eml` has "Analyse this message in a new
+  tab", so its own Received chain and authentication results are read as
+  headers rather than as body text.
+- Reset clears the message and its analysis to start another. Nothing is
+  asked first: nothing here was saved, and a loaded `.eml` is untouched.
+
+### Fixed
+
+- Clearing the paste box left the previous message's tabs and counts on
+  screen over an empty pane.
+- A PDF image cut at its declared `/Length` carried a note saying it might be
+  a prefix of the real image, found by searching for `endstream`. It was
+  exact. The note now appears only for images whose end really was searched
+  for.
+
 ### Changed — the phishing analyser is a tab
 
 - The analyser opens in its own workspace tab instead of a dialog. A modal

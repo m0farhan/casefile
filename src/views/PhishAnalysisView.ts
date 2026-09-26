@@ -100,6 +100,8 @@ export class PhishAnalysisView extends ItemView {
     const out = contentEl.createDiv('pm-headers-out')
     const row = contentEl.createDiv('pm-modal-btn-row')
 
+    const resetBtn = new ButtonComponent(row).setButtonText('Reset').setDisabled(true)
+    setTooltip(resetBtn.buttonEl, 'Clear the message and its analysis to start another')
     const loadBtn = new ButtonComponent(row).setButtonText('Load .eml')
     setTooltip(loadBtn.buttonEl, 'Read a .eml file already in this vault')
     const copyBtn = new ButtonComponent(row).setButtonText('Copy report').setDisabled(true)
@@ -117,6 +119,7 @@ export class PhishAnalysisView extends ItemView {
       if (run !== this.runId) return
       this.raw = raw
       this.report = report
+      resetBtn.setDisabled(!raw)
       copyBtn.setDisabled(!report)
       caseBtn.setDisabled(!report)
       iocBtn.setDisabled(!report?.indicators.length)
@@ -130,6 +133,16 @@ export class PhishAnalysisView extends ItemView {
     input.addEventListener('input', () => {
       if (this.debounce !== null) window.clearTimeout(this.debounce)
       this.debounce = window.setTimeout(refresh, 300)
+    })
+    // Nothing here was ever saved — the source .eml, if there was one, is
+    // untouched in the vault — so there is nothing to confirm.
+    resetBtn.onClick(() => {
+      if (this.debounce !== null) window.clearTimeout(this.debounce)
+      this.debounce = null
+      this.tab = 'message'
+      input.value = ''
+      refresh()
+      input.focus()
     })
     loadBtn.onClick(
       safeAsync(async () => {
@@ -246,7 +259,12 @@ export class PhishAnalysisView extends ItemView {
   private render(out: HTMLElement): void {
     out.empty()
     const report = this.report
-    if (!report) return
+    if (!report) {
+      // The strip lives outside `out`, so emptying `out` alone left the last
+      // message's tab counts sitting over an empty pane.
+      this.tabStrip?.empty()
+      return
+    }
 
     const tabs: { id: TabId; label: string }[] = [
       { id: 'message', label: 'Message' },
