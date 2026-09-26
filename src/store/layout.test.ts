@@ -66,5 +66,7 @@ describe('parentFolderOf', () => {
     // v2 and legacy still answer where the note sits.
     expect(parentFolderOf('SOC/Cases/Mid.md')).toBe('SOC')
     expect(parentFolderOf('Flat.md')).toBe('')
+    expect(parentFolderOf('Projects/Old.md')).toBe('Projects')
+    expect(parentFolderOf('A/B/Old.md')).toBe('A/B')
   })
 })

@@ -28,12 +28,69 @@ const RRULE_INTERVALS: Record<string, Recurrence['interval']> = {
   YEARLY: 'yearly'
 }
 
-/** Map a simple RRULE (FREQ + optional INTERVAL) to our recurrence model; complex rules are dropped. */
+/**
+ * Map an RRULE to our recurrence model. FREQ and INTERVAL are carried over;
+ * BY*, COUNT and UNTIL are not. A one-day BYDAY, BYMONTHDAY or BYMONTH (what
+ * every TaskNotes preset writes) is the task's own anchor day, so "Repeats
+ * weekly" still says what the rule does. A BYDAY listing several days
+ * (weekdays, Mon/Wed/Fri) is not: the label would understate it, so that rule
+ * is dropped, as is a FREQ the model has no interval for (HOURLY).
+ */
 function mapRecurrence(rrule: string | undefined): Recurrence | undefined {
   const freq = rrule?.match(/FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)/)
-  if (!freq) return undefined
-  const every = rrule?.match(/INTERVAL=(\d+)/)
+  if (!rrule || !freq) return undefined
+  // Split into parts rather than one regex over the whole rule, so the check
+  // stays linear however long a hand edit made it.
+  if (rrule.split(/[;:\s]/).some((part) => part.startsWith('BYDAY=') && part.includes(','))) return undefined
+  const every = rrule.match(/INTERVAL=(\d+)/)
   return { interval: RRULE_INTERVALS[freq[1]], every: every ? parseInt(every[1], 10) : 1 }
+}
+
+/**
+ * Frontmatter keys a TaskNotes note uses for values this conversion already
+ * carries onto the case (under TaskNotes' default names). They are not kept
+ * as extra properties beside the case's own, where they would go stale and
+ * contradict it after the first edit.
+ * ponytail: default names only; a custom TaskNotes field mapping or a
+ * property-based task marker is excluded when the caller passes those names.
+ */
+export const TASKNOTES_MAPPED_KEYS = [
+  'scheduled',
+  'completedDate',
+  'dateCreated',
+  'dateModified',
+  'projects',
+  'blockedBy',
+  'timeEntries'
+]
+
+/** One TaskNotes time entry as its API returns it. */
+interface TaskNotesTimeEntry {
+  startTime?: string
+  endTime?: string
+  description?: string
+}
+
+/**
+ * TaskNotes time entries as time logs: the day the entry started, the hours
+ * between its start and end, and its description. An entry without a readable
+ * start and a later end (one still running) has no duration yet and is left
+ * out rather than guessed.
+ */
+function mapTimeEntries(entries: unknown): Task['timeLogs'] {
+  if (!Array.isArray(entries)) return undefined
+  const logs: NonNullable<Task['timeLogs']> = []
+  for (const e of entries as TaskNotesTimeEntry[]) {
+    const start = Date.parse(e?.startTime ?? '')
+    const end = Date.parse(e?.endTime ?? '')
+    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) continue
+    logs.push({
+      date: new Date(start).toISOString().slice(0, 10),
+      hours: Math.round(((end - start) / 3_600_000) * 100) / 100,
+      note: typeof e.description === 'string' ? e.description : ''
+    })
+  }
+  return logs.length ? logs : undefined
 }
 
 function dateOnly(value: string | undefined): string {
@@ -55,6 +112,8 @@ function mapItemToTask(item: TaskNotesImportItem, opts: TaskNotesImportOptions):
   if (info.timeEstimate && info.timeEstimate > 0) {
     task.timeEstimate = Math.round((info.timeEstimate / 60) * 100) / 100
   }
+  const timeLogs = mapTimeEntries((info as TaskNotesTaskInfo & { timeEntries?: unknown }).timeEntries)
+  if (timeLogs) task.timeLogs = timeLogs
   if (info.dateCreated) task.createdAt = info.dateCreated
   if (info.dateModified) task.updatedAt = info.dateModified
   if (info.archived) task.archived = true

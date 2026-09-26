@@ -28,6 +28,13 @@ describe('parseFrontmatter', () => {
     expect(body).toBe(doc)
   })
 
+  it('treats a --- rule around a paragraph as body, not frontmatter', () => {
+    const doc = '---\nFirst paragraph\n---\nrest'
+    expect(parseFrontmatter(doc)).toEqual({ frontmatter: null, body: doc })
+    expect(parseFrontmatter('---\n- a\n---\nrest').frontmatter).toBeNull()
+    expect(parseFrontmatter('---\n\n---\nrest')).toEqual({ frontmatter: null, body: 'rest' })
+  })
+
   it('falls back to null on malformed yaml', () => {
     const doc = '---\n: : :\n---\nbody'
     const { frontmatter } = parseFrontmatter(doc)
@@ -150,5 +157,77 @@ describe('appendYaml', () => {
     const lines: string[] = []
     appendYaml(lines, { outer: { inner: 'x' } }, 0)
     expect(lines).toEqual(['outer:', '  inner: "x"'])
+  })
+})
+
+describe('frontmatter written by other tools', () => {
+  it('parses a CRLF note, and leaves a lone \\r inside a value alone', () => {
+    const doc = '---\r\npm-task: true\r\nid: "t1"\r\nupdatedAt: "2026-01-01"\r\n---\r\n\r\nreal desc\r\nline two'
+    const { frontmatter, body } = parseFrontmatter(doc)
+    expect(frontmatter).toEqual({ 'pm-task': true, id: 't1', updatedAt: '2026-01-01' })
+    expect(body).toBe('real desc\nline two')
+    expect(parseFrontmatter('---\na: "x\ry"\n---\n').frontmatter).toEqual({ a: 'x\ry' })
+  })
+
+  it('writes a carriage return escaped, so it never reaches the YAML raw', () => {
+    const lines: string[] = []
+    appendYaml(lines, { s: 'a\rb' }, 0)
+    expect(lines).toEqual(['s: "a\\rb"'])
+    expect(parseFrontmatter(`---\n${lines[0]}\n---\n`).frontmatter).toEqual({ s: 'a\rb' })
+  })
+
+  it('quotes keys that are not plain words, so they round-trip', () => {
+    const fm = {
+      'Ticket #': 'INC-42',
+      'Ticket: ref': 'r1',
+      null: 'n',
+      True: 't',
+      '@owner': 'me',
+      '#tag': 'x',
+      nested: { 'a b': 1 },
+      rows: [{ 'x:y': 1, '@z': 2 }],
+      plainKey: 'kept'
+    }
+    const lines: string[] = ['---']
+    appendYaml(lines, fm, 0)
+    lines.push('---')
+    expect(parseFrontmatter(lines.join('\n')).frontmatter).toEqual(fm)
+    // Owned keys the plugin writes stay byte-identical.
+    expect(lines).toContain('plainKey: "kept"')
+  })
+
+  it('writes lists holding nulls, nested arrays or mixed items without crashing or reshaping them', () => {
+    const fm = {
+      tags: [null],
+      related: [null, 'x'],
+      coords: [
+        [1, 2],
+        [3, 4]
+      ],
+      mixed: [{ a: 1 }, 'str'],
+      iocs: [{ type: 'ip', value: '1.2.3.4' }]
+    }
+    const lines: string[] = ['---']
+    appendYaml(lines, fm, 0)
+    lines.push('---')
+    expect(parseFrontmatter(lines.join('\n')).frontmatter).toEqual(fm)
+    // A list of plain objects keeps the block form every existing file uses.
+    expect(lines).toContain('  - type: "ip"')
+  })
+})
+
+describe('stripGeneratedProjectContent with a description that repeats', () => {
+  it('strips the paragraph, not the heading, when the title contains the description', () => {
+    const body = '# \u{1F4CB} Phishing\n\nPhishing\n\n## Tasks\n- [ ] [[A|A]]'
+    expect(stripGeneratedProjectContent(body, 'Phishing')).toBe('')
+  })
+
+  it('strips a description saved with a trailing newline', () => {
+    expect(stripGeneratedProjectContent('# \u{1F4CB} Q\n\nDesc.', 'Desc.\n')).toBe('')
+  })
+
+  it('never cuts a short description out of hand-written text', () => {
+    const body = '# \u{1F4CB} C\n\nFIRST responder notes.'
+    expect(stripGeneratedProjectContent(body, 'IR')).toBe('FIRST responder notes.')
   })
 })

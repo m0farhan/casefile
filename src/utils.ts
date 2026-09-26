@@ -11,18 +11,26 @@ export function stringToColor(s: string): string {
   return `hsl(${Math.abs(hash) % 360}, 55%, 45%)`
 }
 
+/**
+ * A stored value as a Date to display. A date-only value (a due date) is a
+ * calendar day, not an instant: `new Date('2026-09-26')` is UTC midnight,
+ * which anywhere west of UTC displays as the 25th. It is read as local
+ * midnight instead. A timestamp stays the instant it names.
+ */
+function parseDisplayDate(iso: string): Date {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(iso + 'T00:00') : new Date(iso)
+}
+
 /** Short date: "Mar 28" */
 export function formatDateShort(iso: string): string {
   if (!iso) return ''
-  const d = new Date(iso)
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return parseDisplayDate(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 /** Long date: "Mar 28, '26" */
 export function formatDateLong(iso: string): string {
   if (!iso) return ''
-  const d = new Date(iso)
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })
+  return parseDisplayDate(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })
 }
 
 /** Is a status marked as terminal (complete) in the config? */
@@ -93,7 +101,10 @@ export function dueUrgency(task: Task, statuses: StatusConfig[]): DueUrgency {
 export function stringifyCustomValue(val: unknown): string {
   if (val === undefined || val === null) return ''
   if (typeof val === 'string') return val
-  if (typeof val === 'number' || typeof val === 'boolean') return String(val)
+  // A cleared number field used to store NaN: blank reads as not recorded,
+  // where the text "NaN" looked like a value.
+  if (typeof val === 'number') return Number.isFinite(val) ? String(val) : ''
+  if (typeof val === 'boolean') return String(val)
   if (Array.isArray(val)) return val.map((v) => String(v)).join(', ')
   return ''
 }
@@ -104,9 +115,14 @@ export function truncateTitle(title: string, maxLen = 20): string {
   return title.slice(0, maxLen - 1) + '…'
 }
 
-/** Replace characters illegal in file names */
+/**
+ * Replace characters illegal in file names. Control characters (a tab or a
+ * line break pasted into a title) become a space, as in Obsidian's own rename:
+ * Windows refuses them in a file name, and a name with a line break cannot be
+ * linked to.
+ */
 export function sanitizeFileName(title: string): string {
-  return title.replace(/[\\/:*?"<>|]/g, '-')
+  return title.replace(/[\\/:*?"<>|]/g, '-').replace(/\p{Cc}/gu, ' ')
 }
 
 /** Look up a status config by id */

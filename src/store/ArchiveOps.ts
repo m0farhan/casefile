@@ -4,13 +4,27 @@ import type { Project, StatusConfig, Task } from '../types'
 import { parsePlainDate } from '../dates'
 import { isTerminalStatus } from '../utils'
 import { findParentId, findTaskById } from './TaskIndex'
-import { repointDescendantFiles } from './TaskTreeOps'
+import { flattenTasks, repointDescendantFiles } from './TaskTreeOps'
 import { ensureFolder, moveTaskAttachmentFolder } from './vaultFs'
 import { taskFolderForProjectPath } from './layout'
 
 /** Get the task subfolder path for a project */
 function projectTaskFolder(project: Project): string {
   return taskFolderForProjectPath(project.filePath)
+}
+
+/**
+ * Re-point the descendants a folder move carried and give them the moved
+ * task's archived state. In memory they must say what the loader will read
+ * from disk: a subtask carried back out of Archive stayed archived until the
+ * next restart, and its next save put it back in Archive under a live case.
+ * Only carried descendants change; one archived on its own keeps its state.
+ */
+function markCarried(task: Task, carried: { from: string; to: string }, archived: boolean): void {
+  repointDescendantFiles(task, carried.from, carried.to)
+  for (const { task: sub } of flattenTasks(task.subtasks)) {
+    if (sub.filePath?.startsWith(carried.to + '/')) sub.archived = archived
+  }
 }
 
 export async function archiveTask(app: App, project: Project, taskId: string): Promise<void> {
@@ -29,10 +43,10 @@ export async function archiveTask(app: App, project: Project, taskId: string): P
   if (file instanceof TFile) {
     const oldPath = task.filePath
     await app.vault.rename(file, newPath)
-    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath)
+    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath, projectTaskFolder(project))
     // ponytail: nested subtask files ride along with the folder — archiving a
-    // parent carries its subtree into Archive (cascade-archive on next load).
-    if (carried) repointDescendantFiles(task, carried.from, carried.to)
+    // parent carries its subtree into Archive, archived with it.
+    if (carried) markCarried(task, carried, true)
     task.filePath = newPath
     task.archived = true
   }
@@ -59,8 +73,8 @@ export async function unarchiveTask(app: App, project: Project, taskId: string):
   if (file instanceof TFile) {
     const oldPath = task.filePath
     await app.vault.rename(file, newPath)
-    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath)
-    if (carried) repointDescendantFiles(task, carried.from, carried.to)
+    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath, projectTaskFolder(project))
+    if (carried) markCarried(task, carried, false)
     task.filePath = newPath
     task.archived = false
   }

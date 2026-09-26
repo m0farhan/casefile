@@ -1,9 +1,18 @@
-import type { App } from 'obsidian'
+import type { App, Plugin } from 'obsidian'
 import { TFile, TFolder } from 'obsidian'
 import { describe, expect, it, vi } from 'vitest'
 import { makeFakeApp, type FakeVault } from '../../test/fakeVault'
-import { DEFAULT_SETTINGS, makeTask, type PMSettings, type Project, type StatusConfig, type Task } from '../types'
-import { ProjectStore } from './ProjectStore'
+import { slaState } from '../soc/sla'
+import {
+  DEFAULT_SETTINGS,
+  DEFAULT_SLA_POLICIES,
+  makeTask,
+  type PMSettings,
+  type Project,
+  type StatusConfig,
+  type Task
+} from '../types'
+import { inferIssueKeyPrefix, NestedBoardError, ProjectStore } from './ProjectStore'
 import { parseFrontmatter } from './YamlParser'
 import { buildTaskIndex } from './TaskIndex'
 import { findTask, flattenTasks } from './TaskTreeOps'
@@ -20,6 +29,20 @@ const STATUSES: StatusConfig[] = [
 ]
 
 const SETTINGS: PMSettings = { ...DEFAULT_SETTINGS, statuses: STATUSES }
+
+/** The note at `path`, narrowed by instanceof; a missing one fails the test here. */
+function fileAt(vault: FakeVault, path: string | undefined): TFile {
+  const f = vault.getAbstractFileByPath(expectDefined(path))
+  if (!(f instanceof TFile)) throw new Error(`no note at ${path}`)
+  return f
+}
+
+/** The folder at `path`, narrowed by instanceof. */
+function folderAt(vault: FakeVault, path: string): TFolder {
+  const f = vault.getAbstractFileByPath(path)
+  if (!(f instanceof TFolder)) throw new Error(`no folder at ${path}`)
+  return f
+}
 
 function newStore(): { store: ProjectStore; vault: FakeVault; app: App } {
   const { app, vault } = makeFakeApp()
@@ -62,7 +85,7 @@ describe('ProjectStore self-write tracking', () => {
     expect(store.consumeSelfWrite(expectDefined(task.filePath))).toBe(false) // single-use
   })
 
-  it('marks both old and new path on title rename (modify new, trash old)', async () => {
+  it('marks both old and new path on title rename', async () => {
     const { store, vault } = newStore()
     const project = await store.createProject('R', 'Projects')
     const task = await addNamed(store, project, 'Before')
@@ -71,8 +94,8 @@ describe('ProjectStore self-write tracking', () => {
 
     await store.updateTask(project, task.id, { title: 'Renamed' })
 
-    // The new path is created (marked for cache invalidation) and the old
-    // path is trashed (marked so the delete listener skips the reload).
+    // The note is renamed from the old path to the new one: both are marked,
+    // so neither the rename nor the cache listeners treat it as external.
     expect(store.consumeSelfWrite(expectDefined(task.filePath))).toBe(true)
     expect(store.consumeSelfWrite(oldPath)).toBe(true)
   })
@@ -133,8 +156,9 @@ describe('ProjectStore dirty-set save efficiency', () => {
 
     await store.updateTask(project, parent.id, { title: 'New parent' })
 
-    // Parent file is renamed (create new + trash old), not modified.
-    expect(vault.modifyCount.get(expectDefined(parent.filePath)) ?? 0).toBe(0)
+    // Parent note is moved by the link-aware rename, then rewritten once in place.
+    expect(vault.modifyCount.get(expectDefined(parent.filePath))).toBe(1)
+    expect(vault.createCount.size + vault.trashCount.size).toBe(0)
     // Children stay at the same path but get rewritten because their Parent link broke.
     expect(vault.modifyCount.get(expectDefined(child1.filePath))).toBe(1)
     expect(vault.modifyCount.get(expectDefined(child2.filePath))).toBe(1)
@@ -153,9 +177,11 @@ describe('ProjectStore dirty-set save efficiency', () => {
 
     expect(vault.modifyCount.get(expectDefined(p1.filePath))).toBe(1)
     expect(vault.modifyCount.get(expectDefined(p2.filePath))).toBe(1)
-    // The child's file relocates under the new parent's folder: create + trash, not modify.
-    expect(vault.createCount.get(expectDefined(child.filePath))).toBe(1)
-    expect(vault.trashCount.get(oldChildPath)).toBe(1)
+    // The child's note relocates under the new parent's folder by the
+    // link-aware rename, then one in-place rewrite: nothing created or trashed.
+    expect(vault.modifyCount.get(expectDefined(child.filePath))).toBe(1)
+    expect(vault.getAbstractFileByPath(oldChildPath)).toBeNull()
+    expect(vault.createCount.size + vault.trashCount.size).toBe(0)
   })
 
   it('rewrites the parent (not the deleted task) on deleteTask', async () => {
@@ -249,6 +275,42 @@ describe('ProjectStore round-trip', () => {
     if (!reloaded) throw new Error('reload failed')
     const flat = flattenTasks(reloaded.tasks)
     expect(flat.map((f) => f.task.title).sort()).toEqual(['First', 'Second'])
+  })
+})
+
+describe('ProjectStore legacy migration with repeated titles', () => {
+  it('migrates two embedded tasks with one title in one save, and a second save creates nothing', async () => {
+    const { store, vault } = newStore()
+    const fm = ['---', 'pm-project: true', 'id: legacy', 'title: Legacy', 'tasks:']
+    for (const [id, title] of [
+      ['t1aaaaaaaa', 'Follow up'],
+      ['t2bbbbbbbb', 'Follow up'],
+      ['t3cccccccc', 'Other']
+    ]) {
+      fm.push(`  - id: ${id}`, `    title: ${title}`, '    status: todo')
+    }
+    fm.push('---', '')
+    await vault.create('Projects/Legacy.md', fm.join('\n'))
+    const file = fileAt(vault, 'Projects/Legacy.md')
+    const project = expectDefined(await store.loadProject(file))
+
+    await store.saveProject(project)
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/Follow up.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/follow-up-t2bbbbbb.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Projects/Legacy_tasks/Other.md')).toBeInstanceOf(TFile)
+    expect(parseFrontmatter(await vault.cachedRead(file)).frontmatter?.taskIds).toHaveLength(3)
+
+    vault.resetCounts()
+    await store.updateTask(project, 't2bbbbbbbb', { description: 'still here' })
+    expect([...vault.createCount.keys()]).toEqual([])
+    expect(findTask(project.tasks, 't2bbbbbbbb')?.title).toBe('Follow up')
+  })
+
+  it('a new task whose title already has a file is still refused', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Refuse', 'Projects')
+    await addNamed(store, project, 'Taken')
+    await expect(addNamed(store, project, 'Taken')).rejects.toThrow('already exists')
   })
 })
 
@@ -923,7 +985,7 @@ describe('ProjectStore project cache', () => {
     expect(second).toBe(first)
   })
 
-  it('saving a cloned project makes the clone the canonical cached copy', async () => {
+  it('saving a copy of a board keeps the cached object canonical, refreshed with what the copy saved', async () => {
     const { store, vault } = newStore()
     const project = await store.createProject('Clone me', 'Projects')
     await addNamed(store, project, 'task')
@@ -931,13 +993,156 @@ describe('ProjectStore project cache', () => {
     // Same shape as ProjectModal: JSON round-trip plus index rebuild.
     const clone = JSON.parse(JSON.stringify(project)) as typeof project
     clone.taskIndex = buildTaskIndex(clone.tasks)
-    clone.description = 'edited in modal'
+    clone.teamMembers = ['sam']
     await store.saveProject(clone)
 
-    const file = vault.getAbstractFileByPath(project.filePath)
-    if (!(file instanceof TFile)) throw new Error('project file missing')
-    const reloaded = await store.loadProject(file)
-    expect(reloaded).toBe(clone)
+    const reloaded = await store.loadProject(fileAt(vault, project.filePath))
+    expect(reloaded).toBe(project)
+    expect(project.teamMembers).toEqual(['sam'])
+  })
+})
+
+describe('ProjectStore one object per board', () => {
+  /** A store listening to the vault's events, as the plugin wires it at load. */
+  function newWatchedStore(): ReturnType<typeof newStore> {
+    const made = newStore()
+    made.store.registerCacheInvalidation({ registerEvent: () => undefined } as unknown as Plugin)
+    return made
+  }
+
+  /** The case as its note on disk says, read by a store with nothing cached. */
+  async function onDisk(app: App, vault: FakeVault, boardPath: string, id: string): Promise<Task> {
+    const cold = expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(fileAt(vault, boardPath)))
+    return expectDefined(findTask(cold.tasks, id))
+  }
+
+  const breach = { at: '2026-01-02T03:04:05.000Z', field: 'sla', from: '', to: 'breached-response' }
+
+  /**
+   * Run `change` a minute later, as an outside change arrives: the store
+   * skips events on a path it wrote itself in the last few seconds.
+   */
+  async function later(change: () => Promise<void>): Promise<void> {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 60_000)
+      await change()
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('two loads of one board at once return one object', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Once', 'Projects')
+    await addNamed(store, project, 'Case')
+    const fresh = new ProjectStore(app, () => SETTINGS)
+    const file = fileAt(vault, project.filePath)
+    const [a, b] = await Promise.all([fresh.loadProject(file), fresh.loadProject(file)])
+    expect(a).not.toBeNull()
+    expect(a).toBe(b)
+  })
+
+  it('deleting a case with subtasks leaves every holder on one object, so a breach row survives', async () => {
+    const { store, vault, app } = newWatchedStore()
+    const project = await store.createProject('Split', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await addNamed(store, project, 'Child', parent.id)
+    const other = await addNamed(store, project, 'Other')
+    const file = fileAt(vault, project.filePath)
+    // Like ProjectView: a delete under the board that the store did not make
+    // reloads it, and the view keeps whatever the load returns.
+    let view = project
+    const reloads: Promise<void>[] = []
+    const reload = async (): Promise<void> => {
+      const p = await store.loadProject(file)
+      if (p) view = p
+    }
+    vault.on('delete', (f) => {
+      if (!store.consumeSelfWrite(f.path)) reloads.push(reload())
+    })
+
+    await store.deleteTask(project, parent.id)
+    await Promise.all(reloads)
+    const cached = expectDefined(await store.loadProject(file)) // what the SLA walk gets
+    expect(view).toBe(cached)
+    await store.appendActivity(cached, other.id, breach)
+    await store.updateTask(view, other.id, { severity: 'sev2' })
+    const saved = await onDisk(app, vault, project.filePath, other.id)
+    expect(saved.activity).toContainEqual(breach)
+    expect(saved.severity).toBe('sev2')
+  })
+
+  it('an edit through the open board after a Sync change keeps that change on disk', async () => {
+    const { store, vault, app } = newWatchedStore()
+    const project = await store.createProject('Synced', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    // Another device moves the case on and logs a breach; Sync delivers it.
+    const device = new ProjectStore(app, () => SETTINGS)
+    await later(async () => {
+      const remote = expectDefined(await device.loadProject(fileAt(vault, project.filePath)))
+      await device.updateTask(remote, task.id, { status: 'in-progress' })
+      await device.appendActivity(remote, task.id, breach)
+    })
+
+    await store.updateTask(project, task.id, { severity: 'sev2' })
+    const saved = await onDisk(app, vault, project.filePath, task.id)
+    expect([saved.status, saved.severity]).toEqual(['in-progress', 'sev2'])
+    expect(saved.activity).toContainEqual(breach)
+    expect(await store.loadProject(fileAt(vault, project.filePath))).toBe(project)
+    expect(expectDefined(findTask(project.tasks, task.id)).status).toBe('in-progress')
+  })
+
+  it('a hand edit to a case note is read before the next edit, and an unsaved board field is kept', async () => {
+    const { store, vault, app } = newWatchedStore()
+    const project = await store.createProject('Hand', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    await later(async () => {
+      await vault.process(fileAt(vault, task.filePath), (c) => c.replace(/^status: .*$/m, 'status: in-progress'))
+    })
+
+    project.teamMembers = ['sam'] // set by a caller that saves with its next edit
+    await store.updateTask(project, task.id, { severity: 'sev2' })
+    const saved = await onDisk(app, vault, project.filePath, task.id)
+    expect([saved.status, saved.severity]).toEqual(['in-progress', 'sev2'])
+    expect(project.teamMembers).toEqual(['sam'])
+    expect(parseFrontmatter(await vault.cachedRead(fileAt(vault, project.filePath))).frontmatter?.teamMembers).toEqual([
+      'sam'
+    ])
+  })
+
+  it('an open board follows its folder dragged in the file explorer, and an edit lands there', async () => {
+    const { store, vault, app } = newWatchedStore()
+    const project = await store.createProject('Goals', 'Projects')
+    const task = await addNamed(store, project, 'Case 1')
+    await later(() => vault.rename(folderAt(vault, 'Projects/Goals'), 'IR/Goals'))
+    expect(project.filePath).toBe('IR/Goals/Goals.md')
+
+    await store.updateTask(project, task.id, { status: 'done' })
+    expect(
+      vault
+        .getMarkdownFiles()
+        .map((f) => f.path)
+        .sort()
+    ).toEqual(['IR/Goals/Goals.md', 'IR/Goals/Tasks/Case 1.md'])
+    expect((await onDisk(app, vault, 'IR/Goals/Goals.md', task.id)).status).toBe('done')
+    expect(await store.loadProject(fileAt(vault, 'IR/Goals/Goals.md'))).toBe(project)
+  })
+
+  it('a board note renamed away shows as detached and takes no new case, and renamed back it is whole again', async () => {
+    const { store, vault } = newWatchedStore()
+    const project = await store.createProject('Goals', 'IR')
+    await addNamed(store, project, 'Phish A')
+    await later(() => vault.rename(fileAt(vault, 'IR/Goals/Goals.md'), 'IR/Goals/Objectives.md'))
+    expect(await store.loadProject(fileAt(vault, 'IR/Goals/Objectives.md'))).toBe(project)
+    expect(project.detached).toEqual({ recorded: 1, folder: 'IR/Goals/Objectives_tasks' })
+    await expect(store.insertTask(project, makeTask({ title: 'New' }))).rejects.toThrow('Not adding')
+    expect(project.tasks).toEqual([])
+
+    await later(() => vault.rename(fileAt(vault, 'IR/Goals/Objectives.md'), 'IR/Goals/Goals.md'))
+    expect(await store.loadProject(fileAt(vault, 'IR/Goals/Goals.md'))).toBe(project)
+    expect(project.detached).toBeUndefined()
+    expect(project.tasks.map((t) => t.title)).toEqual(['Phish A'])
   })
 })
 
@@ -989,6 +1194,38 @@ describe('ProjectStore.importNoteAsTask', () => {
     expect(reloaded.tasks.map((t) => t.title)).toContain('Idea')
   })
 
+  it('a move keeps the note properties: tags on the case, the rest as its own properties', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Props', 'Projects')
+    const note = await vault.create(
+      'Notes/Alert.md',
+      '---\ntags: [phishing, "#finance"]\nsource: INC-4471\nreporter: alice\naliases: [Wire fraud]\npm-project: false\n---\nThe body.'
+    )
+    expect(await store.importNoteAsTask(project, note, { status: 'todo', priority: 'medium', handling: 'move' })).toBe(
+      'imported'
+    )
+    const moved = fileAt(vault, 'Projects/Props/Tasks/Alert.md')
+    const { frontmatter, body } = parseFrontmatter(await vault.read(moved))
+    expect(frontmatter).toMatchObject({
+      'pm-task': true,
+      tags: ['phishing', 'finance'],
+      source: 'INC-4471',
+      reporter: 'alice',
+      aliases: ['Wire fraud']
+    })
+    expect(frontmatter).not.toHaveProperty('pm-project')
+    expect(body.startsWith('The body.')).toBe(true)
+  })
+
+  it('a note opening with a --- rule keeps its first paragraph', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Rule', 'Projects')
+    const note = await vault.create('Notes/Ruled.md', '---\nFirst paragraph\n---\nrest')
+    await store.importNoteAsTask(project, note, { status: 'todo', priority: 'medium', handling: 'move' })
+    const moved = fileAt(vault, 'Projects/Rule/Tasks/Ruled.md')
+    expect(await vault.read(moved)).toContain('First paragraph')
+  })
+
   it('skips notes that are already tasks', async () => {
     const { store, vault, project } = await importInto('copy')
     const existing = vault.getAbstractFileByPath('Projects/Import/Tasks/Idea.md')
@@ -1002,6 +1239,19 @@ describe('ProjectStore.importNoteAsTask', () => {
     })
     expect(result).toBe('skipped')
     expect(await vault.read(existing)).toBe(before)
+  })
+
+  it("skips another board's note, leaving that board where and as it was", async () => {
+    const { store, vault, project } = await importInto('copy')
+    const bravo = await store.createProject('Bravo', 'Projects')
+    await addNamed(store, bravo, 'Case 1')
+    const note = fileAt(vault, bravo.filePath)
+    const before = await vault.read(note)
+
+    const opts = { status: 'todo', priority: 'low', handling: 'move' } as const
+    expect(await store.importNoteAsTask(project, note, opts)).toBe('skipped')
+    expect(vault.getAbstractFileByPath(bravo.filePath)).toBe(note)
+    expect(await vault.read(note)).toBe(before)
   })
 })
 
@@ -1032,6 +1282,21 @@ describe('ProjectStore.importTaskForest', () => {
     expect(expectDefined(top).subtasks.map((t) => t.title)).toEqual(['Child'])
     expect(expectDefined(top).subtasks[0].dependencies).toEqual([parent.id])
     expect(expectDefined(top).description).toBe('parent body')
+  })
+
+  it('a move keeps the source note properties, but not the TaskNotes fields already carried over', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Tn', 'Projects')
+    const src = await vault.create(
+      'TaskNotes/Call.md',
+      '---\ntitle: Call\nscheduled: 2026-07-06\ndateCreated: 2026-06-01\ncontexts: ["@soc"]\nsource: ticket\n---\nNotes.'
+    )
+    const task = makeTask({ title: 'Call' })
+    await store.importTaskForest(project, [task], new Map([[task.id, src]]), 'move')
+    const { frontmatter } = parseFrontmatter(await vault.read(fileAt(vault, task.filePath)))
+    expect(frontmatter).toMatchObject({ contexts: ['@soc'], source: 'ticket' })
+    expect(frontmatter).not.toHaveProperty('scheduled')
+    expect(frontmatter).not.toHaveProperty('dateCreated')
   })
 
   it('places archived tasks in the Archive subfolder', async () => {
@@ -1231,6 +1496,101 @@ describe('issue keys', () => {
         .sort()
     ).toEqual(['Alpha', 'XX-1: Beta'])
   })
+
+  it('adoptIssueKeys leaves CVE and APT ids in titles alone and never takes CVE as the prefix', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Ids', 'Projects')
+    const titles = [
+      'SOC-1: Data collection',
+      'SOC-2: Correlation',
+      'CVE-2024-3400 exploited on edge FW',
+      'APT-29 spearphish'
+    ]
+    const tasks: Task[] = []
+    for (const [i, title] of titles.entries()) {
+      const t = makeTask({ title, createdAt: `2026-07-0${i + 1}T00:00:00Z` })
+      await store.insertTask(project, t)
+      tasks.push(t)
+    }
+    const result = expectDefined(await store.adoptIssueKeys(project))
+    expect(result.prefix).toBe('SOC')
+    expect(tasks.map((t) => [t.key, t.title])).toEqual([
+      ['SOC-1', 'Data collection'],
+      ['SOC-2', 'Correlation'],
+      ['SOC-3', 'CVE-2024-3400 exploited on edge FW'],
+      ['SOC-4', 'APT-29 spearphish']
+    ])
+
+    const cves = await store.createProject('Cves', 'Projects')
+    await addNamed(store, cves, 'CVE-2024-3400 exploited')
+    await addNamed(store, cves, 'CVE-2023-4966 Citrix Bleed')
+    expect(inferIssueKeyPrefix(cves.tasks)).toBe('')
+    expect(await store.adoptIssueKeys(cves)).toBeNull()
+  })
+
+  it('adoptIssueKeys uses the prefix the analyst confirmed over the titles', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Confirm', 'Projects')
+    const apt = await addNamed(store, project, 'APT-29 spearphish')
+    expect(inferIssueKeyPrefix(project.tasks)).toBe('APT')
+    await store.adoptIssueKeys(project, 'soc')
+    expect([apt.key, apt.title]).toEqual(['SOC-1', 'APT-29 spearphish'])
+  })
+
+  it('never repeats a key after keys were switched off and on again', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Toggle', 'Projects')
+    project.keyPrefix = 'SOC'
+    await addNamed(store, project, 'First')
+    project.keyPrefix = ''
+    await store.saveProject(project)
+
+    const reloaded = await reloadProject(app, vault, project.filePath)
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    reloaded.keyPrefix = 'SOC'
+    const second = makeTask({ title: 'Second' })
+    await store2.insertTask(reloaded, second)
+    expect(second.key).toBe('SOC-2')
+  })
+
+  it('a board note whose counter lags its cases never hands out an existing key', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Lag', 'Projects')
+    project.keyPrefix = 'SOC'
+    await addNamed(store, project, 'First')
+    await addNamed(store, project, 'Second')
+    const pf = fileAt(vault, project.filePath)
+    await vault.modify(pf, (await vault.cachedRead(pf)).replace('nextKeySeq: 3', 'nextKeySeq: 1'))
+
+    const reloaded = await reloadProject(app, vault, project.filePath)
+    const third = makeTask({ title: 'Third' })
+    await new ProjectStore(app, () => SETTINGS).insertTask(reloaded, third)
+    expect(third.key).toBe('SOC-3')
+  })
+
+  it('re-running adoptIssueKeys never lowers the counter below a deleted key', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Readopt', 'Projects')
+    await addNamed(store, project, 'First')
+    const second = await addNamed(store, project, 'Second')
+    await store.adoptIssueKeys(project, 'SOC')
+    expect(second.key).toBe('SOC-2')
+    await store.deleteTask(project, second.id)
+    await store.adoptIssueKeys(project, 'SOC')
+    const third = await addNamed(store, project, 'Third')
+    expect(third.key).toBe('SOC-3')
+  })
+
+  it('adoptIssueKeys keys a case with no recorded creation time after the dated ones', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Undated', 'Projects')
+    const undated = await addNamed(store, project, 'Undated')
+    const dated = await addNamed(store, project, 'Dated')
+    undated.createdAt = ''
+    dated.createdAt = '2026-07-01T00:00:00Z'
+    await store.adoptIssueKeys(project, 'SOC')
+    expect([dated.key, undated.key]).toEqual(['SOC-1', 'SOC-2'])
+  })
 })
 
 describe('activity log + incident lifecycle stamps', () => {
@@ -1313,6 +1673,68 @@ describe('activity log + incident lifecycle stamps', () => {
     const manual = '2026-07-30T00:00:00.000Z'
     await store.updateTask(project, inc.id, { status: 'in-progress', respondedAt: manual })
     expect(inc.respondedAt).toBe(manual)
+  })
+
+  it('logs a hand edit to a lifecycle stamp or the issue type, but never an auto-stamp', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Stamps', 'Projects')
+    const inc = makeTask({ title: 'Inc', issueType: 'incident', detectedAt: '2026-09-01T00:00:00.000Z' })
+    await store.insertTask(project, inc, null)
+    await store.updateTask(project, inc.id, { status: 'in-progress' })
+    expect(inc.respondedAt).not.toBe('')
+    expect(inc.activity.map((a) => a.field)).toEqual(['status'])
+
+    await store.updateTask(project, inc.id, { detectedAt: '2026-09-02T00:00:00.000Z' })
+    await store.updateTask(project, inc.id, { issueType: 'task' })
+    expect(inc.activity.slice(1).map((a) => [a.field, a.from, a.to])).toEqual([
+      ['detectedAt', '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z'],
+      ['issueType', 'incident', 'task']
+    ])
+  })
+
+  it('reopening an incident clears resolvedAt, logs the old value, and its clock can breach again', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Reopen', 'Projects')
+    const t0 = Date.parse('2026-09-01T00:00:00.000Z')
+    const inc = makeTask({
+      title: 'Inc',
+      issueType: 'incident',
+      severity: 'sev1',
+      detectedAt: new Date(t0).toISOString()
+    })
+    await store.insertTask(project, inc, null)
+    await store.updateTask(project, inc.id, { status: 'done' })
+    const first = inc.resolvedAt
+    expect(first).not.toBe('')
+
+    await store.updateTask(project, inc.id, { status: 'todo' })
+    expect(inc.resolvedAt).toBe('')
+    expect(inc.activity.at(-1)).toMatchObject({ field: 'resolvedAt', from: first, to: '' })
+    const state = expectDefined(slaState(inc, DEFAULT_SLA_POLICIES, t0 + 11 * 3600_000))
+    expect([state.done, state.breached]).toEqual([false, true])
+
+    await store.updateTask(project, inc.id, { status: 'done' })
+    expect(inc.resolvedAt).not.toBe('')
+  })
+
+  it('an administrative remap logs the status change but sets or clears no stamp', async () => {
+    const statuses: StatusConfig[] = [
+      ...STATUSES,
+      { id: 'closed', label: 'Closed', color: '#0a0', icon: '', complete: true }
+    ]
+    const { app } = makeFakeApp()
+    const store = new ProjectStore(app as unknown as App, () => ({ ...SETTINGS, statuses }))
+    const project = await store.createProject('Remap', 'Projects')
+    const inc = makeTask({ title: 'Inc', issueType: 'incident', status: 'done', completed: '2025-01-01' })
+    await store.insertTask(project, inc, null)
+    const todo = makeTask({ title: 'Queued', issueType: 'incident' })
+    await store.insertTask(project, todo, null)
+
+    await store.updateTasks(project, [inc.id], { status: 'closed' }, { administrative: true })
+    await store.updateTasks(project, [todo.id], { status: 'in-progress' }, { administrative: true })
+    expect([inc.status, inc.completed, inc.respondedAt, inc.resolvedAt]).toEqual(['closed', '2025-01-01', '', ''])
+    expect(todo.respondedAt).toBe('')
+    expect(inc.activity.map((a) => [a.field, a.from, a.to])).toEqual([['status', 'done', 'closed']])
   })
 
   it('auto-stamps resolvedAt when an incident enters a terminal status', async () => {
@@ -1795,6 +2217,71 @@ describe('ProjectStore stale editor clone safety', () => {
     expect(saved.subtasks[1].title).toBe('Alpha renamed')
   })
 
+  /** A parent with S1 and S2, and the editor's snapshot and working copy of it. */
+  async function panelOpen() {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Panel', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const s1 = await addNamed(store, project, 'S1', parent.id)
+    const s2 = await addNamed(store, project, 'S2', parent.id)
+    const other = await addNamed(store, project, 'Other')
+    const snapshot = JSON.parse(JSON.stringify(parent)) as Task
+    const working = JSON.parse(JSON.stringify(parent)) as Task
+    const renameS2 = async (): Promise<void> => {
+      expectDefined(working.subtasks.find((t) => t.id === s2.id)).title = 'S2 renamed'
+      await store.updateTask(project, parent.id, { subtasks: working.subtasks }, { subtaskBase: snapshot.subtasks })
+    }
+    return { store, vault, app, project, parent, s1, s2, other, renameS2 }
+  }
+
+  it('a board change to one subtask survives a panel rename of another, activity included', async () => {
+    const { store, vault, app, project, parent, s1, renameS2 } = await panelOpen()
+    await store.updateTask(project, s1.id, { status: 'done' })
+    await renameS2()
+    const live = expectDefined(findTask(project.tasks, s1.id))
+    expect([live.status, live.activity.map((a) => a.field)]).toEqual(['done', ['status']])
+    expect(expectDefined(findTask(project.tasks, parent.id)).subtasks.map((t) => t.title)).toEqual(['S1', 'S2 renamed'])
+    const again = await reload(app, vault, project.filePath)
+    expect(findTask(again.tasks, s1.id)?.status).toBe('done')
+  })
+
+  it('a subtask deleted on the board is not recreated by a panel save', async () => {
+    const { store, vault, project, s1, renameS2 } = await panelOpen()
+    const path = expectDefined(s1.filePath)
+    await store.deleteTask(project, s1.id)
+    await renameS2()
+    expect(findTask(project.tasks, s1.id)).toBeNull()
+    expect(vault.getAbstractFileByPath(path)).toBeNull()
+  })
+
+  it('a subtask moved on the board is not duplicated by a panel save', async () => {
+    const { store, project, s1, other, renameS2 } = await panelOpen()
+    await store.moveTask(project, s1.id, other.id)
+    await renameS2()
+    expect(
+      flattenTasks(project.tasks)
+        .filter((f) => f.task.id === s1.id)
+        .map((f) => f.parentId)
+    ).toEqual([other.id])
+  })
+
+  it('closing an incident subtask through its parent stamps it like a direct update', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Checkbox', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const sub = makeTask({ title: 'Sub', issueType: 'incident', severity: 'sev2' })
+    await store.insertTask(project, sub, parent.id)
+    const snapshot = JSON.parse(JSON.stringify(parent)) as Task
+    const working = JSON.parse(JSON.stringify(parent)) as Task
+    Object.assign(working.subtasks[0], { status: 'done', progress: 100, completed: '2026-09-26' })
+    await store.updateTask(project, parent.id, { subtasks: working.subtasks }, { subtaskBase: snapshot.subtasks })
+    const live = expectDefined(findTask(project.tasks, sub.id))
+    expect(live.resolvedAt).not.toBe('')
+    expect(live.activity.map((a) => [a.field, a.from, a.to])).toEqual([['status', 'todo', 'done']])
+    const again = await reload(app, vault, project.filePath)
+    expect(findTask(again.tasks, sub.id)?.resolvedAt).toBe(live.resolvedAt)
+  })
+
   it('keeps an activity entry appended to the live task when a stale whole-clone patch saves', async () => {
     const { store } = newStore()
     const project = await store.createProject('Audit', 'Projects')
@@ -1923,5 +2410,524 @@ describe('ProjectStore move-cycle guard', () => {
     await store.moveTasks(project, [parent.id], grand.id)
     expect(flattenTasks(project.tasks).map((f) => f.task.id)).toEqual(shape)
     expect(project.taskIndex.get(parent.id)?.parentId ?? null).toBeNull()
+  })
+})
+
+describe('ProjectStore notes with CRLF line endings', () => {
+  it('loads a CRLF board and case cold, and a save keeps the real description', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Crlf', 'Projects')
+    const task = await addNamed(store, project, 'Case A')
+    await store.updateTask(project, task.id, { description: 'real desc\nline two' })
+    for (const path of [project.filePath, expectDefined(task.filePath)]) {
+      const f = vault.getAbstractFileByPath(path)
+      if (!(f instanceof TFile)) throw new Error(`missing ${path}`)
+      await vault.modify(f, (await vault.cachedRead(f)).replace(/\n/g, '\r\n'))
+    }
+
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const pf = vault.getAbstractFileByPath(project.filePath)
+    if (!(pf instanceof TFile)) throw new Error('missing project file')
+    const reloaded = expectDefined(await store2.loadProject(pf))
+    const live = expectDefined(findTask(reloaded.tasks, task.id))
+    await store2.loadTaskBody(live)
+    expect(live.description).toBe('real desc\nline two')
+
+    await store2.updateTask(reloaded, task.id, { title: 'Case B' })
+    const after = await vault.cachedRead(fileAt(vault, live.filePath))
+    const { frontmatter, body } = parseFrontmatter(after)
+    expect(frontmatter?.title).toBe('Case B')
+    expect(body).not.toContain('pm-task')
+    expect(body.startsWith('real desc\nline two')).toBe(true)
+  })
+})
+
+describe('ProjectStore board description', () => {
+  const countLines = (content: string, line: string): number =>
+    parseFrontmatter(content)
+      .body.split('\n')
+      .filter((l) => l === line).length
+
+  it('is written once however many saves, when the title contains it', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Phishing', 'Projects')
+    project.description = 'Phishing'
+    await store.saveProject(project)
+    const file = fileAt(vault, project.filePath)
+    for (let i = 0; i < 10; i++) await store.saveProject(project)
+    expect(countLines(await vault.cachedRead(file), 'Phishing')).toBe(1)
+  })
+
+  it('is written once when it was saved with a trailing newline', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Queue', 'Projects')
+    project.description = 'Board for phishing cases.\n'
+    await store.saveProject(project)
+    const file = fileAt(vault, project.filePath)
+    for (let i = 0; i < 3; i++) await store.saveProject(project)
+    expect(countLines(await vault.cachedRead(file), 'Board for phishing cases.')).toBe(1)
+  })
+})
+
+describe('ProjectStore board note frontmatter the analyst added', () => {
+  it('keeps tags, aliases and cssclasses through insertTask and updateTask', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Tagged', 'Projects')
+    const file = fileAt(vault, project.filePath)
+    const mine = { tags: ['soc', 'q3'], aliases: ['SOC board'], cssclasses: ['wide'] }
+    await vault.modify(
+      file,
+      (await vault.cachedRead(file)).replace(
+        '---\n',
+        `---\n${Object.entries(mine)
+          .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+          .join('\n')}\n`
+      )
+    )
+    const task = await addNamed(store, project, 'Alpha')
+    const read = async () => expectDefined(parseFrontmatter(await vault.cachedRead(file)).frontmatter)
+    expect(await read()).toMatchObject(mine)
+
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const reloaded = expectDefined(await store2.loadProject(file))
+    await store2.updateTask(reloaded, task.id, { status: 'in-progress' })
+    expect(await read()).toMatchObject(mine)
+  })
+
+  it('a cleared keyPrefix and reports reset stay cleared', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Cleared', 'Projects')
+    project.keyPrefix = 'SOC'
+    project.reportsSince = '2026-01-01T00:00:00.000Z'
+    await store.saveProject(project)
+    project.keyPrefix = ''
+    delete project.reportsSince
+    await store.saveProject(project)
+    const fm = expectDefined(parseFrontmatter(await vault.cachedRead(fileAt(vault, project.filePath))).frontmatter)
+    expect(fm).not.toHaveProperty('keyPrefix')
+    expect(fm).not.toHaveProperty('nextKeySeq')
+    expect(fm).not.toHaveProperty('reportsSince')
+  })
+})
+
+describe('ProjectStore hand-edited frontmatter types', () => {
+  /** A board with the given hand-written case notes, loaded by a fresh store. */
+  async function boardWith(
+    notes: Record<string, string>
+  ): Promise<{ store: ProjectStore; vault: FakeVault; project: Project }> {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Hand', 'Projects')
+    const folder = project.filePath.replace(/[^/]+\.md$/, 'Tasks')
+    for (const [name, fm] of Object.entries(notes)) {
+      await vault.create(`${folder}/${name}.md`, `---\npm-task: true\n${fm}\n---\n`)
+    }
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const loaded = expectDefined(await store2.loadProject(fileAt(vault, project.filePath)))
+    return { store: store2, vault, project: loaded }
+  }
+
+  it('a numeric title loads as text and its board still saves', async () => {
+    const { store, project } = await boardWith({ '4625': 'id: "n1"\ntitle: 4625', Other: 'id: "o1"\ntitle: "Other"' })
+    expect(findTask(project.tasks, 'n1')?.title).toBe('4625')
+    await store.updateTask(project, 'n1', { status: 'in-progress' })
+    await store.updateTask(project, 'o1', { status: 'in-progress' })
+    expect(findTask(project.tasks, 'o1')?.status).toBe('in-progress')
+  })
+
+  it('two notes with no id both load, each with an id that is the same on every load', async () => {
+    const { project } = await boardWith({ A: 'title: "Case A"', B: 'title: "Case B"' })
+    const titles = project.tasks.map((t) => t.title).sort()
+    expect(titles).toEqual(['Case A', 'Case B'])
+    expect(project.tasks.map((t) => t.id).sort()).toEqual(['Projects/Hand/Tasks/A.md', 'Projects/Hand/Tasks/B.md'])
+  })
+
+  it('a scalar tags value is kept, and written back as a list', async () => {
+    const { store, vault, project } = await boardWith({ T: 'id: "t1"\ntitle: "T"\ntags: phishing, malware' })
+    const t = expectDefined(findTask(project.tasks, 't1'))
+    expect(t.tags).toEqual(['phishing', 'malware'])
+    await store.updateTask(project, 't1', { description: 'x' })
+    const fm = parseFrontmatter(await vault.cachedRead(fileAt(vault, t.filePath)))
+    expect(fm.frontmatter?.tags).toEqual(['phishing', 'malware'])
+  })
+
+  it('numeric ids keep their parent and child', async () => {
+    const { project } = await boardWith({
+      Parent: 'id: 1\ntitle: "Parent"\nsubtaskIds: [2]',
+      Child: 'id: 2\ntitle: "Child"\nparentId: 1'
+    })
+    expect(project.tasks.map((t) => [t.id, t.subtasks.map((s) => s.id)])).toEqual([['1', ['2']]])
+  })
+
+  it('time logged as text is summed as a number, and unreadable hours are dropped', async () => {
+    const { project } = await boardWith({
+      L: 'id: "l1"\ntitle: "L"\ntimeLogs:\n  - hours: "1.5"\n  - hours: 2\n  - hours: "soon"'
+    })
+    expect(findTask(project.tasks, 'l1')?.timeLogs?.map((l) => l.hours)).toEqual([1.5, 2])
+  })
+
+  it('a board whose title is a number does not take every board off the list', async () => {
+    const { store, vault, app } = newStore()
+    for (const t of ['Alpha', 'Zeta', 'Numeric']) await store.createProject(t, 'Projects')
+    const f = fileAt(vault, 'Projects/Numeric/Numeric.md')
+    await vault.modify(f, (await vault.cachedRead(f)).replace('title: "Numeric"', 'title: 2026'))
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    expect((await store2.loadAllProjects('Projects')).map((p) => p.title)).toEqual(['2026', 'Alpha', 'Zeta'])
+  })
+})
+
+describe('ProjectStore task titles that name a shared folder', () => {
+  it('a title with a line break gets a file name with a space', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Lines', 'Projects')
+    const task = await addNamed(store, project, 'Mid\nline')
+    expect(task.filePath).toBe('Projects/Lines/Tasks/Mid line.md')
+  })
+
+  it('renaming or deleting a root task named "Archive" leaves the archived cases archived', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Arch', 'Projects')
+    const closed = await addNamed(store, project, 'Closed case')
+    await store.archiveTask(project, closed.id)
+    const closedPath = 'Projects/Arch/Tasks/Archive/Closed case.md'
+    expect(closed.filePath).toBe(closedPath)
+
+    // A new task titled Archive never owns the Archive folder.
+    const fresh = await addNamed(store, project, 'Archive')
+    expect(fresh.filePath).toBe('Projects/Arch/Tasks/Archive (task).md')
+    await store.deleteTask(project, fresh.id)
+    expect(vault.getAbstractFileByPath(closedPath)).toBeInstanceOf(TFile)
+
+    // One written before the name was reserved: rename it, then delete it.
+    await vault.create(
+      'Projects/Arch/Tasks/Archive.md',
+      '---\npm-task: true\nid: "old-archive"\ntitle: "Archive"\n---\n'
+    )
+    const pf = fileAt(vault, project.filePath)
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const reloaded = expectDefined(await store2.loadProject(pf))
+    await store2.updateTask(reloaded, 'old-archive', { title: 'Renamed' })
+    expect(vault.getAbstractFileByPath(closedPath)).toBeInstanceOf(TFile)
+    await store2.deleteTask(reloaded, 'old-archive')
+    expect(vault.getAbstractFileByPath(closedPath)).toBeInstanceOf(TFile)
+
+    const again = expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(pf))
+    expect(findTask(again.tasks, closed.id)?.archived).toBe(true)
+  })
+
+  it('deleting a subtask named "attachments" keeps its parent evidence', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Att', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await store.saveTaskAttachment(project, parent, 'pic.png', new ArrayBuffer(1))
+    const pic = 'Projects/Att/Tasks/Parent/attachments/pic.png'
+    await vault.create(
+      'Projects/Att/Tasks/Parent/attachments.md',
+      `---\npm-task: true\nid: "att"\ntitle: "attachments"\nparentId: "${parent.id}"\n---\n`
+    )
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const reloaded = expectDefined(await store2.loadProject(fileAt(vault, project.filePath)))
+    expect(findTask(reloaded.tasks, 'att')).not.toBeNull()
+    await store2.deleteTask(reloaded, 'att')
+    expect(vault.getAbstractFileByPath(pic)).toBeInstanceOf(TFile)
+  })
+})
+
+describe('ProjectStore loader repairs', () => {
+  for (const copyName of ['Case A 1', 'Case A.sync-conflict-20260926-101010-ABCDEFG']) {
+    it(`keeps the original when "${copyName}.md" carries the same case id, and never writes the copy`, async () => {
+      const { store, vault, app } = newStore()
+      const project = await store.createProject('Dup', 'Projects')
+      const a = await addNamed(store, project, 'Case A')
+      const b = await addNamed(store, project, 'Case B')
+      const original = expectDefined(a.filePath)
+      const copyPath = `Projects/Dup/Tasks/${copyName}.md`
+      await vault.create(copyPath, await vault.cachedRead(fileAt(vault, original)))
+      vault.resetCounts()
+
+      const store2 = new ProjectStore(app, () => SETTINGS)
+      const reloaded = expectDefined(await store2.loadProject(fileAt(vault, project.filePath)))
+      expect(findTask(reloaded.tasks, a.id)?.filePath).toBe(original)
+      await store2.updateTask(reloaded, a.id, { status: 'done' })
+      await store2.updateTask(reloaded, b.id, { status: 'done' })
+      expect(parseFrontmatter(await vault.cachedRead(fileAt(vault, original))).frontmatter?.status).toBe('done')
+      expect(vault.modifyCount.get(copyPath) ?? 0).toBe(0)
+    })
+  }
+
+  /** A board whose case notes are written by hand, loaded by a fresh store. */
+  async function load(notes: Record<string, string>, taskIds: string[]): Promise<Project | null> {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Loop', 'Projects')
+    const pf = fileAt(vault, project.filePath)
+    await vault.modify(pf, (await vault.cachedRead(pf)).replace('taskIds: []', `taskIds: ${JSON.stringify(taskIds)}`))
+    for (const [id, fm] of Object.entries(notes)) {
+      await vault.create(
+        `Projects/Loop/Tasks/${id}.md`,
+        `---\npm-task: true\nid: "${id}"\ntitle: "${id}"\n${fm}\n---\n`
+      )
+    }
+    return new ProjectStore(app, () => SETTINGS).loadProject(pf)
+  }
+  const ids = (p: Project | null): string[] =>
+    flattenTasks(expectDefined(p).tasks)
+      .map((f) => f.task.id)
+      .sort()
+
+  it('loads a subtask loop, a parentId loop and a self-loop with each case once', async () => {
+    expect(ids(await load({ A: 'subtaskIds: ["B"]', B: 'subtaskIds: ["A"]' }, ['A', 'B']))).toEqual(['A', 'B'])
+    expect(ids(await load({ A: 'parentId: "B"', B: 'parentId: "A"' }, []))).toEqual(['A', 'B'])
+    expect(ids(await load({ A: 'subtaskIds: ["A"]' }, ['A']))).toEqual(['A'])
+  })
+
+  it('shows a case listed both on the board and under a parent once', async () => {
+    const p = await load({ P: 'subtaskIds: ["T"]', T: '' }, ['P', 'T'])
+    expect(ids(p)).toEqual(['P', 'T'])
+    expect(expectDefined(p).tasks.map((t) => t.id)).toEqual(['P'])
+  })
+})
+
+describe('ProjectStore refuses a title before changing anything', () => {
+  it('a conflicting insert leaves no ghost, and the next insert and edits still save', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Ghost', 'Projects')
+    project.keyPrefix = 'SOC'
+    const first = await addNamed(store, project, 'Phish alert')
+    await expect(addNamed(store, project, 'Phish alert')).rejects.toThrow('already exists')
+    expect(flattenTasks(project.tasks).map((f) => f.task.title)).toEqual(['Phish alert'])
+
+    const other = await addNamed(store, project, 'Unrelated')
+    expect(other.key).toBe('SOC-2')
+    await store.updateTask(project, first.id, { status: 'done' })
+    const fm = parseFrontmatter(await vault.cachedRead(fileAt(vault, project.filePath)))
+    expect(fm.frontmatter?.taskIds).toEqual([first.id, other.id])
+  })
+
+  it('a case whose note could not be written is taken back out of the board', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Unwritten', 'Projects')
+    const create = vault.create.bind(vault)
+    vault.create = async (path: string, content: string) => {
+      if (path.endsWith('Doomed.md')) throw new Error('disk full')
+      return create(path, content)
+    }
+    await expect(addNamed(store, project, 'Doomed')).rejects.toThrow('disk full')
+    expect(project.tasks).toEqual([])
+    expect(project.taskIndex.size).toBe(0)
+    await addNamed(store, project, 'Fine')
+    expect(project.tasks.map((t) => t.title)).toEqual(['Fine'])
+  })
+
+  it('a subtask is checked where it will live, and a retry after a refusal places it once', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Retry', 'Projects')
+    await addNamed(store, project, 'Top')
+    const parent = await addNamed(store, project, 'Parent')
+    const kid = await addNamed(store, project, 'Kid', parent.id)
+    // Named like a top-level note, but it lives in Parent/: allowed.
+    await addNamed(store, project, 'Top', parent.id)
+
+    const retry = makeTask({ title: 'Kid' })
+    await expect(store.insertTask(project, retry, parent.id)).rejects.toThrow('already exists')
+    retry.title = 'Kid 2'
+    await store.insertTask(project, retry, parent.id)
+    await store.insertTask(project, retry, parent.id)
+    const fm = parseFrontmatter(await vault.cachedRead(fileAt(vault, parent.filePath)))
+    expect((expectDefined(fm.frontmatter).subtaskIds as string[]).filter((id) => id === retry.id)).toHaveLength(1)
+    expect(parent.subtasks.map((s) => s.title)).toEqual(['Kid', 'Top', 'Kid 2'])
+    expect(kid.filePath).toBe('Projects/Retry/Tasks/Parent/Kid.md')
+  })
+
+  it('a rename onto a sibling keeps the old title, and other cases still save', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Rename', 'Projects')
+    const a = await addNamed(store, project, 'Alpha')
+    const b = await addNamed(store, project, 'Beta')
+    await expect(store.updateTask(project, b.id, { title: 'Alpha' })).rejects.toThrow('already exists')
+    expect(b.title).toBe('Beta')
+    await store.updateTask(project, a.id, { status: 'done' })
+    expect(a.status).toBe('done')
+  })
+
+  it('an empty title, or one that makes no file name, is refused', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Empty', 'Projects')
+    const t = await addNamed(store, project, 'Named')
+    for (const title of ['', '...']) {
+      await expect(store.updateTask(project, t.id, { title })).rejects.toThrow('file name')
+      await expect(addNamed(store, project, title)).rejects.toThrow('file name')
+    }
+    expect(t.title).toBe('Named')
+    expect(vault.getAbstractFileByPath('Projects/Empty/Tasks/.md')).toBeNull()
+  })
+})
+
+describe('ProjectStore relocating a case note', () => {
+  it('uses the link-aware rename, keeping the note itself, so links from other notes can follow', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Links', 'Projects')
+    const task = await addNamed(store, project, 'Phish from CEO')
+    await store.updateTask(project, task.id, { description: 'The body.' })
+    const before = fileAt(vault, task.filePath)
+    const renames: string[] = []
+    const rename = app.fileManager.renameFile.bind(app.fileManager)
+    app.fileManager.renameFile = async (file, to) => {
+      renames.push(`${file.path} -> ${to}`)
+      await rename(file, to)
+    }
+    vault.resetCounts()
+
+    await store.updateTask(project, task.id, { title: 'BEC wire fraud' })
+    expect(renames).toEqual(['Projects/Links/Tasks/Phish from CEO.md -> Projects/Links/Tasks/BEC wire fraud.md'])
+    expect(vault.getAbstractFileByPath('Projects/Links/Tasks/BEC wire fraud.md')).toBe(before)
+    expect(vault.trashCount.size).toBe(0)
+    const { body } = parseFrontmatter(await vault.cachedRead(before))
+    expect(body.startsWith('The body.')).toBe(true)
+  })
+
+  it('listing boards never creates the default folder', async () => {
+    const { store, vault } = newStore()
+    await store.createProject('B', 'Elsewhere')
+    expect((await store.loadAllProjects('Projects')).map((p) => p.title)).toEqual(['B'])
+    expect(vault.getAbstractFileByPath('Projects')).toBeNull()
+  })
+})
+
+describe('ProjectStore archived parents and their subtasks', () => {
+  /** Parent with Child, Parent archived (carrying Child), then a fresh store as after a restart. */
+  async function archivedFamily() {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Fam', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    const child = await addNamed(store, project, 'Child', parent.id)
+    await store.archiveTask(project, parent.id)
+    expect(child.filePath).toBe('Projects/Fam/Tasks/Archive/Parent/Child.md')
+    expect(child.archived).toBe(true)
+    const pf = fileAt(vault, project.filePath)
+    const restart = async () => {
+      const s = new ProjectStore(app, () => SETTINGS)
+      return { s, p: expectDefined(await s.loadProject(pf)) }
+    }
+    return { vault, parent, child, restart }
+  }
+
+  it('unarchiving a child of an archived parent leaves it live, at the case folder', async () => {
+    const { child, restart } = await archivedFamily()
+    const { s, p } = await restart()
+    await s.unarchiveTask(p, child.id)
+    expect(findTask(p.tasks, child.id)?.filePath).toBe('Projects/Fam/Tasks/Child.md')
+    const again = (await restart()).p
+    expect(expectDefined(findTask(again.tasks, child.id)).archived).toBeFalsy()
+  })
+
+  it('unarchiving a parent brings its subtask back live, and a rename carries it along', async () => {
+    const { parent, child, restart } = await archivedFamily()
+    const { s, p } = await restart()
+    await s.unarchiveTask(p, parent.id)
+    expect(findTask(p.tasks, child.id)?.archived).toBe(false)
+    await s.updateTask(p, parent.id, { title: 'Renamed' })
+    const kid = expectDefined(findTask((await restart()).p.tasks, child.id))
+    expect([kid.filePath, !!kid.archived]).toEqual(['Projects/Fam/Tasks/Renamed/Child.md', false])
+  })
+
+  it('an archived subtask moved to the top stays archived, in one file, when its old parent is unarchived', async () => {
+    const { vault, parent, child, restart } = await archivedFamily()
+    const { s, p } = await restart()
+    await s.moveTask(p, child.id, null)
+    await s.unarchiveTask(p, parent.id)
+    const md = vault.getMarkdownFiles().filter((f) => f.basename === 'Child')
+    expect(md.map((f) => f.path)).toEqual(['Projects/Fam/Tasks/Archive/Child.md'])
+    expect(findTask((await restart()).p.tasks, child.id)?.archived).toBe(true)
+  })
+})
+
+describe('ProjectStore boards moved, renamed or deleted under an open object', () => {
+  it('a save through a deleted board object does not bring the board back', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Gone', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    await store.deleteProject(project)
+    await store.updateTask(project, task.id, { status: 'done' })
+    await store.appendActivity(project, task.id, { at: '2026-01-01T00:00:00.000Z', field: 'sla', from: '', to: 'x' })
+    expect(vault.getAbstractFileByPath('Projects/Gone/Gone.md')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Gone/Tasks/Case.md')).toBeNull()
+  })
+
+  it('a board folder dragged away is not recreated, nor its case duplicated, by the stale object', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Goals', 'Projects')
+    const task = await addNamed(store, project, 'Case 1')
+    await vault.rename(folderAt(vault, 'Projects/Goals'), 'IR/Goals')
+    await store.updateTask(project, task.id, { status: 'done' })
+    expect(vault.getAbstractFileByPath('Projects/Goals/Goals.md')).toBeNull()
+    expect(vault.getAbstractFileByPath('Projects/Goals/Tasks/Case 1.md')).toBeNull()
+    expect(
+      vault
+        .getMarkdownFiles()
+        .map((f) => f.path)
+        .sort()
+    ).toEqual(['IR/Goals/Goals.md', 'IR/Goals/Tasks/Case 1.md'])
+  })
+
+  it('a case note moved away is not recreated at its old path', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Moved', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    await vault.rename(fileAt(vault, task.filePath), 'Elsewhere/Case.md')
+    await expect(store.updateTask(project, task.id, { status: 'done' })).rejects.toThrow('no longer at')
+    expect(vault.getAbstractFileByPath('Projects/Moved/Tasks/Case.md')).toBeNull()
+  })
+
+  it('a board whose folder was renamed loads as detached and never wipes its case list', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Cases', 'IR')
+    await addNamed(store, project, 'Phish A')
+    await addNamed(store, project, 'Phish B')
+    await vault.rename(folderAt(vault, 'IR/Cases'), 'IR/Incidents')
+    const note = fileAt(vault, 'IR/Incidents/Cases.md')
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    const loaded = expectDefined(await store2.loadProject(note))
+    expect(loaded.detached).toEqual({ recorded: 2, folder: 'IR/Incidents/Cases_tasks' })
+    await store2.saveProject(loaded)
+    expect(parseFrontmatter(await vault.cachedRead(note)).frontmatter?.taskIds).toHaveLength(2)
+    expect(vault.getAbstractFileByPath('IR/Incidents/Cases_tasks')).toBeNull()
+  })
+})
+
+describe('ProjectStore boards inside other boards', () => {
+  it('refuses to create or move a board into a board folder, its own included', async () => {
+    const { store } = newStore()
+    await store.createProject('Incident Response', '')
+    await expect(store.createProject('Goals', 'Incident Response')).rejects.toThrow(NestedBoardError)
+    await expect(store.createProject('Goals', 'Incident Response/Tasks')).rejects.toThrow(
+      'inside the folder of the board'
+    )
+    const goals = await store.createProject('Goals', '')
+    await expect(store.moveProjectToOwnFolder(goals, 'Incident Response')).rejects.toThrow(NestedBoardError)
+    await expect(store.moveProjectToOwnFolder(goals, 'Goals')).rejects.toThrow(NestedBoardError)
+    expect(goals.filePath).toBe('Goals/Goals.md')
+    // A plain folder that merely holds boards is fine.
+    await store.createProject('Queue', 'SOC')
+    await store.createProject('Intel', 'SOC')
+  })
+
+  it('refuses to delete a board with another board filed inside its folder, naming it', async () => {
+    const { store, vault } = newStore()
+    const outer = await store.createProject('Incident Response', '')
+    await addNamed(store, outer, 'Outer case')
+    // Nested by hand in the file explorer.
+    await vault.create(
+      'Incident Response/Goals/Goals.md',
+      '---\npm-project: true\nid: "g"\ntitle: "Goals"\ntaskIds: []\n---\n'
+    )
+    await vault.create(
+      'Incident Response/Goals/Tasks/Inner case.md',
+      '---\npm-task: true\nid: "i"\ntitle: "Inner case"\n---\n'
+    )
+
+    const refused = await store.deleteProject(outer).catch((e: unknown) => e)
+    expect(refused).toBeInstanceOf(NestedBoardError)
+    expect((refused as NestedBoardError).boards).toEqual(['Incident Response/Goals/Goals.md'])
+    expect(vault.getAbstractFileByPath('Incident Response/Goals/Tasks/Inner case.md')).toBeInstanceOf(TFile)
+    expect(vault.getAbstractFileByPath('Incident Response/Incident Response.md')).toBeInstanceOf(TFile)
   })
 })

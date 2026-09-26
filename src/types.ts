@@ -151,6 +151,14 @@ export interface Project {
   config?: ProjectConfig
   /** Transient id → {task, parentId} index. Rebuilt on load, maintained by store mutators. Not serialized. */
   taskIndex: TaskIndex
+  /**
+   * Runtime only. Set when the board note records cases (`recorded` ids in
+   * its taskIds) but the task folder its path implies (`folder`) is not on
+   * disk — the note or its folder was renamed outside Responder. The board
+   * shows no cases and the store refuses to save it, so the list is never
+   * wiped. Absent on every board whose cases are where they should be.
+   */
+  detached?: { recorded: number; folder: string }
 }
 
 export interface FilterState {

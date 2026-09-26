@@ -66,6 +66,18 @@ describe('buildImportForest', () => {
     expect(roots[0].recurrence).toBeUndefined()
   })
 
+  it('drops a rule listing several days, and keeps a one-day rule that its label still describes', () => {
+    const recurrenceOf = (rule: string): unknown => {
+      const item = makeItem('Tasks/r.md')
+      item.info = makeInfo({ path: 'Tasks/r.md', title: 'R', recurrence: rule })
+      return buildImportForest([item], OPTS).roots[0].recurrence
+    }
+    expect(recurrenceOf('FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR')).toBeUndefined()
+    expect(recurrenceOf('DTSTART:20260706;FREQ=WEEKLY;BYDAY=MO,WE,FR;UNTIL=20261231')).toBeUndefined()
+    expect(recurrenceOf('FREQ=WEEKLY;INTERVAL=1;BYDAY=MO')).toEqual({ interval: 'weekly', every: 1 })
+    expect(recurrenceOf('FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=15')).toEqual({ interval: 'monthly', every: 3 })
+  })
+
   it('turns project links between imported tasks into parent/child edges', () => {
     const parent = makeItem('Tasks/parent.md')
     const child = makeItem('Tasks/child.md', { parentPaths: ['Tasks/parent.md'] })
@@ -102,5 +114,20 @@ describe('buildImportForest', () => {
     item.info = makeInfo({ path: 'Tasks/done.md', title: 'done', archived: true })
     const { roots } = buildImportForest([item], OPTS)
     expect(roots[0].archived).toBe(true)
+  })
+})
+
+describe('TaskNotes time entries', () => {
+  it('become time logs from their start and end, and a running entry is left out', () => {
+    const item = makeItem('Tasks/t.md')
+    const info = makeInfo({ path: 'Tasks/t.md', title: 'T' }) as TaskNotesTaskInfo & { timeEntries: unknown[] }
+    info.timeEntries = [
+      { startTime: '2026-07-06T09:00:00Z', endTime: '2026-07-06T10:30:00Z', description: 'triage' },
+      { startTime: '2026-07-07T09:00:00Z' },
+      { startTime: 'garbage', endTime: '2026-07-07T10:00:00Z' }
+    ]
+    item.info = info
+    const { roots } = buildImportForest([item], OPTS)
+    expect(roots[0].timeLogs).toEqual([{ date: '2026-07-06', hours: 1.5, note: 'triage' }])
   })
 })

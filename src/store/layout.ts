@@ -62,6 +62,9 @@ export function caseFilePath(projectsFolder: string, title: string): string {
  * the path (`<Name>/<Name>.md`, `<Name>/Tasks/…`) is derived from it.
  */
 export function parentFolderOf(projectPath: string): string {
-  const own = projectFolderForProjectPath(projectPath) ?? projectPath.slice(0, projectPath.lastIndexOf('/'))
-  return own.includes('/') ? own.slice(0, own.lastIndexOf('/')) : ''
+  const holding = projectPath.slice(0, Math.max(0, projectPath.lastIndexOf('/')))
+  // A legacy flat note sits directly in its folder; only v3 (`<Name>/`) and v2
+  // (`Cases/`) have one more level between the note and where it is filed.
+  if (!isProjectFolderLayout(projectPath) && !isCasesLayout(projectPath)) return holding
+  return holding.slice(0, Math.max(0, holding.lastIndexOf('/')))
 }

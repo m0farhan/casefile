@@ -45,7 +45,42 @@ function linkAlias(title: string): string {
   return title.replace(/[[\]]/g, ' ').replace(/[\r\n]+/g, ' ')
 }
 
-export function serializeProject(project: Project, statuses: StatusConfig[] = [], extraBody = ''): string {
+/**
+ * Frontmatter keys the plugin owns on a board note, including the ones written
+ * only sometimes (a cleared keyPrefix or reports reset must stay cleared, not
+ * come back from disk) and the legacy embedded `tasks` (a migrated board must
+ * not carry its old task list forward). Every other key is the analyst's.
+ */
+export const KNOWN_PROJECT_FRONTMATTER_KEYS = new Set([
+  FRONTMATTER_KEY,
+  'id',
+  'title',
+  'description',
+  'color',
+  'icon',
+  'taskIds',
+  'customFields',
+  'teamMembers',
+  'savedViews',
+  'createdAt',
+  'updatedAt',
+  'keyPrefix',
+  'nextKeySeq',
+  'reportsSince',
+  'config',
+  'tasks'
+])
+
+export function serializeProject(
+  project: Project,
+  statuses: StatusConfig[] = [],
+  extraBody = '',
+  /** The note's frontmatter as it is on disk right now. Keys the plugin does
+   *  not own (tags, aliases, cssclasses, …) are carried over after the owned
+   *  ones. Read at write time, so a key added while the board is open
+   *  survives and one the analyst deleted stays deleted. */
+  diskFrontmatter: Record<string, unknown> | null = null
+): string {
   const seen = new Set<string>()
   const tasks: Task[] = []
   for (const t of project.tasks) {
@@ -78,6 +113,9 @@ export function serializeProject(project: Project, statuses: StatusConfig[] = []
   if (project.reportsSince) fm.reportsSince = project.reportsSince
   const config = serializeProjectConfig(project.config)
   if (config) fm.config = config
+  for (const [k, v] of Object.entries(diskFrontmatter ?? {})) {
+    if (!KNOWN_PROJECT_FRONTMATTER_KEYS.has(k) && v !== undefined) fm[k] = v
+  }
 
   const yamlLines: string[] = ['---']
   appendYaml(yamlLines, fm, 0)
@@ -236,7 +274,7 @@ export function serializeTask(
 
   // Comments live BEFORE the Parent/Project link so the `## Subtasks`-to-EOF
   // strip on the next load can never destroy them.
-  const commentLines = commentsSectionLines(task.comments)
+  const commentLines = commentsSectionLines(task.comments, cleanDesc)
   if (commentLines.length) {
     yamlLines.push(...commentLines)
     yamlLines.push('')
@@ -273,18 +311,40 @@ export const TASK_SLUG_MAX_LENGTH = 60
  * Requested URL.md") — only filesystem-invalid characters are replaced and
  * trailing dots/spaces trimmed. Wikilink-hostile characters (#^[]|) are also
  * replaced so links to the note always resolve.
+ *
+ * The cap counts UTF-16 code units, as it always has, so an existing name never
+ * changes; only a cut that would split an emoji in half drops the dangling
+ * half, which the file system would otherwise store as U+FFFD under a name
+ * the vault never finds again.
+ *
+ * Two titles never get their exact name: "Archive" and "attachments" (in any
+ * case) would make the task's own folder the board's Archive or its parent's
+ * attachments folder, so deleting or renaming the task would take every
+ * archived case or the parent's evidence with it. They get " (task)"; the
+ * title itself is unchanged.
  */
 function taskFileName(title: string): string {
-  return sanitizeFileName(title)
-    .replace(/[#^[\]|]/g, '-')
-    .trim()
-    .slice(0, TASK_SLUG_MAX_LENGTH)
-    .replace(/[. ]+$/, '')
+  const name = dropHalfSurrogate(
+    sanitizeFileName(title)
+      .replace(/[#^[\]|]/g, '-')
+      .trim()
+      .slice(0, TASK_SLUG_MAX_LENGTH)
+  ).replace(/[. ]+$/, '')
+  return isReservedTaskName(name) ? `${name} (task)` : name
+}
+
+/** A basename that names a folder the plugin itself owns inside a task tree. */
+export function isReservedTaskName(basename: string): boolean {
+  return /^(?:archive|attachments)$/i.test(basename)
+}
+
+function dropHalfSurrogate(s: string): string {
+  return s.replace(/[\uD800-\uDBFF]$/, '')
 }
 
 /** The pre-2.3 lowercase-dashed form; resolveTaskPath uses it to leave old files in place. */
 export function taskSlugLegacy(title: string): string {
-  return sanitizeFileName(title).toLowerCase().replace(/\s+/g, '-').slice(0, TASK_SLUG_MAX_LENGTH)
+  return dropHalfSurrogate(sanitizeFileName(title).toLowerCase().replace(/\s+/g, '-').slice(0, TASK_SLUG_MAX_LENGTH))
 }
 
 /** Build the file path for a task .md file */

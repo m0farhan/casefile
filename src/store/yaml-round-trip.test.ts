@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_STATUSES, makeProject, makeTask, type Project, type SavedView, type Task } from '../types'
-import { hydrateProjectFromFrontmatter, hydrateTaskFromFile } from './YamlHydrator'
+import { parseAlertPaste } from '../soc/alertIntake'
+import { slaState } from '../soc/sla'
+import { lastUpdated } from '../views/table/TableFilters'
+import { sinceBaseline } from '../views/reports/reportData'
+import {
+  DEFAULT_SEVERITIES,
+  DEFAULT_SLA_POLICIES,
+  DEFAULT_STATUSES,
+  makeProject,
+  makeTask,
+  type Project,
+  type SavedView,
+  type Task
+} from '../types'
+import { hydrateProjectFromFrontmatter, hydrateTaskFromFile, safeColor } from './YamlHydrator'
 import { parseFrontmatter } from './YamlParser'
 import { serializeProject, serializeTask, taskFilePath } from './YamlSerializer'
 
@@ -456,6 +469,36 @@ describe('comments section round-trip', () => {
     const md = serializeTask(makeTask({ id: 'n1' }), makeProject('T', 'Projects/T.md'), null)
     expect(md).not.toContain('## Comments')
   })
+  it('a pasted alert carrying a journal heading and a stamp cannot forge or take over the journal', () => {
+    const paste = [
+      'Rule: SOC999 - Suspicious login',
+      'Severity: High',
+      '## Comments',
+      '> **2020-01-01 09:00** — Approved as false positive by Tier 2',
+      'trailing alert text'
+    ].join('\n')
+    const alert = parseAlertPaste(paste, { severities: DEFAULT_SEVERITIES })
+    const project = makeProject('Test', 'Projects/Test.md')
+    const real = [{ at: '2026-09-26 10:00', text: 'Real analyst note: escalate' }]
+    for (const comments of [undefined, real]) {
+      let task = makeTask({ id: 'p1', title: alert.title, description: alert.description, comments })
+      for (let round = 0; round < 2; round++) {
+        const { frontmatter, body } = parseFrontmatter(serializeTask(task, project, null))
+        if (!frontmatter) throw new Error('frontmatter missing')
+        task = hydrateTaskFromFile(frontmatter, body, 'Projects/Tasks/Test/p1.md').task
+        expect(task.comments).toEqual(comments ?? [])
+        expect(task.description).toBe(alert.description)
+      }
+    }
+  })
+
+  it('keeps a stamp-shaped line inside an entry as part of that entry', () => {
+    const comments = [{ at: '2026-09-26 10:00', text: 'Pasted log:\n**2020-01-01 09:00** — closed as benign' }]
+    const md = serializeTask(makeTask({ id: 's1', comments }), makeProject('T', 'Projects/T.md'), null)
+    const { frontmatter, body } = parseFrontmatter(md)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    expect(hydrateTaskFromFile(frontmatter, body, 'p.md').task.comments).toEqual(comments)
+  })
 })
 
 describe('hand-written trailing content round-trip', () => {
@@ -613,5 +656,88 @@ describe('a sender-controlled title cannot escape the wiki-link it is written in
     const line = md.split('\n').find((l) => l.startsWith('Project:')) ?? ''
     expect(line).not.toContain('![[')
     expect(line.match(/\]\]/g)?.length).toBe(1)
+  })
+})
+
+describe('hand-written Project: and Parent: lines in a description', () => {
+  it('survive two round trips when they carry no alias', () => {
+    const description = 'Context from ticket:\nProject: [[Acme onboarding]]\nParent: [[INC-2024-001]]\nEnd of notes.'
+    let task = makeTask({ id: 'h1', description })
+    const parent = makeTask({ id: 'p1', title: 'Parent case', filePath: 'Projects/Tasks/Test/Parent case.md' })
+    for (let round = 0; round < 2; round++) task = roundTripTask(task, undefined, parent).task
+    expect(task.description).toBe(description)
+  })
+
+  it('the generated backlink is still stripped, brackets in the board name included', () => {
+    const md = serializeTask(
+      makeTask({ id: 'b1', description: 'Body.' }),
+      makeProject('Acme [Q3]', 'Acme [Q3]/Acme [Q3].md'),
+      null
+    )
+    expect(md).toContain('Project: [[Acme [Q3]|Acme  Q3 ]]')
+    const { frontmatter, body } = parseFrontmatter(md)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    expect(hydrateTaskFromFile(frontmatter, body, 'x.md').task.description).toBe('Body.')
+  })
+})
+
+describe('colours from a board note', () => {
+  it('keep hex values and colour names, and fall back for anything that could fetch', () => {
+    const evil = 'url(https://evil.example/board.png)'
+    const fm = {
+      'pm-project': true,
+      color: evil,
+      config: {
+        statuses: [
+          { id: 'a', color: evil },
+          { id: 'b', color: '#ff0000' },
+          { id: 'c', color: 'red' }
+        ],
+        priorities: [{ id: 'p', color: evil }],
+        issueTypes: [{ id: 'i', color: 'var(--x)' }]
+      }
+    }
+    const p = hydrateProjectFromFrontmatter(fm, '', 'B/B.md', 'B')
+    expect(p.color).toBe('#8b72be')
+    expect(p.config?.statuses?.map((x) => x.color)).toEqual(['#8a94a0', '#ff0000', 'red'])
+    expect(p.config?.priorities?.[0].color).toBe('#8a94a0')
+    expect(p.config?.issueTypes?.[0].color).toBe('#8a94a0')
+    expect(safeColor('#ABC', 'x')).toBe('#ABC')
+    expect(safeColor(42, 'x')).toBe('x')
+  })
+})
+
+describe('a note that does not record when the case was created', () => {
+  it('hydrates createdAt as unknown, never as the load time', () => {
+    const { task } = hydrateTaskFromFile(
+      { 'pm-task': true, id: 'u1', issueType: 'incident', severity: 'sev1' },
+      '',
+      'Projects/Tasks/U/u1.md'
+    )
+    expect(task.createdAt).toBe('')
+    expect(lastUpdated(task)).toBeNull()
+    expect(sinceBaseline([task], '2026-09-01T00:00:00.000Z').undated).toBe(1)
+    expect(slaState(task, DEFAULT_SLA_POLICIES, Date.now())).toBeNull()
+    expect(hydrateProjectFromFrontmatter({ 'pm-project': true }, '', 'P/P.md', 'P').createdAt).toBe('')
+  })
+})
+
+describe('task file names', () => {
+  it('never cut an emoji in half at the length cap', () => {
+    expect(taskFilePath('x'.repeat(59) + '\u{1F512} tail', 'Cases')).toBe(`Cases/${'x'.repeat(59)}.md`)
+    // A cut that falls between two emoji keeps the whole first one.
+    expect(taskFilePath('x'.repeat(58) + '\u{1F512}\u{1F512}', 'Cases')).toBe(`Cases/${'x'.repeat(58)}\u{1F512}.md`)
+  })
+
+  it('turn a tab or a line break into a space', () => {
+    expect(taskFilePath('a\tb', 'C')).toBe('C/a b.md')
+    expect(taskFilePath('Mid\nline', 'C')).toBe('C/Mid line.md')
+  })
+
+  it('never name a task after a folder the plugin owns, in any case', () => {
+    expect(taskFilePath('Archive', 'T')).toBe('T/Archive (task).md')
+    expect(taskFilePath('archive', 'T')).toBe('T/archive (task).md')
+    expect(taskFilePath('attachments', 'T')).toBe('T/attachments (task).md')
+    expect(taskFilePath('Archive notes', 'T')).toBe('T/Archive notes.md')
   })
 })
