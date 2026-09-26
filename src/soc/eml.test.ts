@@ -244,6 +244,75 @@ describe('parser evasions that used to hide content from the analyst', () => {
     expect(names).toContain('fwd.eml')
     expect(names).toContain('payload.exe')
   })
+
+  it('tolerates the stray bytes RFC 2045 says to ignore, as every client does', () => {
+    const mail =
+      'Content-Type: application/octet-stream\nContent-Disposition: attachment; filename="a.bin"\n' +
+      `Content-Transfer-Encoding: base64\n\n${b64of('payload bytes').slice(0, 4)}!${b64of('payload bytes').slice(4)}`
+    const [a] = parseEml(mail).attachments
+    expect(a.undecodable).toBe(false)
+    expect(a.size).toBe('payload bytes'.length)
+  })
+
+  it('records a genuinely undecodable part as not recorded rather than as empty', () => {
+    const mail =
+      'Content-Type: application/octet-stream\nContent-Disposition: attachment; filename="a.bin"\n' +
+      'Content-Transfer-Encoding: base64\n\n=====\n'
+    const eml = parseEml(mail)
+    expect(eml.attachments[0].undecodable).toBe(true)
+    expect(eml.notes.join(' ')).toContain('could not be decoded')
+  })
+
+  it('says when a declared charset cannot be decoded, and only then', () => {
+    const part = (charset: string): string =>
+      `Content-Type: text/html; charset=${charset}\nContent-Transfer-Encoding: base64\n\n` +
+      b64of('+ADw-a href+AD0AIg-https://evil+AC4-test/x+ACI-+AD4-Your invoice+ADw-/a+AD4-')
+    expect(parseEml(part('utf-7')).notes).toEqual([
+      'A text/html part declared charset utf-7, which this reader cannot decode; it is shown as UTF-8, ' +
+        'so its text, links and indicators may be wrong or missing.'
+    ])
+    expect(parseEml(part('cp1252')).notes).toEqual([])
+  })
+
+  describe('a quoted-printable attachment', () => {
+    const qp = (body: string, type = 'application/octet-stream'): string =>
+      `Content-Type: ${type}\nContent-Disposition: attachment; filename="a.bin"\n` +
+      `Content-Transfer-Encoding: quoted-printable\n\n${body}`
+
+    it('is exact when it is ASCII on one line, soft breaks and all', () => {
+      const [a] = parseEml(qp('hello=3D=\nworld')).attachments
+      expect(new TextDecoder().decode(a.bytes)).toBe('hello=world')
+      expect(a.exact).toBe(true)
+    })
+
+    it('is not exact when a hard line break was rewritten from CRLF', () => {
+      // The file was `<html>\r\n<script>…\r\n</html>`; the reader hands us LF.
+      const [a] = parseEml(
+        qp('<html>\r\n<script>location=3D"https://evil.test"</script>\r\n</html>', 'text/html')
+      ).attachments
+      expect(a.exact).toBe(false)
+    })
+
+    it('is not exact when it carries a raw non-ASCII character', () => {
+      expect(parseEml(qp('p\u0430y=3D')).attachments[0].exact).toBe(false)
+    })
+  })
+
+  it('still decodes a multi-line quoted-printable HTML body and joins its soft-broken link', () => {
+    const mail =
+      'Content-Type: text/html; charset=utf-8\nContent-Transfer-Encoding: quoted-printable\n\n' +
+      '<p>Your account</p>\n<a href=3D"https://evil.te=\nst/x">Sign in</a>\n'
+    const eml = parseEml(mail)
+    expect(eml.html).toContain('href="https://evil.test/x"')
+    expect(eml.notes).toEqual([])
+  })
+
+  it('does not run two text parts together into a token that is in neither', () => {
+    const mail =
+      'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhttp://a.test' +
+      '\n--B\nContent-Type: text/plain\n\n/evil\n--B--\n'
+    expect(parseEml(mail).text).not.toContain('http://a.test/evil')
+  })
 })
 
 describe('a forwarded message is kept apart from the message that carries it', () => {
@@ -322,75 +391,6 @@ describe('a forwarded message is kept apart from the message that carries it', (
     )
     expect(eml.html).toBe('<p>See attached.</p><!--')
     expect(eml.forwarded[0].html).toContain('https://evil.test/qr')
-  })
-
-  it('tolerates the stray bytes RFC 2045 says to ignore, as every client does', () => {
-    const mail =
-      'Content-Type: application/octet-stream\nContent-Disposition: attachment; filename="a.bin"\n' +
-      `Content-Transfer-Encoding: base64\n\n${b64of('payload bytes').slice(0, 4)}!${b64of('payload bytes').slice(4)}`
-    const [a] = parseEml(mail).attachments
-    expect(a.undecodable).toBe(false)
-    expect(a.size).toBe('payload bytes'.length)
-  })
-
-  it('records a genuinely undecodable part as not recorded rather than as empty', () => {
-    const mail =
-      'Content-Type: application/octet-stream\nContent-Disposition: attachment; filename="a.bin"\n' +
-      'Content-Transfer-Encoding: base64\n\n=====\n'
-    const eml = parseEml(mail)
-    expect(eml.attachments[0].undecodable).toBe(true)
-    expect(eml.notes.join(' ')).toContain('could not be decoded')
-  })
-
-  it('says when a declared charset cannot be decoded, and only then', () => {
-    const part = (charset: string): string =>
-      `Content-Type: text/html; charset=${charset}\nContent-Transfer-Encoding: base64\n\n` +
-      b64of('+ADw-a href+AD0AIg-https://evil+AC4-test/x+ACI-+AD4-Your invoice+ADw-/a+AD4-')
-    expect(parseEml(part('utf-7')).notes).toEqual([
-      'A text/html part declared charset utf-7, which this reader cannot decode; it is shown as UTF-8, ' +
-        'so its text, links and indicators may be wrong or missing.'
-    ])
-    expect(parseEml(part('cp1252')).notes).toEqual([])
-  })
-
-  describe('a quoted-printable attachment', () => {
-    const qp = (body: string, type = 'application/octet-stream'): string =>
-      `Content-Type: ${type}\nContent-Disposition: attachment; filename="a.bin"\n` +
-      `Content-Transfer-Encoding: quoted-printable\n\n${body}`
-
-    it('is exact when it is ASCII on one line, soft breaks and all', () => {
-      const [a] = parseEml(qp('hello=3D=\nworld')).attachments
-      expect(new TextDecoder().decode(a.bytes)).toBe('hello=world')
-      expect(a.exact).toBe(true)
-    })
-
-    it('is not exact when a hard line break was rewritten from CRLF', () => {
-      // The file was `<html>\r\n<script>…\r\n</html>`; the reader hands us LF.
-      const [a] = parseEml(
-        qp('<html>\r\n<script>location=3D"https://evil.test"</script>\r\n</html>', 'text/html')
-      ).attachments
-      expect(a.exact).toBe(false)
-    })
-
-    it('is not exact when it carries a raw non-ASCII character', () => {
-      expect(parseEml(qp('p\u0430y=3D')).attachments[0].exact).toBe(false)
-    })
-  })
-
-  it('still decodes a multi-line quoted-printable HTML body and joins its soft-broken link', () => {
-    const mail =
-      'Content-Type: text/html; charset=utf-8\nContent-Transfer-Encoding: quoted-printable\n\n' +
-      '<p>Your account</p>\n<a href=3D"https://evil.te=\nst/x">Sign in</a>\n'
-    const eml = parseEml(mail)
-    expect(eml.html).toContain('href="https://evil.test/x"')
-    expect(eml.notes).toEqual([])
-  })
-
-  it('does not run two text parts together into a token that is in neither', () => {
-    const mail =
-      'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhttp://a.test' +
-      '\n--B\nContent-Type: text/plain\n\n/evil\n--B--\n'
-    expect(parseEml(mail).text).not.toContain('http://a.test/evil')
   })
 })
 
