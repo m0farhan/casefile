@@ -165,7 +165,10 @@ export class PMSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Save tasks on close')
-      .setDesc('Automatically save tasks when you close the task modal. When off, only clicking save persists changes.')
+      .setDesc(
+        'Save an existing case automatically when you close its dialog. When off, only the save button keeps ' +
+          'changes. A new case is created only by its create button, and closing over a typed draft asks first.'
+      )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.saveTaskOnClose).onChange(async (v) => {
           this.plugin.settings.saveTaskOnClose = v
