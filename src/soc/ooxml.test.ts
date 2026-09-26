@@ -91,6 +91,32 @@ describe('readZipDocument', () => {
     expect(facts?.notes.join(' ')).toContain('is encrypted, so its targets could not be read')
   })
 
+  it('says why relationship parts were skipped once per reason, not once per part', async () => {
+    // Skipped before the 64-part counter, one note each: 4,000 of them put
+    // 4,000 lines on the card and in the report.
+    const facts = await readZipDocument(
+      zip(many(4_000, (i) => ({ name: `Invoice_${i}.exe.rels`, data: enc.encode('x'), flags: 1 })))
+    )
+    expect(facts?.notes).toEqual([
+      '4000 entries are encrypted — their contents cannot be read from here, only their names and sizes.',
+      '4000 relationship parts are encrypted, so their targets could not be read: Invoice_0.exe.rels, Invoice_1.exe.rels, Invoice_2.exe.rels, Invoice_3.exe.rels, Invoice_4.exe.rels and 3995 more.',
+      '4000 inner files could not be read whole here — encrypted, damaged, over 8 MB, or compressed in a way this device cannot inflate — so they are not hashed here.'
+    ])
+
+    const mixed = await readZipDocument(
+      zip([
+        ...many(2, (i) => ({ name: `z${i}.rels`, data: new Uint8Array(0) })),
+        ...many(2, (i) => ({ name: `m${i}.rels`, data: enc.encode('x'), method: 99 + i }))
+      ])
+    )
+    expect(mixed?.notes).toContain(
+      '2 relationship parts declare a compressed size of 0 bytes, so there was nothing in them to read: z0.rels, z1.rels.'
+    )
+    expect(mixed?.notes).toContain(
+      '2 relationship parts are compressed in a way this reader cannot inflate, so their targets could not be read: m0.rels (aes), m1.rels (other-100).'
+    )
+  })
+
   it('stops a decompression bomb at the cap and keeps what it read', async () => {
     // Four megabytes of padding that deflates to a few kilobytes, with the
     // relationship written FIRST so the test proves both halves: the cap bites
@@ -863,6 +889,37 @@ describe('the relationship list reports only what Word would read', () => {
     expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://real.lure/y'])
   })
 
+  it('masks a DOCTYPE whose internal subset holds a `>`, and reads the relationship after it', async () => {
+    const rels = `<!DOCTYPE Relationships [<!ENTITY x "a>b"> <!-- <Relationship Target="https://hidden.test/" TargetMode="External"/> -->]>
+<Relationships>
+<Relationship Id="r1" Type="t/x" Target="https://a.test/" TargetMode="External"/>
+</Relationships>`
+    const facts = await readZipDocument(zip([{ name: '_rels/.rels', data: enc.encode(rels) }]))
+    expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://a.test/'])
+  })
+
+  it('scans parts of repeated DOCTYPEs in one pass', async () => {
+    // Each `<!DOCTYPE` searched for `[` to the end of the part, and there is
+    // none: 104,000 searches of up to a megabyte each. Four such parts fill one
+    // container's inflation budget and each attachment has its own, so two
+    // containers are 3.6 s apiece on an idle machine and 48 s under load. The
+    // one Relationship is what makes the scan run at all.
+    const part = `${'<!DOCTYPE>'.repeat(104_000)}<Relationship Id="r1" Type="t/x" Target="https://a.test/" TargetMode="External"/>`
+    const data = await deflateRaw(enc.encode(part))
+    const bytes = zip(
+      ['a', 'b', 'c', 'd'].map((letter) => ({
+        name: `word/_rels/${letter}.xml.rels`,
+        data,
+        method: 8,
+        size: part.length
+      }))
+    )
+    const started = performance.now()
+    const results = [await readZipDocument(bytes), await readZipDocument(bytes)]
+    expect(performance.now() - started).toBeLessThan(2_000)
+    for (const facts of results) expect(facts?.externalTargets).toHaveLength(4)
+  })
+
   it('does not report a relationship inside CDATA or a processing instruction', async () => {
     const facts = await readZipDocument(
       zip([
@@ -1354,6 +1411,84 @@ describe('files inside the archive', () => {
     expect(facts?.notes.join(' ')).toContain('1 inner file could not be read whole here')
   })
 
+  it('hands back a program named as a picture as a file, not a picture', async () => {
+    // By name alone it was an "embedded picture": never checked against its
+    // name, and its hash never reached Indicators or the case.
+    const appleDouble = Uint8Array.from([0x00, 0x05, 0x16, 0x07, 0x00, 0x02, 0x00, 0x00, ...new Uint8Array(40)])
+    const facts = await readZipDocument(
+      zip([
+        { name: 'photo.jpg', data: mz },
+        { name: '__MACOSX/._scan.png', data: appleDouble },
+        { name: 'scan.png', data: PNG }
+      ])
+    )
+    expect(facts?.images.map((i) => i.name)).toEqual(['scan.png'])
+    expect(facts?.files.map((f) => [f.name, f.bytes])).toEqual([
+      ['photo.jpg', mz],
+      ['__MACOSX/._scan.png', appleDouble]
+    ])
+    expect(facts?.notes).toEqual([])
+  })
+
+  it('gives a program named as a picture and padded past the cap its first bytes', async () => {
+    const big = new Uint8Array(8_000_001)
+    big.set([0x4d, 0x5a])
+    const facts = await readZipDocument(
+      zip([{ name: 'photo.jpg', data: await deflateRaw(big), method: 8, size: big.length }])
+    )
+    expect(facts?.images).toEqual([])
+    expect(facts?.files.map((f) => [f.name, f.head, f.bytes])).toEqual([['photo.jpg', big.subarray(0, 32), null]])
+    // Still counted by its name, so the tally stays true about what was named what.
+    expect(facts?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+  })
+
+  it('does not list a picture it could not read whole as a file', async () => {
+    const big = new Uint8Array(8_000_001)
+    big.set(PNG)
+    const facts = await readZipDocument(
+      zip([{ name: 'scan.png', data: await deflateRaw(big), method: 8, size: big.length }])
+    )
+    expect(facts?.images).toEqual([])
+    expect(facts?.files).toEqual([])
+    expect(facts?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+  })
+
+  it('leaves out an empty file however it was compressed', async () => {
+    // Python's zipfile deflates an empty file to two bytes, and hashing what
+    // came out put the empty-file SHA-256 into Indicators and the case.
+    const deflatedEmpty = await deflateRaw(new Uint8Array(0))
+    for (const keep of [
+      { name: '.keep', data: new Uint8Array(0) },
+      { name: '.keep', data: deflatedEmpty, method: 8, size: 0 }
+    ]) {
+      const facts = await readZipDocument(zip([{ name: 'run.js', data: enc.encode('WScript.Echo(1)') }, keep]))
+      expect(facts?.files.map((f) => f.name)).toEqual(['run.js'])
+      expect(facts?.notes).toEqual([])
+    }
+    // A stream that broke before its first byte is not known to be empty.
+    const broken = await readZipDocument(
+      zip([{ name: 'x.bin', data: Uint8Array.from([0x07, 0xff, 0xff]), method: 8, size: 0 }])
+    )
+    expect(broken?.files).toEqual([])
+    expect(broken?.notes.join(' ')).toContain('1 inner file could not be read whole')
+  })
+
+  it('says an empty picture holds nothing, not that it could not be read', async () => {
+    const deflatedEmpty = await deflateRaw(new Uint8Array(0))
+    for (const image of [
+      { name: 'word/media/image1.png', data: new Uint8Array(0) },
+      { name: 'word/media/image1.png', data: deflatedEmpty, method: 8, size: 0 }
+    ]) {
+      const facts = await readZipDocument(zip([{ name: '[Content_Types].xml', data: enc.encode('<Types/>') }, image]))
+      expect(facts?.images).toEqual([])
+      expect(facts?.notes).toEqual(['1 entry named as a picture holds 0 bytes, so there is nothing to draw.'])
+    }
+    // Declared 10 and holding none is not empty: that one really was not read.
+    const short = await readZipDocument(zip([{ name: 'word/media/image1.png', data: new Uint8Array(0), size: 10 }]))
+    expect(short?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+    expect(short?.notes.join(' ')).not.toContain('0 bytes')
+  })
+
   it('opens at most 24 files and says how many were left', async () => {
     const facts = await readZipDocument(zip(many(30, (i) => ({ name: `f${i}.bin`, data: mz }))))
     expect(facts?.files).toHaveLength(24)
@@ -1362,11 +1497,27 @@ describe('files inside the archive', () => {
 })
 
 describe('entryNote rows for what a victim double-clicks', () => {
-  it('calls a disk image a disk image, not an executable', () => {
+  it('calls a disk image a disk image, not an executable, and says its files are not listed', () => {
     for (const name of ['a/b.iso', 'Invoice.img', 'x.vhd', 'x.vhdx']) {
-      expect(entryNote(name)).toBe('named like a disk image')
+      expect(entryNote(name)).toBe('named like a disk image — the files inside it are not listed here')
     }
     expect(entryNote('payload/Invoice.pdf.exe')).toBe('named like an executable or script')
+  })
+
+  it('names every type the top-level attachment facts name, in words true of each', () => {
+    // The two lists had drifted: .pif and .apk were flagged only outside a ZIP,
+    // and .xll, .url, .chm, .msc, .iqy and .library-ms nowhere.
+    for (const ext of ['exe', 'vbe', 'cpl', 'pif', 'apk', 'xll', 'lnk']) {
+      expect(entryNote(`Invoice.${ext}`)).toBe('named like an executable or script')
+    }
+    for (const ext of ['chm', 'msc']) {
+      expect(entryNote(`Invoice.${ext}`)).toBe('named as a file type that can carry script')
+    }
+    for (const ext of ['url', 'iqy', 'library-ms', 'searchconnector-ms', 'settingcontent-ms']) {
+      expect(entryNote(`Invoice.${ext}`)).toBe(
+        'named as a shortcut-style file that names another location or program to open'
+      )
+    }
   })
 
   it('names web pages, SVG and OneNote files', () => {

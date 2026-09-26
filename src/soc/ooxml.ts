@@ -18,8 +18,10 @@
  * oleObject, an embedding) — because the payload's hash is the lookup the
  * analyst actually needs, and a PE named Invoice.pdf is only caught by its
  * bytes. Pictures and files share one set of caps and are handed back as bytes
- * for the caller to sniff and hash; nothing here decides what they are. The
- * document body's own XML is never inflated.
+ * for the caller to sniff and hash. The only thing decided here is which list
+ * an entry goes to: a picture is named as one AND begins as one, and anything
+ * else is a file whatever its name. The document body's own XML is never
+ * inflated.
  *
  * Same standing rule as the rest of the SOC modules: this states what the
  * bytes say and stops. No score, no rating, no "suspicious". An entry list
@@ -69,14 +71,17 @@ export interface ExternalTarget {
   id: string
 }
 
-/** An entry named as a PNG, JPEG or GIF, read whole but not yet trusted: the caller sniffs it. */
+/** An entry named as a PNG, JPEG or GIF whose first bytes are one, read whole: the caller still sniffs it. */
 export interface OfficeImage {
   /** The entry name it came from. */
   name: string
   bytes: Uint8Array
 }
 
-/** Any other entry this reads, for the caller to say what its bytes are and hash them. */
+/**
+ * Any other entry this reads, for the caller to say what its bytes are and
+ * hash them — including one named as a picture whose bytes do not begin as one.
+ */
 export interface InnerFile {
   name: string
   /**
@@ -139,10 +144,16 @@ const MAX_TARGETS = 512
  * Raster names, in any folder: an .odt keeps its pictures in Pictures/, and a
  * plain .zip holding a screenshot keeps it at the root. Only `media/` was
  * looked at before, and a card then said no picture was found in a file whose
- * pictures were never looked for. The bytes still go through the caller's
- * magic-byte gate, so a lie here draws nothing.
+ * pictures were never looked for. A name is only a claim: an entry is handed
+ * back as a picture when its first bytes agree, and as a file otherwise.
  */
 const MEDIA = /\.(png|jpe?g|jfif|gif)$/i
+/** How a JPEG, PNG and GIF begin — the only pictures the caller draws, and the caller's own signatures for them. */
+const RASTER_MAGIC = [
+  [0xff, 0xd8, 0xff],
+  [0x89, 0x50, 0x4e, 0x47],
+  [0x47, 0x49, 0x46, 0x38]
+]
 /** Picture formats nothing here draws. Counted, so their absence from the drawn pictures is not read as absence. */
 const UNDRAWN_PICTURE = /\.(emf|wmf|svg|tiff?|bmp|webp)$/i
 /** Present in every Office container; its absence is what makes a .zip a plain archive. */
@@ -817,8 +828,13 @@ function nonMarkupClose(xml: string, lt: number): number | null {
   // An internal subset holds its own `>` characters, so the DOCTYPE ends at the
   // `>` after the closing `]` when there is one.
   const gt = xml.indexOf('>', lt)
-  const bracket = xml.indexOf('[', lt)
-  if (bracket >= 0 && (gt < 0 || bracket < gt)) {
+  // Looked for only before that first `>`: an internal subset opens there or
+  // not at all. Searching on to the end of the part instead cost a full scan
+  // per DOCTYPE, and a part of nothing but `<!DOCTYPE>` repeated is 104,000
+  // of them in a megabyte — 48 s for one attachment.
+  const found = (gt < 0 ? xml.slice(lt) : xml.slice(lt, gt)).indexOf('[')
+  const bracket = found < 0 ? -1 : lt + found
+  if (bracket >= 0) {
     const shut = xml.indexOf(']', bracket)
     if (shut < 0) return -1
     const after = xml.indexOf('>', shut)
@@ -954,20 +970,32 @@ async function readRelationships(
 
   let budget = MAX_RELS_TOTAL
   let read = 0
+  // Parts skipped before `read` counts them, by reason, and said once per
+  // reason after the loop. One note each let 4,000 encrypted `.rels` entries
+  // put 4,000 lines on the card and in the report, and capping the notes where
+  // they are printed would push the closing summaries out instead. `read`
+  // still counts successful reads only, so sixty-four decoys cannot push the
+  // real word/_rels/document.xml.rels out of reach.
+  const unread: Record<'encrypted' | 'unlocatable' | 'zero' | 'other', CentralRecord[]> = {
+    encrypted: [],
+    unlocatable: [],
+    zero: [],
+    other: []
+  }
   for (const entry of rels) {
     if (read >= MAX_RELS_PARTS) {
       // Counted against the entries LISTED, which is the only population this
       // function has: `rels.length` is not a count of what the container
       // holds. Not "the first 64" either — `read` counts successful reads, so
       // an encrypted or unlocatable part in between is skipped without
-      // counting, and each of those has said so in its own note.
+      // counting, and each reason for that has its own note.
       facts.notes.push(
         `Reading stopped after ${MAX_RELS_PARTS} relationship parts; ${rels.length} appear among the entries listed.`
       )
       break
     }
     if (entry.encrypted) {
-      facts.notes.push(`${entry.name} is encrypted, so its targets could not be read.`)
+      unread.encrypted.push(entry)
       continue
     }
     const located = locateData(bytes, view, entry)
@@ -976,11 +1004,11 @@ async function readRelationships(
       // and a length that is missing or longer than the file holds. Which of
       // those it was is not claimed, because reading the bytes to find out is
       // the read that just failed.
-      facts.notes.push(`${entry.name} could not be read from the bytes in this file, so no targets were read from it.`)
+      unread.unlocatable.push(entry)
       continue
     }
     if (located.length === 0) {
-      facts.notes.push(`${entry.name} declares a compressed size of 0 bytes, so there was nothing in it to read.`)
+      unread.zero.push(entry)
       continue
     }
     if (budget <= 0) {
@@ -1022,7 +1050,7 @@ async function readRelationships(
       }
       budget -= out.bytes.length
     } else {
-      facts.notes.push(`${entry.name} is compressed with ${entry.method}, which this reader cannot inflate.`)
+      unread.other.push(entry)
       continue
     }
     read++
@@ -1043,6 +1071,51 @@ async function readRelationships(
     }
     collectTargets(entry.name, xml, facts.externalTargets, facts.notes)
   }
+  // One part keeps the sentence it always had; several are counted and named.
+  const say = (
+    parts: CentralRecord[],
+    one: (part: CentralRecord) => string,
+    several: string,
+    named = (part: CentralRecord): string => part.name
+  ): void => {
+    const [only] = parts
+    if (!only) return
+    facts.notes.push(
+      parts.length === 1 ? one(only) : `${parts.length} relationship parts ${several}: ${someOf(parts.map(named))}.`
+    )
+  }
+  say(
+    unread.encrypted,
+    (part) => `${part.name} is encrypted, so its targets could not be read.`,
+    'are encrypted, so their targets could not be read'
+  )
+  say(
+    unread.unlocatable,
+    (part) => `${part.name} could not be read from the bytes in this file, so no targets were read from it.`,
+    'could not be read from the bytes in this file, so no targets were read from them'
+  )
+  say(
+    unread.zero,
+    (part) => `${part.name} declares a compressed size of 0 bytes, so there was nothing in it to read.`,
+    'declare a compressed size of 0 bytes, so there was nothing in them to read'
+  )
+  say(
+    unread.other,
+    (part) => `${part.name} is compressed with ${part.method}, which this reader cannot inflate.`,
+    'are compressed in a way this reader cannot inflate, so their targets could not be read',
+    (part) => `${part.name} (${part.method})`
+  )
+}
+
+/**
+ * The first few names and how many more.
+ *
+ * ponytail: five names, then a count. Every name is still in the entry list
+ * this returns, and a note that names every part is the flood it replaces.
+ */
+function someOf(names: string[]): string {
+  const shown = names.slice(0, 5).join(', ')
+  return names.length > 5 ? `${shown} and ${names.length - 5} more` : shown
 }
 
 const OLE_MAGIC = [0xd0, 0xcf, 0x11, 0xe0]
@@ -1186,9 +1259,12 @@ function unread({ pictures, files }: Tally): string {
  * half a picture, and the half that is missing may be the half that mattered.
  * An inner file that cannot be read whole comes back with its first bytes and
  * no body, because its first bytes are still true and a hash of part of it is
- * not its hash. Every entry left unread is counted in a note, each count under
- * the reason that actually stopped it, so "no pictures drawn" never reads as
- * "no pictures" and a spent budget is never passed off as a damaged file.
+ * not its hash. An entry named as a picture whose bytes begin as something
+ * else is an inner file, read whole or not. Every entry left unread is counted
+ * in a note, each count under the reason that actually stopped it, so "no
+ * pictures drawn" never reads as "no pictures" and a spent budget is never
+ * passed off as a damaged file. An empty entry is not unread: an empty file is
+ * left out, and an empty picture has a note of its own.
  */
 async function readMedia(
   bytes: Uint8Array,
@@ -1211,6 +1287,7 @@ async function readMedia(
   let tried = 0
   const skipped: Tally = { pictures: 0, files: 0 }
   const overBudget: Tally = { pictures: 0, files: 0 }
+  let empty = 0
   for (const [i, entry] of wanted.entries()) {
     if (tried >= MAX_MEDIA || budget <= 0) {
       const rest = wanted.slice(i)
@@ -1239,12 +1316,17 @@ async function readMedia(
       }
       break
     }
+    // By name, for the tallies: an entry that is never read has only its name,
+    // and one note per kind has to count every entry the same way.
     const picture = MEDIA.test(entry.name)
     const kind = picture ? 'pictures' : 'files'
     const located = entry.encrypted ? null : locateData(bytes, view, entry)
-    // Both fields call it empty, so it is: there is nothing to hash, and
-    // "could not be read" about it would be false.
-    if (!picture && located?.length === 0 && entry.size === 0) continue
+    // Both fields call it empty, so it is: there is nothing to hash or draw,
+    // and "could not be read" about it would be false.
+    if (located?.length === 0 && entry.size === 0) {
+      if (picture) empty++
+      continue
+    }
     if (!located || located.length === 0 || !(entry.methodCode === 0 || (entry.methodCode === 8 && canInflate))) {
       skipped[kind]++
       continue
@@ -1258,12 +1340,24 @@ async function readMedia(
       entry.methodCode === 0
         ? {
             bytes: bytes.subarray(located.start, located.start + Math.min(located.length, cap)),
-            truncated: located.length > cap
+            truncated: located.length > cap,
+            failed: false
           }
         : await inflate(
             bytes.subarray(located.start, located.start + Math.min(located.length, MAX_MEDIA_BYTES + 65_536)),
             cap
           )
+    // The empty file as Python's zipfile and Java write it: a two-byte deflate
+    // stream that inflates to nothing. Hashed, it put the empty-file SHA-256 into
+    // Indicators and linked every case holding any empty file; said about a
+    // picture, "could not be read whole" was false. A stream that broke before
+    // producing a byte cannot tell empty from damaged, so it stays counted as
+    // unread.
+    if (entry.size === 0 && out.bytes.length === 0 && !out.truncated) {
+      if (out.failed) skipped[kind]++
+      else if (picture) empty++
+      continue
+    }
     // Whole means the length the directory declares, and nothing about how the
     // bytes end. A decompressor also errors on bytes AFTER a complete stream,
     // which is every streamed entry read to the end of the file, so a stream
@@ -1271,7 +1365,7 @@ async function readMedia(
     // Judging by the tail kept a broken GIF whose partial output happened to
     // end in 0x3B, and hashed the prefix as the picture; a null size never
     // matches, so an entry of unknown length is never called whole.
-    const whole = !out.truncated && out.bytes.length === entry.size && (out.bytes.length > 0 || !picture)
+    const whole = !out.truncated && out.bytes.length === entry.size
     // Charged BEFORE anything is kept or thrown away: the inflate already
     // happened. A stored entry that is not kept is a view of the input and
     // costs nothing.
@@ -1279,11 +1373,21 @@ async function readMedia(
       budget -= out.bytes.length
       media.left -= out.bytes.length
     }
-    if (picture && whole) {
+    // A picture by its bytes as well as its name. By name alone, a program
+    // stored as Invoice.jpg was handed back as a picture: it was printed as an
+    // "embedded picture", never checked against its name, and its hash never
+    // reached Indicators or the case — renaming the payload was enough to walk
+    // past the check that catches the same bytes named Invoice.pdf.
+    const raster = picture && RASTER_MAGIC.some((magic) => startsWith(out.bytes, magic))
+    if (raster && whole) {
       facts.images.push({ name: entry.name, bytes: out.bytes })
       continue
     }
-    if (!picture && (whole || out.bytes.length >= HEAD_BYTES)) {
+    // Everything else goes to the caller as a file, so its first bytes are
+    // typed against its name — a picture-named payload padded past 8 MB
+    // included. A picture that begins as one but was not read whole is not a
+    // file with a picture's name: it stays a picture, counted below.
+    if (!raster && (whole || out.bytes.length >= HEAD_BYTES)) {
       // A copy, so a cut 8 MB inflate is not held alive by a 32-byte view.
       facts.files.push({ name: entry.name, head: out.bytes.slice(0, HEAD_BYTES), bytes: whole ? out.bytes : null })
     }
@@ -1297,6 +1401,11 @@ async function readMedia(
   if (skipped.pictures || skipped.files) {
     facts.notes.push(
       `${tally(skipped)} could not be read whole here — encrypted, damaged, over ${MAX_MEDIA_BYTES / 1_000_000} MB, or compressed in a way this device cannot inflate — ${unread(skipped)}`
+    )
+  }
+  if (empty) {
+    facts.notes.push(
+      `${empty === 1 ? '1 entry named as a picture holds' : `${empty} entries named as pictures hold`} 0 bytes, so there is nothing to draw.`
     )
   }
   const cut = overBudget.pictures + overBudget.files
@@ -1316,6 +1425,23 @@ async function readMedia(
   }
 }
 
+/**
+ * The file types a victim runs by opening them, shared with the top-level
+ * attachment facts so the two lists cannot drift again: .vbe and .cpl were
+ * flagged only inside a ZIP, and .pif and .apk only outside one. .xll is a DLL
+ * that Excel loads as an add-in.
+ */
+export const EXECUTABLE_NAME =
+  /\.(exe|dll|scr|com|cpl|pif|msi|lnk|hta|js|jse|vbs|vbe|wsf|wsh|ps1|bat|cmd|jar|apk|xll)$/i
+/**
+ * Compiled help and management-console files: HTML or XML that can run
+ * script when opened. Not executables, and not called that — the same false
+ * fact the disk-image row was split out to stop.
+ */
+export const SCRIPT_CARRIER_NAME = /\.(chm|msc)$/i
+/** Files that only name another location or program to open — a URL, a web query, a library or search pointer, a settings deep link. */
+export const SHORTCUT_NAME = /\.(url|iqy|library-ms|searchconnector-ms|settingcontent-ms)$/i
+
 /** Names a document runtime treats as code or as a door to another file. Checked on the entry name only. */
 const NOTABLE_ENTRIES: [RegExp, string][] = [
   [/(^|\/)vbaProject\.bin$/i, 'named as a VBA macro project'],
@@ -1324,14 +1450,14 @@ const NOTABLE_ENTRIES: [RegExp, string][] = [
   [/(^|\/)externalLinks?\/[^/]+\.xml$/i, 'named as a link to an external workbook'],
   [/(^|\/)activeX\//i, 'named as an ActiveX control'],
   [/(^|\/)embeddings\//i, 'stored in the embedded-files folder'],
-  [
-    /\.(exe|dll|scr|com|cpl|msi|lnk|hta|js|jse|vbs|vbe|wsf|wsh|ps1|bat|cmd|jar)$/i,
-    'named like an executable or script'
-  ],
+  [EXECUTABLE_NAME, 'named like an executable or script'],
+  [SCRIPT_CARRIER_NAME, 'named as a file type that can carry script'],
+  [SHORTCUT_NAME, 'named as a shortcut-style file that names another location or program to open'],
   // Its own row: a disk image is neither, and saying so was a false fact. It
   // is a container that Windows mounts with one double-click, which is why it
-  // is called out at all.
-  [/\.(iso|img|vhdx?)$/i, 'named like a disk image'],
+  // is called out at all. Nested archives are not opened, so it also says the
+  // one thing an entry list cannot: what is inside was not looked at.
+  [/\.(iso|img|vhdx?)$/i, 'named like a disk image — the files inside it are not listed here'],
   [/\.(html?|svg|one)$/i, 'named as a web page, SVG or OneNote file']
 ]
 
