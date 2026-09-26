@@ -10,7 +10,7 @@ export class ProjectPickerModal extends SuggestModal<Project> {
     private onChoose: (project: Project) => void
   ) {
     super(app)
-    this.setPlaceholder('Pick a project…')
+    this.setPlaceholder('Pick a board…')
   }
 
   getSuggestions(query: string): Project[] {

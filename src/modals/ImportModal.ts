@@ -10,6 +10,14 @@ import {
   type TaskNotesTaskInfo
 } from '../integrations/tasknotes'
 import { buildImportForest, type TaskNotesImportItem } from '../integrations/tasknotesImport'
+import { FRONTMATTER_KEY, TASK_FRONTMATTER_KEY } from '../store/YamlParser'
+
+/**
+ * Rows drawn at once. Every row was built on every keystroke, about 80,000
+ * elements for a 20,000-note vault. Select all and the count still cover
+ * every match. ponytail: the same cap idea as PICKER_LIMIT (PS-02).
+ */
+const MAX_IMPORT_ROWS = 200
 
 interface FileItem {
   file: TFile
@@ -23,6 +31,7 @@ export class ImportModal extends Modal {
   private selectedCount = 0
   private searchInput: HTMLInputElement | null = null
   private selectAllCheckbox: HTMLInputElement | null = null
+  private selectAllLabel: HTMLLabelElement | null = null
   private nextButton: ButtonComponent | null = null
   private fileListContainer: HTMLDivElement | null = null
   private counterLabel: HTMLDivElement | null = null
@@ -71,7 +80,13 @@ export class ImportModal extends Modal {
 
   private loadVaultFiles(): void {
     const allFiles = this.app.vault.getFiles()
-    const markdownFiles = allFiles.filter((f) => f.extension === 'md')
+    // Board and case notes are never offered: a case is already one, and
+    // importing a board note turned it into a case and orphaned its board.
+    const markdownFiles = allFiles.filter((f) => {
+      if (f.extension !== 'md') return false
+      const fm = this.app.metadataCache.getFileCache(f)?.frontmatter
+      return fm?.[FRONTMATTER_KEY] !== true && fm?.[TASK_FRONTMATTER_KEY] !== true
+    })
 
     this.files = markdownFiles.map((file) => {
       const folder = file.parent?.path || '/'
@@ -100,7 +115,9 @@ export class ImportModal extends Modal {
     // ── Header ──────────────────────────────────────────────────────────────
     const header = contentEl.createDiv('import-modal-header')
 
-    header.createEl('h2', { text: 'Select notes to import' })
+    header.createEl('h2', {
+      text: this.project ? `Select notes to import into ${this.project.title}` : 'Select notes to import'
+    })
 
     this.counterLabel = header.createDiv('import-counter')
     this.updateCounter()
@@ -129,6 +146,7 @@ export class ImportModal extends Modal {
     this.selectAllCheckbox.addEventListener('change', () => this.handleSelectAll())
 
     const selectAllLabel = selectAllRow.createEl('label', { text: 'Select all' })
+    this.selectAllLabel = selectAllLabel
     selectAllLabel.addEventListener('click', () => {
       if (this.selectAllCheckbox) {
         this.selectAllCheckbox.checked = !this.selectAllCheckbox.checked
@@ -157,7 +175,7 @@ export class ImportModal extends Modal {
 
     // ── Header ──────────────────────────────────────────────────────────────
     const header = contentEl.createDiv('import-options-header')
-    header.createEl('h2', { text: 'Import options' })
+    header.createEl('h2', { text: this.project ? `Import into ${this.project.title}` : 'Import options' })
 
     // ── Content ──────────────────────────────────────────────────────────────
     const content = contentEl.createDiv('import-options-content')
@@ -233,10 +251,11 @@ export class ImportModal extends Modal {
     if (!fileListContainer) return
 
     // Clear existing items (keep the select-all row)
-    const items = fileListContainer.querySelectorAll('.import-file-item')
+    const items = fileListContainer.querySelectorAll('.import-file-item, .import-file-more')
     items.forEach((item) => item.remove())
 
-    this.filteredFiles.forEach((item) => {
+    const shown = this.filteredFiles.slice(0, MAX_IMPORT_ROWS)
+    shown.forEach((item) => {
       const row = fileListContainer.createDiv('import-file-item suggestion-item')
       this.applyRowStyles(row, item.selected)
 
@@ -263,6 +282,16 @@ export class ImportModal extends Modal {
         checkbox.dispatchEvent(new Event('change', { bubbles: true }))
       })
     })
+
+    const total = this.filteredFiles.length
+    if (total > shown.length) {
+      fileListContainer.createDiv({
+        cls: 'import-file-more pm-modal-hint',
+        text: `Showing ${shown.length} of ${total} matches. Refine the search to see the rest.`
+      })
+    }
+    // Select all takes every match, shown or not, so it says how many.
+    this.selectAllLabel?.setText(total > shown.length ? `Select all ${total} matches` : 'Select all')
   }
 
   private handleSearch(): void {
@@ -327,8 +356,10 @@ export class ImportModal extends Modal {
     const taskNotesTasks: Array<{ file: TFile; info: TaskNotesTaskInfo }> = []
 
     for (const file of selectedFiles) {
-      const alreadyPmTask = this.app.metadataCache.getFileCache(file)?.frontmatter?.['pm-task'] === true
-      if (taskNotesApi && !alreadyPmTask) {
+      // A board note too: it goes to the store, which skips it, never to the TaskNotes path.
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter
+      const responderNote = fm?.[TASK_FRONTMATTER_KEY] === true || fm?.[FRONTMATTER_KEY] === true
+      if (taskNotesApi && !responderNote) {
         const info = await taskNotesApi.getTask(file.path).catch(() => null)
         if (info) {
           taskNotesTasks.push({ file, info })
@@ -362,7 +393,7 @@ export class ImportModal extends Modal {
       this.onImportComplete()
     }
 
-    let message = `Imported ${imported} task${imported !== 1 ? 's' : ''}`
+    let message = `Imported ${imported} task${imported !== 1 ? 's' : ''} into ${this.project.title}`
     if (skipped > 0) {
       message += ` (${skipped} skipped)`
     }
