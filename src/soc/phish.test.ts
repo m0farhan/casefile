@@ -18,6 +18,15 @@ describe('unwrapUrl', () => {
     expect(unwrapUrl(wrapped)).toEqual({ target: 'https://evil.test/go', wrappedBy: 'Microsoft Safe Links' })
   })
 
+  it('unwraps a long Proofpoint v3 link in linear time', () => {
+    // The lazy /v3/__(.+?)__;/ restarted at every `/v3/__` and scanned to the
+    // end: 300 KB of them took about ten seconds.
+    const started = performance.now()
+    const r = unwrapUrl(`https://urldefense.com${'/v3/__'.repeat(50_000)}`)
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(r.wrappedBy).toBe('Proofpoint URL Defense')
+  })
+
   it('unwraps Proofpoint v3 and v2', () => {
     expect(unwrapUrl('https://urldefense.com/v3/__https://evil.test/go__;!!abc$').target).toBe('https://evil.test/go')
     expect(unwrapUrl('https://urldefense.proofpoint.com/v2/url?u=https-3A__evil.test_go&d=DwMFaQ').target).toBe(
@@ -225,6 +234,73 @@ describe('link evasions that used to mislead or hide', () => {
     expect(found.map((l) => l.target)).toEqual(['http://evil.test/go'])
   })
 
+  it('keeps a real destination whatever sits in the anchor’s other attributes', () => {
+    // A quoted `<` stops the anchor scan, and a quoted `>` before href did
+    // too, so the decoy-drop deleted the real href when another anchor showed
+    // it as text. Every attribute URL is a destination and is never dropped.
+    const ltAfterHref =
+      '<a href="https://evil.test/" title="<x">click</a> <a href="https://other.test/">https://evil.test/</a>'
+    const gtBeforeHref =
+      '<a title="x>y" href="https://evil.test/">click</a> <a href="https://other.test/">https://evil.test/</a>'
+    for (const html of [ltAfterHref, gtBeforeHref]) {
+      expect(links('', html).map((l) => l.target)).toContain('https://evil.test/')
+    }
+    expect(links('', '<a title="x>y" href="https://evil.test/">https://bank.test/</a>').map((l) => l.target)).toContain(
+      'https://evil.test/'
+    )
+  })
+
+  it('finds a visible URL after an escaped < in the text', () => {
+    // Decoded before the strip, `&lt; b see …` became a tag that swallowed the URL.
+    const html = "<p>if a &lt; b see https://x.test/ it's <b>ok</b></p>"
+    expect(links('', html).map((l) => l.target)).toEqual(['https://x.test/'])
+  })
+
+  it('never reads the text on two sides of a tag as one URL', () => {
+    // Stripped with nothing in its place, the cell after the URL ran on into it.
+    const html = '<table><tr><td>https://a.test/x</td><td>more</td></tr></table>'
+    expect(links('', html).map((l) => l.target)).toEqual(['https://a.test/x'])
+  })
+
+  it('does not hang on anchors or tags that never close', () => {
+    for (const html of [
+      '<a href=x '.repeat(10_000),
+      Array.from({ length: 500 }, () => `<a href=https://e.test/${'a'.repeat(1_980)} `).join(''),
+      '<'.repeat(1_000_000)
+    ]) {
+      const started = performance.now()
+      links('', html)
+      htmlToText(html)
+      expect(performance.now() - started).toBeLessThan(2000)
+    }
+  })
+
+  it('flags a javascript: target whatever the parser strips in front of it or inside it', () => {
+    // `%01javascript:` unwraps to a target the browser follows as javascript:,
+    // and the pattern the flag was read with could not see past the \u0001.
+    const safe = (target: string): string =>
+      `<a href="https://eur01.safelinks.protection.outlook.com/?url=${target}&amp;data=05">x</a>`
+    for (const target of [
+      '%01javascript%3Aalert(1)',
+      '%20javascript%3Aalert(1)',
+      '%0Ajavascript%3Aalert(1)',
+      'java%09script%3Aalert(1)'
+    ]) {
+      const [link] = links('', safe(target))
+      expect(link.flags).toContain('javascript: link, not a web address')
+    }
+    expect(links('', safe('%1Fdata%3Atext%2Fhtml%2Cx'))[0].flags.join(' ')).toContain('data: URL')
+    // DEL is not stripped by the parser: that link does not go to javascript:.
+    expect(links('', safe('%7Fjavascript%3Aalert(1)'))[0].flags).not.toContain('javascript: link, not a web address')
+  })
+
+  it('lists an href that begins with a control byte, as written', () => {
+    const found = links('', '<a href="&#1;javascript:alert(1)">x</a>')
+    expect(found).toHaveLength(1)
+    expect(found[0].target).toBe('\u0001javascript:alert(1)')
+    expect(found[0].flags).toContain('javascript: link, not a web address')
+  })
+
   it('caps the link list and says how many it left out', () => {
     const html = Array.from({ length: 600 }, (_, i) => `<a href="http://e${i}.test/">x</a>`).join('')
     const out = extractLinks('', html, [])
@@ -418,11 +494,22 @@ describe('htmlToText — the words the victim read', () => {
 })
 
 describe('PhishTool parity on the parsed model', () => {
-  it('names the registrable domain beside the host', () => {
+  it('names the derived domain beside the host', () => {
     expect(apexDomain('login.paypa1.test')).toBe('paypa1.test')
     expect(apexDomain('a.b.paypa1.co.uk')).toBe('paypa1.co.uk')
     expect(apexDomain('paypa1.test')).toBe('paypa1.test')
     expect(apexDomain('localhost')).toBe('localhost')
+  })
+
+  it('reads a generic second label under a country code as part of the suffix', () => {
+    // co.id and com.vn are suffixes, not anyone's domain.
+    expect(apexDomain('secure.bank-verify.co.id')).toBe('bank-verify.co.id')
+    expect(apexDomain('x.victim-shop.com.vn')).toBe('victim-shop.com.vn')
+    expect(apexDomain('a.shop.me.uk')).toBe('shop.me.uk')
+    // Not a two-letter country code, so not a suffix pair.
+    expect(apexDomain('m365-login.pages.dev')).toBe('pages.dev')
+    // The brand label is read from the same place.
+    expect(hostFacts('www.tokopedia.co.id', ['bca.co.id'])).toEqual([])
   })
 
   it('carries it on every link row', () => {

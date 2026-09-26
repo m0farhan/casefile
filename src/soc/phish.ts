@@ -34,10 +34,10 @@ export interface LinkFinding {
   /** Host of `target`, lowercased. */
   host: string
   /**
-   * The registrable domain — `login.paypa1.co.uk` gives `paypa1.co.uk`. It is
-   * what a block list is usually written against and what two links have in
-   * common when they share an owner, so it is stated rather than left for the
-   * reader to work out from the host.
+   * The derived domain — `login.paypa1.co.uk` gives `paypa1.co.uk`: the host's
+   * last two labels, or three under a two-label suffix. No public suffix list
+   * is consulted, so under a hosting platform (pages.dev, github.io) it names
+   * the platform, not the site's owner, and it is printed as "derived".
    */
   apexDomain: string
   /** Stated facts about the host — never a score. */
@@ -85,8 +85,14 @@ const GATEWAYS: { name: string; host: RegExp; path?: RegExp; extract(url: string
     host: /(^|\.)urldefense(\.proofpoint)?\.com$/i,
     extract: (url) => {
       // v3: …/v3/__<real url>__;<base64 of replaced chars>!!…
-      const v3 = /\/v3\/__(.+?)__;/.exec(url)
-      if (v3) return decodePercentEscapes(v3[1])
+      // indexOf, not /\/v3\/__(.+?)__;/: that lazy scan restarted at every
+      // `/v3/__` and ran to the end each time, so one long link of them froze
+      // the analyser for seconds. Only the leftmost start can match, because a
+      // later start needs a later `__;`. Not quite the old regex: this also
+      // reads across U+2028 and U+2029, which an href can carry.
+      const at = url.indexOf('/v3/__')
+      const end = at < 0 ? -1 : url.indexOf('__;', at + 7)
+      if (end > 0) return decodePercentEscapes(url.slice(at + 6, end))
       // v2: …/v2/url?u=<url with _ for / and - for %>&d=…
       const v2 = new URL(url).searchParams.get('u')
       return v2 ? decodePercentEscapes(v2.replace(/_/g, '/').replace(/-/g, '%')) : ''
@@ -200,16 +206,24 @@ const ATTR_RE = /\b(?:href|src|action|background|poster|formaction|data)\s*=\s*(
 const CSS_URL_RE = /url\(\s*["']?([^)"']+)/gi
 const SRCSET_RE = /\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
 /**
- * Anchors, with every scan BOUNDED.
+ * Anchors, with every scan BOUNDED and every tag body stopped at the next tag.
  *
  * The unbounded lazy form was quadratic: a body of anchors with no closing
  * tag made the regex engine restart the tail scan from every one of them, and
- * fifty thousand of them froze the UI thread for tens of seconds. Bounding it
- * fails toward "the anchor text was not compared", which is an absence the
- * report states — never a fabricated match.
+ * fifty thousand of them froze the UI thread for tens of seconds. Bounding
+ * alone did not end it. `[^>]` ran on past the next `<`, so each unclosed
+ * `<a href=x ` walked 2,000 characters for every `href` in reach, and a
+ * shorter bare value was retried one character at a time: 100 KB of them
+ * still took 18 seconds. Stopping at `<` and taking the bare value whole
+ * (a shorter one reaches the same `>`, so it cannot match where the whole one
+ * failed) brings every hostile shape down to milliseconds.
+ *
+ * An anchor with `<` or `>` inside a quoted attribute is not read for its
+ * text, so it gets no "shown as" fact. That is an absence the report states,
+ * never a fabricated match, and its href is still listed by ATTR_RE.
  */
 const ANCHOR_RE =
-  /<a\b[^>]{0,2000}?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))[^>]{0,2000}?>([\s\S]{0,2000}?)<\/a>/gi
+  /<a\b[^<>]{0,2000}?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+)(?![^\s"'>=`]))[^<>]{0,2000}?>([\s\S]{0,2000}?)<\/a>/gi
 
 const NAMED_ENTITIES: Record<string, string> = {
   amp: '&',
@@ -310,16 +324,19 @@ function endOfTag(html: string, lt: number): number {
  * A `<` with no `>` after it is left as the text it almost certainly is; only
  * dropElement swallows on an unterminated open, and only because everything
  * after an unclosed `<script` really is inside it.
+ *
+ * `between` stands in for each tag removed. The link scan passes a space, so
+ * the text of two table cells is never read as one URL.
  */
-function stripTags(html: string): string {
+function stripTags(html: string, between = ''): string {
   let out = ''
   let i = 0
   while (i < html.length) {
     const lt = html.indexOf('<', i)
     if (lt < 0) return out + html.slice(i)
-    out += html.slice(i, lt)
     const end = endOfTag(html, lt)
-    if (end < 0) return out + html.slice(lt)
+    if (end < 0) return out + html.slice(i)
+    out += html.slice(i, lt) + between
     i = end
   }
   return out
@@ -372,10 +389,14 @@ function dropComments(html: string): string {
   }
 }
 
-/** Elements whose end means a line ended, so the text reads as it was laid out. */
+/**
+ * Elements whose end means a line ended, so the text reads as it was laid out.
+ * A tag body stops at the next `<` for the same reason ANCHOR_RE's does. A tag
+ * these miss still loses its markup in stripTags; only its line break is lost.
+ */
 const BLOCK_TAGS =
-  /<\s*\/?\s*(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|article|header|footer|td|th|pre)\b[^>]{0,1000}>/gi
-const LINE_BREAKS = /<\s*(?:br|hr)\b[^>]{0,1000}>/gi
+  /<\s*\/?\s*(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|article|header|footer|td|th|pre)\b[^<>]{0,1000}>/gi
+const LINE_BREAKS = /<\s*(?:br|hr)\b[^<>]{0,1000}>/gi
 
 /**
  * The words the victim read, pulled out of the HTML body.
@@ -434,77 +455,78 @@ function normaliseUrl(value: string): string {
 }
 
 /**
- * Suffixes under which the registrable name is the THIRD label from the right.
- *
- * ponytail: a short hand-written list, not the public suffix list — that is a
- * 15k-entry file that would have to ship and be kept current, and this is a
- * heuristic feeding a stated fact, not a gate. Names the ceiling: a look-alike
- * under a multi-label suffix not on this list is compared against the wrong
- * label and simply gets no fact, which is an absence, not a wrong answer.
+ * A value past its leading control bytes and spaces, for TESTING its shape
+ * only. The URL parser strips that run, so `\u0001javascript:` is followed as
+ * javascript:. What is shown and listed stays as written: the control byte is
+ * the tell. \p{Cc} is wider than what the parser strips (DEL and C1 too), which
+ * only lets such a value be listed; its scheme still comes from the parser.
  */
-const TWO_LABEL_SUFFIXES = new Set([
-  'co.uk',
-  'org.uk',
-  'me.uk',
-  'gov.uk',
-  'ac.uk',
-  'net.uk',
-  'sch.uk',
-  'com.au',
-  'net.au',
-  'org.au',
-  'gov.au',
-  'edu.au',
-  'id.au',
-  'co.nz',
-  'net.nz',
-  'org.nz',
-  'govt.nz',
-  'co.za',
-  'org.za',
-  'net.za',
-  'co.jp',
-  'or.jp',
-  'ne.jp',
-  'ac.jp',
-  'go.jp',
-  'co.kr',
-  'or.kr',
-  'com.br',
-  'com.mx',
-  'com.ar',
-  'com.sg',
-  'com.hk',
-  'com.cn',
-  'net.cn',
-  'org.cn',
-  'gov.cn',
-  'co.in',
-  'net.in',
-  'org.in',
-  'com.tr',
-  'com.tw',
-  'co.il',
-  'com.pl',
-  'com.ua'
+const stripLead = (value: string): string => value.replace(/^[\s\p{Cc}]+/u, '')
+
+/**
+ * Suffixes under which the site's own name is the THIRD label from the right,
+ * beyond the rule in suffixLabels.
+ *
+ * ponytail: a short hand-written rule and list, not the public suffix list —
+ * that is a 15k-entry file that would have to ship and be kept current, and
+ * this is a heuristic feeding a stated fact, not a gate. Names the ceiling: a
+ * host under a hosting platform (pages.dev, github.io) or a multi-label suffix
+ * the rule does not cover gets the platform or the suffix as its derived
+ * domain, which is why that line says "derived" and the Links section says
+ * what it is; and a brand entry written as a domain under such a suffix is
+ * compared against the suffix's label, which can state a name match that is
+ * not one. The upgrade path is the public suffix list.
+ */
+const TWO_LABEL_SUFFIXES = new Set(['me.uk', 'id.au', 'govt.nz'])
+
+/**
+ * Second labels that make a two-letter country code a two-label suffix:
+ * co.uk, com.au, co.id, com.vn, ne.jp, gob.mx and the like, in one line.
+ */
+const GENERIC_SECOND_LEVEL = new Set([
+  'com',
+  'co',
+  'net',
+  'org',
+  'gov',
+  'edu',
+  'ac',
+  'or',
+  'ne',
+  'go',
+  'mil',
+  'gob',
+  'gouv',
+  'ltd',
+  'plc',
+  'sch',
+  'nic'
 ])
 
-/** The registrable domain: `login.paypa1.co.uk` → `paypa1.co.uk`. */
+/** How many labels on the right are suffix, not the site's own name: 1, or 2 under a two-label suffix. */
+function suffixLabels(parts: string[]): number {
+  if (parts.length < 3) return 1
+  const [second, tld] = parts.slice(-2)
+  const twoLabel =
+    TWO_LABEL_SUFFIXES.has(`${second}.${tld}`) || (/^[a-z]{2}$/.test(tld) && GENERIC_SECOND_LEVEL.has(second))
+  return twoLabel ? 2 : 1
+}
+
+/**
+ * The derived domain: `login.paypa1.co.uk` → `paypa1.co.uk`. Derived from the
+ * labels alone, never checked against the public suffix list.
+ */
 export function apexDomain(host: string): string {
   const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
   if (parts.length < 2) return parts.join('.')
-  const lastTwo = parts.slice(-2).join('.')
-  if (parts.length >= 3 && TWO_LABEL_SUFFIXES.has(lastTwo)) return parts.slice(-3).join('.')
-  return lastTwo
+  return parts.slice(-(suffixLabels(parts) + 1)).join('.')
 }
 
 /** The registrable-ish label: `login.paypa1.co.uk` → `paypa1`. */
 function brandLabel(host: string): string {
   const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
   if (parts.length < 2) return parts[0] ?? ''
-  const lastTwo = parts.slice(-2).join('.')
-  if (parts.length >= 3 && TWO_LABEL_SUFFIXES.has(lastTwo)) return parts[parts.length - 3]
-  return parts[parts.length - 2]
+  return parts[parts.length - suffixLabels(parts) - 1]
 }
 
 /**
@@ -575,23 +597,43 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
     const url = normaliseUrl(value)
     // Any scheme, not just http(s): a mail whose only link is `data:` or
     // `javascript:` used to report "None found.", which reads as a clean mail.
-    if (/^[a-z][a-z0-9+.-]{1,15}:/i.test(url)) raws.add(url)
+    // Tested past a leading control run, which the URL parser strips: an href
+    // of `&#1;javascript:` is followed as javascript: and was dropped here.
+    // The value is kept as written, so the `<U+0001>` still shows.
+    if (/^[a-z][a-z0-9+.-]{1,15}:/i.test(stripLead(url))) raws.add(url)
   }
   // Bare URLs in BOTH bodies. The HTML is scanned with its tags stripped, so a
   // URL sitting in visible text or in a <meta refresh> content= is not missed.
   // That scan is the ONLY one that can turn anchor TEXT into a candidate, so
   // what it contributed is remembered: a decoy label is dropped below, but
   // only when no other scan found the same URL as a real destination.
+  //
+  // Stripped first and decoded last, as htmlToText does, through the linear
+  // quote-aware stripTags. Decoding first turned `&lt;` into a tag opener that
+  // swallowed the visible URL after it, and `<[^>]{0,2000}>` cost seconds per
+  // megabyte of `<`. Each tag still becomes a space, as it did under that
+  // regex: glued, `https://a.test/x</td><td>more` read as a URL the mail does
+  // not hold.
+  //
+  // ponytail: a space for every tag, inline ones too, so a URL split by `<b>`
+  // is read up to the tag, as it always was. Gluing across inline tags and
+  // breaking at block tags is the upgrade if a real lure needs it.
   for (const m of text.matchAll(URL_RE)) add(m[0])
   const fromVisibleText = new Set<string>()
-  for (const m of decodeEntities(html)
-    .replace(/<[^>]{0,2000}>/g, ' ')
-    .matchAll(URL_RE)) {
+  for (const m of decodeEntities(stripTags(html, ' ')).matchAll(URL_RE)) {
     const before = raws.size
     add(m[0])
     if (raws.size > before) fromVisibleText.add(normaliseUrl(m[0]))
   }
-  for (const m of html.matchAll(ATTR_RE)) add(m[1] ?? m[2] ?? m[3] ?? '')
+  // Every URL an attribute carries is somewhere a click or a load goes, so a
+  // decoy label equal to one of them is never dropped, whether or not the
+  // anchor scan managed to read that anchor.
+  const inAttributes = new Set<string>()
+  for (const m of html.matchAll(ATTR_RE)) {
+    const value = m[1] ?? m[2] ?? m[3] ?? ''
+    add(value)
+    inAttributes.add(normaliseUrl(value))
+  }
   for (const m of html.matchAll(CSS_URL_RE)) add(m[1])
   for (const m of html.matchAll(SRCSET_RE)) {
     for (const candidate of (m[1] ?? m[2] ?? '').split(',')) add(candidate.trim().split(/\s+/)[0] ?? '')
@@ -607,7 +649,7 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
     if (href) hrefs.add(href)
     const label = normaliseUrl(
       decodeEntities(m[4] ?? '')
-        .replace(/<[^>]{0,500}>/g, '')
+        .replace(/<[^<>]{0,500}>/g, '')
         .trim()
     )
     if (href && /^https?:\/\//i.test(label)) shown.set(href, label)
@@ -619,7 +661,7 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
   // genuinely clickable in a plain-text client, and deleting it took the
   // actual phishing destination out of the links, the indicators and the case.
   for (const label of shown.values()) {
-    if (!hrefs.has(label) && fromVisibleText.has(label)) raws.delete(label)
+    if (!hrefs.has(label) && !inAttributes.has(label) && fromVisibleText.has(label)) raws.delete(label)
   }
 
   const all = [...raws]
@@ -627,13 +669,21 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
   const out: LinkFinding[] = []
   for (const raw of kept) {
     const { target, wrappedBy } = unwrapUrl(raw)
-    const scheme = (/^([a-z][a-z0-9+.-]{1,15}):/i.exec(target)?.[1] ?? '').toLowerCase()
-    // The authority as WRITTEN, before the parser punycodes or lowercases it.
-    const rawHost = (/^[a-z][a-z0-9+.-]{1,15}:\/\/(?:[^/?#@]*@)?([^/?#:]+)/i.exec(target)?.[1] ?? '').toLowerCase()
+    let scheme = (/^([a-z][a-z0-9+.-]{1,15}):/i.exec(target)?.[1] ?? '').toLowerCase()
+    // The authority as WRITTEN, before the parser punycodes or lowercases it,
+    // read past the leading control run the parser strips.
+    const rawHost = (
+      /^[a-z][a-z0-9+.-]{1,15}:\/\/(?:[^/?#@]*@)?([^/?#:]+)/i.exec(stripLead(target))?.[1] ?? ''
+    ).toLowerCase()
     let host = ''
     let userinfo = ''
     try {
       const parsed = new URL(target)
+      // The parser's own answer, not the pattern's: it strips a leading
+      // control byte or space and every tab or newline, so `%01javascript:`
+      // and `java%09script:` are javascript: links the pattern could not see.
+      // A prefix it does not strip (DEL, NBSP) throws, and gets no scheme.
+      scheme = parsed.protocol.slice(0, -1)
       host = parsed.hostname.toLowerCase()
       userinfo = parsed.username
     } catch {
@@ -1458,6 +1508,42 @@ function utf16Runs(bytes: Uint8Array, cutStart: boolean, cutEnd: boolean): strin
 }
 
 /**
+ * The Links section's own words, shared by the report and the Links tab so the
+ * two cannot drift apart.
+ *
+ * Scoped to the message text, because that is all extractLinks reads: a mail
+ * whose only lure is a PDF /URI said "Links: None found." above an Attachments
+ * section listing it. The pointer to Attachments is there whenever there are
+ * attachments, whatever the readers found, because a note that appears only
+ * sometimes reads as "none" when it is missing.
+ */
+export function linksSection(report: Pick<PhishReport, 'links' | 'attachments'>): {
+  heading: string
+  none: string
+  notes: string[]
+} {
+  return {
+    heading: 'Links in the message text',
+    none: 'None found in the message text.',
+    notes: [
+      ...(report.links.some(showsDerivedDomain)
+        ? [
+            'Derived domain = the host’s last two labels, or three under a two-label suffix; no public suffix list is consulted, so under a hosting platform (pages.dev, github.io) it names the platform, not the site’s owner.'
+          ]
+        : []),
+      ...(report.attachments.length
+        ? ['Anything found inside an attachment is listed with that attachment, under Attachments.']
+        : [])
+    ]
+  }
+}
+
+/** A link row prints its derived domain only when it says something the host does not. */
+export function showsDerivedDomain(link: LinkFinding): boolean {
+  return Boolean(link.apexDomain) && link.apexDomain !== link.host
+}
+
+/**
  * The whole analysis as markdown, for the clipboard or a case description.
  *
  * Every sender-controlled value goes through quoteUntrusted, because this text
@@ -1472,20 +1558,22 @@ export function formatPhishReport(report: PhishReport): string {
     for (const fact of report.senderFacts) lines.push(`- ${quoteUntrusted(fact)}`)
     lines.push('')
   }
-  lines.push('### Links', '')
+  const section = linksSection(report)
+  lines.push(`### ${section.heading}`, '')
   if (report.links.length) {
     for (const link of report.links) {
       const wrapped = link.wrappedBy ? ` (unwrapped from ${link.wrappedBy})` : ''
       lines.push(`- ${quoteUntrusted(defangIoc(link.target, 'url'))}${wrapped}`)
-      if (link.apexDomain && link.apexDomain !== link.host) {
-        lines.push(`  - domain ${quoteUntrusted(defangIoc(link.apexDomain, 'domain'))}`)
+      if (showsDerivedDomain(link)) {
+        lines.push(`  - derived domain ${quoteUntrusted(defangIoc(link.apexDomain, 'domain'))}`)
       }
       for (const flag of link.flags) lines.push(`  - ${quoteUntrusted(flag)}`)
     }
     if (report.droppedLinks > 0) lines.push(`- ${report.droppedLinks} further links are not listed.`)
   } else {
-    lines.push('None found.')
+    lines.push(section.none)
   }
+  for (const note of section.notes) lines.push('', note)
   lines.push('', '### Attachments', '')
   if (report.attachments.length) {
     for (const a of report.attachments) {

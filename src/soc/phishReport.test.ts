@@ -853,3 +853,39 @@ describe('end to end, on files shaped like the real thing', () => {
     for (let i = 0; i < 60; i++) expect(report.indicators).toContain(`url: hxxps://l${i}[.]test/x`)
   })
 })
+
+describe('the Links section says what it read', () => {
+  it('names the derived domain for what it is', async () => {
+    // Under an unlisted country suffix the domain line named the suffix itself.
+    const md = formatPhishReport(
+      await analysePhishing(
+        'Content-Type: text/plain\n\nSign in at https://secure.bank-verify.co.id/login today',
+        [],
+        []
+      )
+    )
+    expect(md).toContain('  - derived domain `bank-verify[.]co[.]id`')
+    expect(md).toContain(
+      'Derived domain = the host’s last two labels, or three under a two-label suffix; no public suffix list is consulted, so under a hosting platform (pages.dev, github.io) it names the platform, not the site’s owner.'
+    )
+  })
+
+  it('is scoped to the message text, and points at the attachments whenever there are any', async () => {
+    // "Links: None found." sat above an Attachments section holding the lure.
+    const lure = ascii(pdf('<< /Type /Catalog >>', '<< /A << /S /URI /URI (https://pdf-lure.test/x) >> >>'))
+    const page = ascii('<html><body><a href="https://html-lure.test/x">open</a></body></html>')
+    const md = formatPhishReport(
+      await analysePhishing(
+        mailWith(attached('Scan.pdf', lure, 'application/pdf'), attached('Remittance.html', page, 'text/html')),
+        [],
+        []
+      )
+    )
+    expect(md).toContain(
+      '### Links in the message text\n\nNone found in the message text.\n\n' +
+        'Anything found inside an attachment is listed with that attachment, under Attachments.\n\n### Attachments'
+    )
+    const bare = formatPhishReport(await analysePhishing('Content-Type: text/plain\n\nno links here', [], []))
+    expect(bare).toContain('### Links in the message text\n\nNone found in the message text.\n\n### Attachments')
+  })
+})
