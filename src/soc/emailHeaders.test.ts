@@ -305,3 +305,52 @@ describe('PhishTool parity on the header model', () => {
     expect(labels.find((i) => i.label === 'In-Reply-To')?.value).toBe('not recorded')
   })
 })
+
+describe('hostile header sizes stay linear', () => {
+  // Header values have no length cap. Each of these took seconds through a
+  // regex that retried from every position of a long run.
+  it.each([
+    ['a run of escaped quotes', 'From: ' + '\\"'.repeat(50_000)],
+    ['a run of escaped parens', 'From: ' + '\\('.repeat(50_000)],
+    ['a run of open brackets', 'From: ' + '<'.repeat(100_000)],
+    ['a domain of dots', 'From: <x@' + '.'.repeat(100_000) + 'a>'],
+    ['a long bare display name', 'From: ' + 'a'.repeat(100_000) + ' <x@y.test>'],
+    ['a long quoted display name', 'From: "' + 'a'.repeat(100_000) + '" <x@y.test>'],
+    ['a Received tail of open parens', 'Received: from a.test by b.test; ' + '('.repeat(100_000)]
+  ])('%s', (_, raw) => {
+    const started = performance.now()
+    analyseHeaders(raw)
+    expect(performance.now() - started).toBeLessThan(2000)
+  })
+
+  it('still finds an address padded behind 2000 spaces in the display name', () => {
+    const a = analyseHeaders('From: "' + ' '.repeat(2000) + 'service@paypal.test" <evil@evil.test>')
+    expect(a.observations.map((o) => o.text)).toContain(
+      'The display name contains an address at paypal.test, which is not the sending domain.'
+    )
+  })
+
+  it('reads the same address the regexes it replaced read', () => {
+    // The old strips, kept as the reference: the scanners are meant to be
+    // exact, not merely fast.
+    const byRegex = (value: string): string => {
+      let unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '')
+      for (let i = 0; i < 6; i++) {
+        const next = unquoted.replace(/\((?:[^()\\]|\\.)*\)/g, ' ')
+        if (next === unquoted) break
+        unquoted = next
+      }
+      const angled = [...unquoted.matchAll(/<([^>]*)>/g)]
+      return (angled.length ? angled[angled.length - 1][1] : unquoted).trim().replace(/^mailto:/i, '')
+    }
+    let seed = 7
+    const next = (): number => (seed = (seed * 48_271) % 2_147_483_647)
+    const alphabet = 'a.@<>()"\\ '
+    const differ: string[] = []
+    for (let n = 0; n < 20_000; n++) {
+      const s = Array.from({ length: next() % 24 }, () => alphabet[next() % alphabet.length]).join('')
+      if (addressOf(s) !== byRegex(s)) differ.push(s)
+    }
+    expect(differ).toEqual([])
+  })
+})

@@ -145,25 +145,87 @@ export function addressOf(value: string): string {
   // `From: (<bounce@mailer.test>) security@microsoft.com` used to be read as
   // the bouncer's domain, and the From/Return-Path panel reported alignment
   // on a mail that had none. Comments nest, so the strip runs to a fixed point.
-  let unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '')
-  for (let i = 0; i < 6; i++) {
-    const next = unquoted.replace(/\((?:[^()\\]|\\.)*\)/g, ' ')
-    if (next === unquoted) break
-    unquoted = next
+  const unquoted = stripComments(stripQuoted(value))
+  // The last `<…>` pair, found by walking forward from each `<` to the next
+  // `>`. A regex did the same, but retried from every `<` of a run with no `>`
+  // after it: quadratic, seconds on a From of 40,000 of them.
+  let angled: string | null = null
+  for (let open = unquoted.indexOf('<'); open >= 0;) {
+    const close = unquoted.indexOf('>', open + 1)
+    if (close < 0) break
+    angled = unquoted.slice(open + 1, close)
+    open = unquoted.indexOf('<', close + 1)
   }
-  const angled = [...unquoted.matchAll(/<([^>]*)>/g)]
-  const raw = (angled.length ? angled[angled.length - 1][1] : unquoted).trim()
-  return raw.replace(/^mailto:/i, '')
+  return (angled ?? unquoted).trim().replace(/^mailto:/i, '')
+}
+
+/**
+ * Remove every complete quoted string, in one pass: a `\` takes the next
+ * character with it, and an unterminated quote ends the scan with the rest
+ * kept as written. Nothing after it can close — every later `"` sits inside
+ * the same open run — which is what the regex this replaces found too, after
+ * retrying from each later quote: quadratic, seconds on 50,000 `\"`. The one
+ * difference: a `\` before a line terminator (U+2028 or U+2029, in a header
+ * value) escapes it here, where the regex's `.` refused it and paired the
+ * quotes after it differently.
+ */
+function stripQuoted(value: string): string {
+  let out = ''
+  let kept = 0
+  for (let open = value.indexOf('"'); open >= 0; open = value.indexOf('"', kept)) {
+    let i = open + 1
+    while (i < value.length && value[i] !== '"') i += value[i] === '\\' ? 2 : 1
+    if (i >= value.length) break
+    out += value.slice(kept, open)
+    kept = i + 1
+  }
+  return out + value.slice(kept)
+}
+
+/**
+ * Replace every RFC 5322 comment with a space, innermost first, to a fixed
+ * point: comments nest. Each pass is one left-to-right scan. A comment that
+ * meets another `(` before its `)` is not innermost, so the scan restarts
+ * there; one that reaches the end cannot close, and neither can anything
+ * after it. The regex this replaces gave the same answer, bar the same `\`
+ * before a line terminator as stripQuoted, but retried from every `(` of an
+ * unclosed run — seconds on 50,000 `\(`.
+ */
+function stripComments(value: string): string {
+  let text = value
+  // ponytail: six levels of nesting; deeper comments stay in the text.
+  for (let pass = 0; pass < 6; pass++) {
+    let out = ''
+    let kept = 0
+    let open = text.indexOf('(')
+    while (open >= 0) {
+      let i = open + 1
+      while (i < text.length && text[i] !== '(' && text[i] !== ')') i += text[i] === '\\' ? 2 : 1
+      if (i >= text.length) break
+      if (text[i] === '(') {
+        open = i
+        continue
+      }
+      out += text.slice(kept, open) + ' '
+      kept = i + 1
+      open = text.indexOf('(', kept)
+    }
+    const next = out + text.slice(kept)
+    if (next === text) break
+    text = next
+  }
+  return text
 }
 
 function domainOf(address: string): string {
   const at = address.lastIndexOf('@')
-  return at < 0
-    ? ''
-    : address
-        .slice(at + 1)
-        .toLowerCase()
-        .replace(/[>.]+$/, '')
+  if (at < 0) return ''
+  const domain = address.slice(at + 1).toLowerCase()
+  // Trailing `>` and `.` trimmed by walking back. The regex this replaces
+  // retried from every dot of a run: seconds on a domain of 80 KB of dots.
+  let end = domain.length
+  while (end > 0 && (domain[end - 1] === '>' || domain[end - 1] === '.')) end--
+  return domain.slice(0, end)
 }
 
 function parseHop(value: string, n: number): Hop {
@@ -174,11 +236,12 @@ function parseHop(value: string, n: number): Hop {
   const id = /\bid\s+([^\s;()]+)/i.exec(value)
   const forWhom = /\bfor\s+<?([^\s;()<>]+)>?/i.exec(value)
   // The date is whatever follows the LAST semicolon: ids and `for` clauses can
-  // carry semicolons of their own, and the timestamp is always the tail.
-  const tail = value
-    .slice(value.lastIndexOf(';') + 1)
-    .replace(/\([^)]*\)\s*$/, '')
-    .trim()
+  // carry semicolons of their own, and the timestamp is always the tail. A
+  // trailing comment such as "(UTC)" is cut by index — from the first `(`
+  // after the `)` before it — where a regex retried from every `(`.
+  const trailing = value.slice(value.lastIndexOf(';') + 1).trimEnd()
+  const open = trailing.endsWith(')') ? trailing.indexOf('(', trailing.lastIndexOf(')', trailing.length - 2) + 1) : -1
+  const tail = (open < 0 ? trailing : trailing.slice(0, open)).trim()
   const ms = value.includes(';') ? Date.parse(tail) : Number.NaN
   return {
     n,
@@ -341,7 +404,10 @@ export function analyseHeaders(raw: string): HeaderAnalysis {
   const fromRaw = first('from')
   const lastAngle = fromRaw.lastIndexOf('<')
   const displayPart = lastAngle > 0 ? fromRaw.slice(0, lastAngle) : ''
-  const hidden = /([\w.+-]+@[\w.-]+)/.exec(displayPart)
+  // A scan starts only where a run of address characters starts. Unanchored,
+  // it restarted at every character of a long run with no `@`: seconds on a
+  // 100 KB display name, even an innocent quoted one.
+  const hidden = /(?:^|[^\w.+-])([\w.+-]+@[\w.-]+)/.exec(displayPart)
   const hiddenDomain = hidden ? domainOf(hidden[1]) : ''
   if (hiddenDomain && hiddenDomain !== domainOf(fromAddr)) {
     observations.push({
