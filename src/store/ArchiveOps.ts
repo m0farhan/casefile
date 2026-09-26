@@ -1,11 +1,11 @@
 import type { App } from 'obsidian'
-import { TFile, normalizePath } from 'obsidian'
+import { TFile, TFolder, normalizePath } from 'obsidian'
 import type { Project, StatusConfig, Task } from '../types'
 import { parsePlainDate } from '../dates'
 import { isTerminalStatus } from '../utils'
 import { findParentId, findTaskById } from './TaskIndex'
 import { flattenTasks, repointDescendantFiles } from './TaskTreeOps'
-import { ensureFolder, moveTaskAttachmentFolder } from './vaultFs'
+import { ensureFolder, isSharedTaskFolder, moveTaskAttachmentFolder } from './vaultFs'
 import { taskFolderForProjectPath } from './layout'
 
 /** Get the task subfolder path for a project */
@@ -27,12 +27,41 @@ function markCarried(task: Task, carried: { from: string; to: string }, archived
   }
 }
 
-export async function archiveTask(app: App, project: Project, taskId: string): Promise<void> {
+/**
+ * Mark a move as the plugin's own write before it is made: the note at both
+ * ends, and its own folder with everything the folder carries. Unmarked, the
+ * move's events marked the board stale, and the refresh they forced swapped
+ * every case object on it, under an editor that was open on one.
+ */
+function markMove(app: App, markSelfWrite: (path: string) => void, from: string, to: string, root: string): void {
+  markSelfWrite(from)
+  markSelfWrite(to)
+  const folderFrom = from.replace(/\.md$/, '')
+  const folderTo = to.replace(/\.md$/, '')
+  // A shared folder (Archive, attachments) stays put: moveTaskAttachmentFolder leaves it.
+  if (isSharedTaskFolder(app, root, folderFrom) || isSharedTaskFolder(app, root, folderTo)) return
+  // ponytail: one mark per file the folder holds, both ends; its cost is the case's own files.
+  const walk = (path: string): void => {
+    markSelfWrite(path)
+    markSelfWrite(folderTo + path.slice(folderFrom.length))
+    const node = app.vault.getAbstractFileByPath(path)
+    if (node instanceof TFolder) for (const child of node.children) walk(child.path)
+  }
+  walk(folderFrom)
+}
+
+export async function archiveTask(
+  app: App,
+  project: Project,
+  taskId: string,
+  markSelfWrite: (path: string) => void
+): Promise<void> {
   const task = findTaskById(project, taskId)
   if (!task || !task.filePath) return
 
   const taskFolder = projectTaskFolder(project)
   const archiveFolder = normalizePath(taskFolder + '/Archive')
+  markSelfWrite(archiveFolder)
   await ensureFolder(app, archiveFolder)
 
   const fileName = task.filePath.split('/').pop()
@@ -42,8 +71,9 @@ export async function archiveTask(app: App, project: Project, taskId: string): P
   const file = app.vault.getAbstractFileByPath(task.filePath)
   if (file instanceof TFile) {
     const oldPath = task.filePath
+    markMove(app, markSelfWrite, oldPath, newPath, taskFolder)
     await app.vault.rename(file, newPath)
-    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath, projectTaskFolder(project))
+    const carried = await moveTaskAttachmentFolder(app, oldPath, newPath, taskFolder)
     // ponytail: nested subtask files ride along with the folder — archiving a
     // parent carries its subtree into Archive, archived with it.
     if (carried) markCarried(task, carried, true)
@@ -52,7 +82,12 @@ export async function archiveTask(app: App, project: Project, taskId: string): P
   }
 }
 
-export async function unarchiveTask(app: App, project: Project, taskId: string): Promise<void> {
+export async function unarchiveTask(
+  app: App,
+  project: Project,
+  taskId: string,
+  markSelfWrite: (path: string) => void
+): Promise<void> {
   const task = findTaskById(project, taskId)
   if (!task || !task.filePath) return
 
@@ -66,12 +101,14 @@ export async function unarchiveTask(app: App, project: Project, taskId: string):
       : projectTaskFolder(project)
   const fileName = task.filePath.split('/').pop()
   if (!fileName) return
+  markSelfWrite(destFolder)
   await ensureFolder(app, destFolder)
   const newPath = normalizePath(destFolder + '/' + fileName)
 
   const file = app.vault.getAbstractFileByPath(task.filePath)
   if (file instanceof TFile) {
     const oldPath = task.filePath
+    markMove(app, markSelfWrite, oldPath, newPath, projectTaskFolder(project))
     await app.vault.rename(file, newPath)
     const carried = await moveTaskAttachmentFolder(app, oldPath, newPath, projectTaskFolder(project))
     if (carried) markCarried(task, carried, false)

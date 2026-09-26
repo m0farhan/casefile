@@ -6,6 +6,7 @@ import { slaState } from '../soc/sla'
 import {
   DEFAULT_SETTINGS,
   DEFAULT_SLA_POLICIES,
+  makeDefaultFilter,
   makeTask,
   type PMSettings,
   type Project,
@@ -13,9 +14,11 @@ import {
   type Task
 } from '../types'
 import { inferIssueKeyPrefix, NestedBoardError, ProjectStore } from './ProjectStore'
-import { parseFrontmatter } from './YamlParser'
+import { parseFrontmatter, splitCommentsSection } from './YamlParser'
 import { buildTaskIndex } from './TaskIndex'
 import { findTask, flattenTasks } from './TaskTreeOps'
+import type { TaskNotesTaskInfo } from '../integrations/tasknotes'
+import { buildImportForest } from '../integrations/tasknotesImport'
 
 const expectDefined = <T>(value: T | null | undefined, message = 'expected value to be defined'): T => {
   if (value == null) throw new Error(message)
@@ -44,8 +47,8 @@ function folderAt(vault: FakeVault, path: string): TFolder {
   return f
 }
 
-function newStore(): { store: ProjectStore; vault: FakeVault; app: App } {
-  const { app, vault } = makeFakeApp()
+function newStore(opts: { warmCache?: boolean } = {}): { store: ProjectStore; vault: FakeVault; app: App } {
+  const { app, vault } = makeFakeApp(opts)
   const store = new ProjectStore(app as unknown as App, () => SETTINGS)
   return { store, vault, app: app as unknown as App }
 }
@@ -1004,8 +1007,8 @@ describe('ProjectStore project cache', () => {
 
 describe('ProjectStore one object per board', () => {
   /** A store listening to the vault's events, as the plugin wires it at load. */
-  function newWatchedStore(): ReturnType<typeof newStore> {
-    const made = newStore()
+  function newWatchedStore(opts: { warmCache?: boolean } = {}): ReturnType<typeof newStore> {
+    const made = newStore(opts)
     made.store.registerCacheInvalidation({ registerEvent: () => undefined } as unknown as Plugin)
     return made
   }
@@ -1143,6 +1146,113 @@ describe('ProjectStore one object per board', () => {
     expect(await store.loadProject(fileAt(vault, 'IR/Goals/Goals.md'))).toBe(project)
     expect(project.detached).toBeUndefined()
     expect(project.tasks.map((t) => t.title)).toEqual(['Phish A'])
+  })
+
+  /** The journal entries a case note holds on disk, by text. */
+  async function journal(vault: FakeVault, path: string | undefined): Promise<string[]> {
+    const { body } = parseFrontmatter(await vault.cachedRead(fileAt(vault, path)))
+    return splitCommentsSection(body).comments.map((c) => c.text)
+  }
+
+  /**
+   * Sync changes the case `other`, and the next edit re-reads the board: every
+   * case object on it is then a new one read through the metadata cache,
+   * with no journal in memory.
+   */
+  async function refreshedBySync(store: ProjectStore, vault: FakeVault, project: Project, other: Task): Promise<void> {
+    await later(async () => {
+      await vault.process(fileAt(vault, other.filePath), (c) => c + '\nsynced\n')
+    })
+    await store.updateTask(project, other.id, { severity: 'sev2' })
+  }
+
+  it('a journal entry added to a case after the board re-read itself lands on disk', async () => {
+    const { store, vault } = newWatchedStore({ warmCache: true })
+    const project = await store.createProject('Journal', 'Projects')
+    const task = await addNamed(store, project, 'X')
+    const other = await addNamed(store, project, 'Y')
+    const first = { at: '2026-09-01 10:00', text: 'first' }
+    await store.updateTask(project, task.id, { comments: [first] })
+
+    await refreshedBySync(store, vault, project, other)
+    expect(findTask(project.tasks, task.id)).not.toBe(task)
+    await store.updateTask(project, task.id, { comments: [first, { at: '2026-09-01 11:00', text: 'second' }] })
+    expect(await journal(vault, task.filePath)).toEqual(['first', 'second'])
+  })
+
+  it('a description edit to a case after the board re-read itself keeps its journal', async () => {
+    const { store, vault } = newWatchedStore({ warmCache: true })
+    const project = await store.createProject('Journal', 'Projects')
+    const task = await addNamed(store, project, 'X')
+    const other = await addNamed(store, project, 'Y')
+    await store.updateTask(project, task.id, { comments: [{ at: '2026-09-01 10:00', text: 'first' }] })
+
+    await refreshedBySync(store, vault, project, other)
+    await store.updateTasks(project, [task.id], { description: 'new desc' })
+    expect(await journal(vault, task.filePath)).toEqual(['first'])
+    await refreshedBySync(store, vault, project, other)
+    await store.updateTask(project, task.id, { description: 'newer desc' })
+    expect(await journal(vault, task.filePath)).toEqual(['first'])
+  })
+
+  it('archiving or restoring a case does not make the board re-read its other cases', async () => {
+    const { store, vault } = newWatchedStore({ warmCache: true })
+    const project = await store.createProject('Arch', 'Projects')
+    const task = await addNamed(store, project, 'X')
+    const done = makeTask({ title: 'Y', status: 'done' })
+    await store.insertTask(project, done)
+    await store.saveTaskAttachment(project, done, 'shot.png', new ArrayBuffer(1))
+    const live = findTask(project.tasks, task.id)
+
+    await later(() => store.archiveTask(project, done.id))
+    expect(vault.getAbstractFileByPath('Projects/Arch/Tasks/Archive/Y/attachments/shot.png')).toBeInstanceOf(TFile)
+    expect(findTask(project.tasks, task.id)).toBe(live)
+    await later(() => store.unarchiveTask(project, done.id))
+    expect(vault.getAbstractFileByPath('Projects/Arch/Tasks/Y/attachments/shot.png')).toBeInstanceOf(TFile)
+    expect(findTask(project.tasks, task.id)).toBe(live)
+  })
+
+  /** The board note's frontmatter as it is on disk. */
+  async function boardOnDisk(vault: FakeVault, project: Project): Promise<Record<string, unknown> | null> {
+    return parseFrontmatter(await vault.cachedRead(fileAt(vault, project.filePath))).frontmatter
+  }
+
+  /** Another device adds a team member to the board; Sync delivers the note. */
+  function addSamOutside(vault: FakeVault, project: Project): Promise<void> {
+    return later(async () => {
+      await vault.process(fileAt(vault, project.filePath), (c) => c.replace('teamMembers: []', 'teamMembers: ["sam"]'))
+    })
+  }
+
+  it("a board-level save keeps an outside edit to the board note and writes the caller's own", async () => {
+    const { store, vault } = newWatchedStore()
+    const project = await store.createProject('Team', 'Projects')
+    await addNamed(store, project, 'Case')
+    await addSamOutside(vault, project)
+    expect((await boardOnDisk(vault, project))?.teamMembers).toEqual(['sam'])
+
+    project.color = '#123456' // the board dialog's edit, then its save
+    await store.saveProject(project)
+    const fm = await boardOnDisk(vault, project)
+    expect(fm?.teamMembers).toEqual(['sam'])
+    expect(fm?.color).toBe('#123456')
+    expect(project.teamMembers).toEqual(['sam'])
+  })
+
+  it('an edit after an outside change to the board note keeps a board field the caller has not saved yet', async () => {
+    const { store, vault } = newWatchedStore()
+    const project = await store.createProject('Views', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    const view = { id: 'v1', name: 'Mine', filter: makeDefaultFilter(), sortKey: 'due', sortDir: 'asc' as const }
+    project.savedViews = [view] // set by a caller that saves with its next edit
+    await addSamOutside(vault, project)
+
+    await store.updateTask(project, task.id, { severity: 'sev2' })
+    expect(project.savedViews).toEqual([view])
+    expect(project.teamMembers).toEqual(['sam'])
+    const fm = await boardOnDisk(vault, project)
+    expect(fm?.teamMembers).toEqual(['sam'])
+    expect(fm?.savedViews).toHaveLength(1)
   })
 })
 
@@ -1297,6 +1407,39 @@ describe('ProjectStore.importTaskForest', () => {
     expect(frontmatter).toMatchObject({ contexts: ['@soc'], source: 'ticket' })
     expect(frontmatter).not.toHaveProperty('scheduled')
     expect(frontmatter).not.toHaveProperty('dateCreated')
+  })
+
+  it('a move keeps the project and blockedBy links, and the running time entry, that did not map onto the case', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('TnLinks', 'Projects')
+    const running = { startTime: '2026-09-26T09:00:00Z' }
+    const finished = { startTime: '2026-09-25T09:00:00Z', endTime: '2026-09-25T10:00:00Z' }
+    const src = await vault.create(
+      'TN/Patch.md',
+      `---\ntitle: Patch\nprojects: ["[[Q3 Goals]]"]\nblockedBy: ["[[Vendor reply]]"]\ntimeEntries: ${JSON.stringify([finished, running])}\n---\nNotes.`
+    )
+    const info = { path: src.path, title: 'Patch', status: 'open', priority: 'normal', archived: false }
+    const { roots } = buildImportForest(
+      [
+        {
+          path: src.path,
+          info: { ...info, projects: ['[[Q3 Goals]]'], timeEntries: [finished, running] } as TaskNotesTaskInfo,
+          parentPaths: ['Q3 Goals.md'],
+          blockedByPaths: ['Vendor reply.md']
+        }
+      ],
+      { defaultStatus: 'todo', defaultPriority: 'medium', taskTag: 'task', archiveTag: 'archived' }
+    )
+    const task = roots[0]
+    await store.importTaskForest(project, roots, new Map([[task.id, src]]), 'move')
+    expect(vault.getAbstractFileByPath('TN/Patch.md')).toBeNull()
+    const { frontmatter } = parseFrontmatter(await vault.read(fileAt(vault, task.filePath)))
+    expect(frontmatter).toMatchObject({
+      projects: ['[[Q3 Goals]]'],
+      blockedBy: ['[[Vendor reply]]'],
+      timeEntries: [running]
+    })
+    expect(task.timeLogs).toHaveLength(1)
   })
 
   it('places archived tasks in the Archive subfolder', async () => {
@@ -2758,6 +2901,37 @@ describe('ProjectStore refuses a title before changing anything', () => {
     }
     expect(t.title).toBe('Named')
     expect(vault.getAbstractFileByPath('Projects/Empty/Tasks/.md')).toBeNull()
+  })
+
+  it("a subtask added or retitled in the parent's editor onto a sibling is refused, and the board still saves", async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Subs', 'Projects')
+    const parent = await addNamed(store, project, 'Parent')
+    await addNamed(store, project, 'Collect logs', parent.id)
+    const other = await addNamed(store, project, 'Other step', parent.id)
+    const base = structuredClone(parent.subtasks)
+
+    const added = makeTask({ title: 'Collect logs' })
+    await expect(
+      store.updateTask(project, parent.id, { subtasks: [...structuredClone(base), added] }, { subtaskBase: base })
+    ).rejects.toThrow('already exists')
+    expect(findTask(project.tasks, added.id)).toBeNull()
+
+    const retitled = structuredClone(base)
+    retitled[1].title = 'Collect logs'
+    await expect(store.updateTask(project, parent.id, { subtasks: retitled }, { subtaskBase: base })).rejects.toThrow(
+      'already exists'
+    )
+    expect(expectDefined(findTask(project.tasks, other.id)).title).toBe('Other step')
+
+    // Under a subtask new in the same edit, only the name is checked: its folder is not on disk yet.
+    const fresh = makeTask({ title: 'New step', subtasks: [makeTask({ title: 'Collect logs' })] })
+    await store.updateTask(project, parent.id, { subtasks: [...structuredClone(base), fresh] }, { subtaskBase: base })
+    expect(vault.getAbstractFileByPath('Projects/Subs/Tasks/Parent/New step/Collect logs.md')).toBeInstanceOf(TFile)
+
+    const unrelated = await addNamed(store, project, 'Unrelated')
+    const fm = parseFrontmatter(await vault.cachedRead(fileAt(vault, project.filePath)))
+    expect(fm.frontmatter?.taskIds).toEqual([parent.id, unrelated.id])
   })
 })
 

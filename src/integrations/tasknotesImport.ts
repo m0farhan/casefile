@@ -51,18 +51,16 @@ function mapRecurrence(rrule: string | undefined): Recurrence | undefined {
  * carries onto the case (under TaskNotes' default names). They are not kept
  * as extra properties beside the case's own, where they would go stale and
  * contradict it after the first edit.
+ *
+ * `projects` and `blockedBy` are not among them: only links to notes in the
+ * same import become a parent or a dependency, so a Move erased every other
+ * one. Kept, they are note links Responder never reads, and cannot
+ * contradict the case. `timeEntries` is, and the entries that did not
+ * become time logs go back onto the case as that property (mapItemToTask).
  * ponytail: default names only; a custom TaskNotes field mapping or a
  * property-based task marker is excluded when the caller passes those names.
  */
-export const TASKNOTES_MAPPED_KEYS = [
-  'scheduled',
-  'completedDate',
-  'dateCreated',
-  'dateModified',
-  'projects',
-  'blockedBy',
-  'timeEntries'
-]
+export const TASKNOTES_MAPPED_KEYS = ['scheduled', 'completedDate', 'dateCreated', 'dateModified', 'timeEntries']
 
 /** One TaskNotes time entry as its API returns it. */
 interface TaskNotesTimeEntry {
@@ -72,25 +70,32 @@ interface TaskNotesTimeEntry {
 }
 
 /**
- * TaskNotes time entries as time logs: the day the entry started, the hours
- * between its start and end, and its description. An entry without a readable
- * start and a later end (one still running) has no duration yet and is left
- * out rather than guessed.
+ * TaskNotes time entries as time logs: the day the entry started, on the
+ * analyst's own calendar as a logged hour is, the hours between its start and
+ * end, and its description. An entry without a readable start and a later
+ * end (one still running) has no duration yet: it is not guessed, and comes
+ * back in `unread` for the case to keep as it was.
  */
-function mapTimeEntries(entries: unknown): Task['timeLogs'] {
-  if (!Array.isArray(entries)) return undefined
+function mapTimeEntries(entries: unknown): { logs: NonNullable<Task['timeLogs']>; unread: unknown[] } {
   const logs: NonNullable<Task['timeLogs']> = []
+  const unread: unknown[] = []
+  if (!Array.isArray(entries)) return { logs, unread }
   for (const e of entries as TaskNotesTimeEntry[]) {
     const start = Date.parse(e?.startTime ?? '')
     const end = Date.parse(e?.endTime ?? '')
-    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) continue
+    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+      unread.push(e)
+      continue
+    }
+    // The local day, not the UTC one: an evening entry west of UTC landed on the next day.
+    const d = new Date(start)
     logs.push({
-      date: new Date(start).toISOString().slice(0, 10),
+      date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
       hours: Math.round(((end - start) / 3_600_000) * 100) / 100,
       note: typeof e.description === 'string' ? e.description : ''
     })
   }
-  return logs.length ? logs : undefined
+  return { logs, unread }
 }
 
 function dateOnly(value: string | undefined): string {
@@ -112,8 +117,11 @@ function mapItemToTask(item: TaskNotesImportItem, opts: TaskNotesImportOptions):
   if (info.timeEstimate && info.timeEstimate > 0) {
     task.timeEstimate = Math.round((info.timeEstimate / 60) * 100) / 100
   }
-  const timeLogs = mapTimeEntries((info as TaskNotesTaskInfo & { timeEntries?: unknown }).timeEntries)
-  if (timeLogs) task.timeLogs = timeLogs
+  const { logs, unread } = mapTimeEntries((info as TaskNotesTaskInfo & { timeEntries?: unknown }).timeEntries)
+  if (logs.length) task.timeLogs = logs
+  // A Move rewrites the note, so an entry that is not a time log stays on it
+  // as the TaskNotes property it was. JSON-cloned: the API may hand out its own objects.
+  if (unread.length) task.extraFrontmatter = { timeEntries: JSON.parse(JSON.stringify(unread)) as unknown[] }
   if (info.dateCreated) task.createdAt = info.dateCreated
   if (info.dateModified) task.updatedAt = info.dateModified
   if (info.archived) task.archived = true
@@ -124,7 +132,8 @@ function mapItemToTask(item: TaskNotesImportItem, opts: TaskNotesImportOptions):
  * Convert resolved TaskNotes tasks into a task forest: project links between
  * imported tasks become parent/child edges (first match wins, cycles break to
  * root), and blockedBy references between imported tasks become dependencies.
- * References to notes outside the import selection are dropped.
+ * References to notes outside the import selection are not mapped; the
+ * note keeps them as its own `projects`/`blockedBy` properties.
  */
 export function buildImportForest(
   items: TaskNotesImportItem[],

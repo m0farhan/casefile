@@ -53,6 +53,11 @@ export class FakeVault {
     return [...this.files.values()].map((f) => f.file).filter((f) => f.extension === 'md')
   }
 
+  /** A note's content as it is now, read synchronously as a caught-up metadataCache has it. */
+  contentOf(path: string): string | undefined {
+    return this.files.get(normalizePath(path))?.content
+  }
+
   async cachedRead(file: TFile): Promise<string> {
     return this.files.get(file.path)?.content ?? ''
   }
@@ -194,7 +199,11 @@ export class FakeVault {
   }
 }
 
-export function makeFakeApp(): { app: FakeAppLike; vault: FakeVault } {
+/**
+ * `warmCache`: the metadataCache answers from each note as it is now, as
+ * Obsidian's does once it has indexed it, so the store takes its fast path.
+ */
+export function makeFakeApp(opts: { warmCache?: boolean } = {}): { app: FakeAppLike; vault: FakeVault } {
   const vault = new FakeVault()
   const app: FakeAppLike = {
     vault,
@@ -213,10 +222,16 @@ export function makeFakeApp(): { app: FakeAppLike; vault: FakeVault } {
         })
       }
     },
-    // Minimal metadataCache: always misses, forcing the store's fallback read+parse path.
-    // Tests that want to exercise the cache hit can override this per-test.
+    // Minimal metadataCache: always misses, forcing the store's fallback read+parse path,
+    // unless warm. Tests that want a particular cache hit can override this per-test.
     metadataCache: {
-      getFileCache: () => null
+      getFileCache: opts.warmCache
+        ? (file: TFile) => {
+            const content = vault.contentOf(file.path)
+            const frontmatter = content === undefined ? null : splitFrontmatter(content).frontmatter
+            return frontmatter ? { frontmatter } : null
+          }
+        : () => null
     }
   }
   return { app, vault }
