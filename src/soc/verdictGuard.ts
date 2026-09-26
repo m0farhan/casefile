@@ -8,16 +8,21 @@ import { isTerminalStatus } from '../utils'
  * Returns extra patch fields to merge ({ verdict } or {} for "close without"),
  * or null when the user cancels the close entirely. UI-layer only — the store
  * never blocks a write. The bulk status change runs it too, once for every
- * selected incident without a verdict (see BulkActionBar).
+ * selected incident without a verdict (see BulkActionBar), passing `count` so
+ * the prompt says how many incidents the one answer covers.
  */
 export async function guardVerdictOnClose(
   plugin: PMPlugin,
   project: Project,
   task: Task,
-  newStatus: string
+  newStatus: string,
+  count = 1
 ): Promise<Partial<Task> | null> {
   if (task.issueType !== 'incident' || task.verdict) return {}
   const config = plugin.store.configFor(project)
+  // A plain board records no verdict, whatever the issue type: it keeps no
+  // SOC fields, so the close goes ahead with nothing to ask.
+  if (config.boardType === 'plain') return {}
   if (!isTerminalStatus(newStatus, config.statuses)) return {}
 
   return new Promise((resolve) => {
@@ -31,10 +36,17 @@ export async function guardVerdictOnClose(
     const modal = new (class extends Modal {
       onOpen(): void {
         this.modalEl.addClass('pm-confirm-modal')
-        this.contentEl.createEl('h3', { text: 'Verdict for this incident?' })
+        // The bulk answer lands only on incidents still without a verdict when
+        // it is written, so the plural hint says "each … that has none", not "all".
+        this.contentEl.createEl('h3', {
+          text: count > 1 ? `Verdict for these ${count} incidents?` : 'Verdict for this incident?'
+        })
         this.contentEl.createEl('p', {
           cls: 'pm-modal-hint',
-          text: 'Closing an incident records its verdict. Pick one, or close without.'
+          text:
+            count > 1
+              ? 'The verdict you pick is recorded on each selected incident that has none. Pick one, or close them all without.'
+              : 'Closing an incident records its verdict. Pick one, or close without.'
         })
         const list = this.contentEl.createDiv('pm-verdict-list')
         for (const v of config.verdicts) {

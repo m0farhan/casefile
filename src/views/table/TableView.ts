@@ -107,9 +107,6 @@ export class TableView implements SubView {
 
     try {
       switch (action.type) {
-        case 'set-status':
-          await this.plugin.store.updateTasks(this.project, ids, { status: action.status })
-          break
         case 'set-assignee':
           if (action.assignee === '') {
             await this.plugin.store.updateTasks(this.project, ids, { assignees: [] })
