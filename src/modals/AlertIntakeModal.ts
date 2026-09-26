@@ -4,8 +4,9 @@ import { type Project, type Task, makeTask } from '../types'
 import { TaskFileNameConflictError } from '../store'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
+import { BOARD_REFUSAL, TITLE_REFUSAL } from './TaskModal'
 import { parseAlertPaste, type ParsedAlert } from '../soc/alertIntake'
-import { assetRule, iocSightings } from '../soc/ioc'
+import { assetRule, sightingsIndex } from '../soc/ioc'
 import { suggestCategory } from '../soc/alertCategory'
 
 const EMPTY_PARSE: ParsedAlert = {
@@ -163,8 +164,10 @@ export class AlertIntakeModal extends Modal {
     const searched = this.parsed.iocs.filter((i) => !assetRule(i.value, owned))
     const notSearched = this.parsed.iocs.length - searched.length
     let seen = 0
+    // One board walk per preview, not one per indicator: this runs on every keystroke in the paste box.
+    const lookup = sightingsIndex(this.project.tasks, '', owned)
     for (const ioc of searched) {
-      const hits = iocSightings(ioc.value, this.project.tasks, '', owned)
+      const hits = lookup(ioc.value)
       if (hits.length) seen++
       for (const h of hits) byCase.set(h.taskId, h)
     }
@@ -272,6 +275,11 @@ export class AlertIntakeModal extends Modal {
     } catch (err) {
       if (err instanceof TaskFileNameConflictError) {
         new Notice(`Case not created: a note named "${err.fileName}" already exists.`)
+        return
+      }
+      // The store's own refusals say why (see TaskModal).
+      if (err instanceof Error && (err.message.startsWith(TITLE_REFUSAL) || err.message.startsWith(BOARD_REFUSAL))) {
+        new Notice(`Case not created. ${err.message}`)
         return
       }
       throw err

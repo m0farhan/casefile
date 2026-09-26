@@ -24,6 +24,7 @@ import {
 } from './reputation'
 
 const IOC_TYPES = Object.keys(IOC_TYPE_LABELS) as IocType[]
+const NO_SHAPE = 'Not an address, host or hash a provider can look up — nothing sent'
 
 function renderTypeSelect(parent: HTMLElement, value: IocType): HTMLSelectElement {
   const sel = parent.createEl('select', { cls: 'pm-prop-select pm-ioc-type' })
@@ -46,6 +47,8 @@ interface RepChip {
   summary: string
   link: string
   queried: string
+  /** The lookup failed for now (rate limit, server or network error); Check all asks again. */
+  transient?: true
 }
 
 export function renderIocSection(
@@ -65,14 +68,15 @@ export function renderIocSection(
      */
     ownedAssets: () => string[]
     /**
-     * Cross-case sightings of a (refanged) value — cases other than this one
-     * holding the same indicator. Absent = no seen-before hints render.
+     * Cross-case sightings: called once per render, it returns a lookup from a
+     * (refanged) value to the other cases holding the same indicator, so the
+     * board is walked once and not once per row. Absent = no seen-before hints.
      */
-    // ponytail: the asset suppression lives inside iocSightings, whose `owned`
+    // ponytail: the asset suppression lives inside sightingsIndex, whose `owned`
     // argument is required, so every caller is compiler-forced. A future host
     // that hand-rolls findSightings instead would bypass it — wire it through
-    // iocSightings like the three current hosts do.
-    findSightings?: (value: string) => { key: string; title: string }[]
+    // sightingsIndex like the three current hosts do.
+    findSightings?: () => (value: string) => { key: string; title: string }[]
   }
 ): void {
   const section = container.createDiv('pm-modal-section pm-ioc-section')
@@ -166,6 +170,12 @@ export function renderIocSection(
       new Notice(`Your own asset (${asset.rule}) — recorded on the case, never sent to a reputation provider`)
       return
     }
+    // A path, a mailbox in brackets or free text is no lookup a provider
+    // answers, keys or not: say that, rather than send the analyst to settings.
+    if (!hasIocShape(ioc.value)) {
+      new Notice(NO_SHAPE)
+      return
+    }
     const reqs = buildRequests(ioc.type, ioc.value, opts.reputationKeys ?? {}, owned)
     if (!reqs.length) {
       new Notice('No reputation provider covers this indicator — add keys in the plugin settings')
@@ -199,7 +209,7 @@ export function renderIocSection(
           })
           return { ...base, ...parseReputation(req.provider, res.status, res.text) }
         } catch {
-          return { ...base, verdict: 'unknown', summary: 'network error' }
+          return { ...base, verdict: 'unknown', summary: 'network error', transient: true }
         }
       })
     )
@@ -208,8 +218,10 @@ export function renderIocSection(
   }
 
   // Check every row sequentially, pacing VirusTotal-bearing lookups to its
-  // free tier (vtWaitMs). Rows with a cached result this session are skipped
-  // and counted honestly; rows no configured provider covers are counted too.
+  // free tier (vtWaitMs). Rows with a settled result this session are skipped
+  // and counted honestly; a row whose lookup was rate-limited or failed is
+  // asked again. Rows no provider could look up, and rows no configured
+  // provider covers, are counted apart.
   // Each iteration (and each slice of a pacing wait) re-checks that the rows
   // container is still mounted, so a modal close mid-run stops the loop with
   // at most one short timer left to fire harmlessly.
@@ -228,6 +240,7 @@ export function renderIocSection(
     let checked = 0
     let alreadyChecked = 0
     let uncovered = 0
+    let shapeless = 0
     let assets = 0
     let aborted = false
     const rows = [...task.iocs]
@@ -244,8 +257,13 @@ export function renderIocSection(
           assets++
           continue
         }
-        if (Array.isArray(repCache.get(repKey(ioc)))) {
+        const cached = repCache.get(repKey(ioc))
+        if (Array.isArray(cached) && !cached.some((c) => c.transient)) {
           alreadyChecked++
+          continue
+        }
+        if (!hasIocShape(ioc.value)) {
+          shapeless++
           continue
         }
         const reqs = buildRequests(ioc.type, ioc.value, keys, owned)
@@ -278,6 +296,7 @@ export function renderIocSection(
     const parts = [`Checked ${checked} indicator${checked === 1 ? '' : 's'}`]
     if (alreadyChecked) parts.push(`${alreadyChecked} already checked`)
     if (assets) parts.push(`${assets} your own assets — not sent`)
+    if (shapeless) parts.push(`${shapeless} not an address, host or hash — nothing sent`)
     if (uncovered) parts.push(`${uncovered} not covered by configured providers`)
     new Notice(parts.join(' · '))
   }
@@ -286,6 +305,7 @@ export function renderIocSection(
   const renderRows = () => {
     title.setText(`Indicators (${task.iocs.length})`)
     rowsEl.empty()
+    const lookup = opts.findSightings?.()
     for (const [i, ioc] of task.iocs.entries()) {
       const row = rowsEl.createDiv('pm-ioc-row')
       const sel = renderTypeSelect(row, ioc.type)
@@ -379,7 +399,7 @@ export function renderIocSection(
       repStrips.set(ioc, rowsEl.createDiv('pm-ioc-rep'))
       fillRepStrip(ioc)
       // Seen-before hint: same tucked-under-the-row placement as the reputation
-      // strip. An asset is never searched (iocSightings suppresses it), so say
+      // strip. An asset is never searched (sightingsIndex suppresses it), so say
       // that — drawing nothing would read as "never seen on another case".
       if (asset) {
         rowsEl.createDiv({
@@ -387,7 +407,7 @@ export function renderIocSection(
           text: 'Cross-case sightings are not computed for your own assets.'
         })
       } else {
-        const sightings = opts.findSightings?.(refangIoc(ioc.value)) ?? []
+        const sightings = lookup?.(refangIoc(ioc.value)) ?? []
         if (sightings.length) {
           const hint = rowsEl.createDiv('pm-ioc-sightings')
           const names = sightings.slice(0, 3).map((s) => s.key || s.title)

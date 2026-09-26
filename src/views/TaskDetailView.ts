@@ -1,5 +1,5 @@
 import { ItemView, Notice, WorkspaceLeaf, TFile, setIcon } from 'obsidian'
-import { iocSightings } from '../soc/ioc'
+import { activityValue, sightingsIndex } from '../soc/ioc'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from '../modals/DescriptionEditor'
@@ -13,6 +13,7 @@ import { renderSubtasksPanel } from '../modals/SubtasksPanel'
 import { renderLinksPanel } from '../modals/LinksPanel'
 import { renderAttachmentsSection } from '../modals/AttachmentsSection'
 import { findTaskById } from '../store/TaskIndex'
+import { flattenTasks } from '../store/TaskTreeOps'
 import { openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
@@ -34,19 +35,39 @@ export function renderActivitySection(
   state: { collapsed: boolean } = { collapsed: true }
 ): void {
   const section = container.createDiv('pm-modal-section pm-activity-section')
-  const header = section.createDiv('pm-modal-section-header pm-activity-header')
+  // The whole header is the one button: one tab stop, named by its heading.
+  const header = section.createDiv({
+    cls: 'pm-modal-section-header pm-activity-header',
+    attr: { role: 'button', tabindex: '0', 'aria-expanded': String(!state.collapsed) }
+  })
   // The toggle's own click bubbles to the header handler below — its onToggle
-  // stays a no-op so a triangle click doesn't toggle twice.
+  // stays a no-op so a triangle click doesn't toggle twice. It is only the
+  // picture of the state, so it leaves the tab order and the accessibility tree.
   const toggle = new CollapseToggle(header, { collapsed: state.collapsed, onToggle: () => {} })
+  toggle.el.removeAttribute('tabindex')
+  toggle.el.removeAttribute('role')
+  toggle.el.removeAttribute('aria-expanded')
+  toggle.el.setAttr('aria-hidden', 'true')
   toggle.el.setAttr('aria-label', state.collapsed ? 'Expand activity' : 'Collapse activity')
   header.createEl('h4', { text: `Activity (${task.activity.length})`, cls: 'pm-modal-section-title' })
   const list = section.createDiv('pm-activity-list')
   list.hidden = state.collapsed
-  header.addEventListener('click', () => {
+  const flip = () => {
     state.collapsed = !state.collapsed
+    header.setAttr('aria-expanded', String(!state.collapsed))
     toggle.el.toggleClass('is-collapsed', state.collapsed)
     toggle.el.setAttr('aria-label', state.collapsed ? 'Expand activity' : 'Collapse activity')
     list.hidden = state.collapsed
+  }
+  header.addEventListener('click', flip)
+  header.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    // A modified Enter belongs to whatever owns that shortcut (the modal's Shift+Enter save).
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+    e.preventDefault()
+    // Stops the board's own Enter, which would open the selected row as well.
+    e.stopPropagation()
+    flip()
   })
 
   if (!task.activity.length) {
@@ -59,7 +80,8 @@ export function renderActivitySection(
     row.createSpan({ cls: 'pm-activity-at', text: isoToLocalInput(e.at).replace('T', ' ') || e.at })
     const change = row.createSpan({ cls: 'pm-activity-change' })
     change.createSpan({ cls: 'pm-activity-field', text: `${e.field}:` })
-    change.appendText(` ${e.from || '—'} → ${e.to || '—'}`)
+    // Indicator values show defanged, as everywhere else; the log keeps them as recorded.
+    change.appendText(` ${activityValue(e.field, e.from) || '—'} → ${activityValue(e.field, e.to) || '—'}`)
   }
 }
 
@@ -100,12 +122,11 @@ export class TaskDetailView extends ItemView {
   private task: Task | null = null
   /** Last title actually persisted; debounced saves always send this, never the in-flight edit. */
   private persistedTitle = ''
-  /** Status before the in-flight edit — lets the rerender hook detect a change and run the verdict guard. */
+  /** Last status that passed the verdict guard; persist() always sends this, never a pick still waiting on the prompt. */
   private lastStatus = ''
   private descEditor: DescriptionEditorHandle | null = null
   private commentsSection: CommentsSectionHandle | null = null
   private saveTimer: number | null = null
-  private dirty = false
   private shownExtras = new Set<string>()
   /** Half-typed comment, hoisted across rerenders (the composer's DOM dies on every render). */
   private commentDraft = ''
@@ -176,7 +197,6 @@ export class TaskDetailView extends ItemView {
     this.removedSubtaskIds = []
     this.persistedTitle = this.task.title
     this.lastStatus = this.task.status
-    this.dirty = false
     // Per-task UI state: a draft or expanded timeline for task A must not leak into task B.
     this.commentDraft = ''
     this.commentHadFocus = false
@@ -204,7 +224,6 @@ export class TaskDetailView extends ItemView {
   }
 
   private scheduleSave(): void {
-    this.dirty = true
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer)
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null
@@ -212,31 +231,41 @@ export class TaskDetailView extends ItemView {
     }, 800)
   }
 
+  /** Saves whatever the clone holds that disk does not, scheduled or not:
+   * some edits reach the clone with no save scheduled (a field committed on
+   * 'change' after the debounce already ran), and persist() is a no-op when
+   * nothing differs. */
   private async flushPendingSave(): Promise<void> {
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer)
       this.saveTimer = null
     }
-    if (this.dirty) await this.persist()
+    await this.persist()
   }
 
   /** Debounce-path save: everything except the in-flight title edit. */
   private async persist(): Promise<void> {
     if (!this.project || !this.task || !this.snapshot) return
-    this.dirty = false
     // Diff against the pristine snapshot and send only what this panel
     // changed — the whole stale clone as a patch reverted concurrent edits
     // made elsewhere (drag a card to Done, type here → status undone on disk).
-    const patch = diffTaskPatch(this.snapshot, { ...this.task, title: this.persistedTitle })
+    // Title and status are the persisted ones: a title in flight saves on
+    // blur, and a close still waiting on the verdict prompt is not a close.
+    const task = this.task
+    const saved = () => ({ ...task, title: this.persistedTitle, status: this.lastStatus })
+    const patch = diffTaskPatch(this.snapshot, saved())
     const removed = this.removedSubtaskIds
     if (!Object.keys(patch).length && !removed.length) return
+    // subtaskBase makes the subtask merge three-way, so this panel's stale
+    // copy of a subtask never undoes a change made to it on the board.
+    const opts = { removedSubtaskIds: removed, subtaskBase: this.snapshot.subtasks }
     try {
-      await this.plugin.store.updateTask(
-        this.project,
-        this.task.id,
-        patch,
-        removed.length ? { removedSubtaskIds: removed } : undefined
-      )
+      // The store gets its own copy. Handed the panel's arrays, the live task
+      // shared them, and the next edit here changed the live task before the
+      // store could compare old with new: a second subtask tick never reached
+      // disk, an indicator removal was never logged. structuredClone, not
+      // JSON: a field cleared to undefined must stay in the patch.
+      await this.plugin.store.updateTask(this.project, this.task.id, structuredClone(patch), opts)
       this.removedSubtaskIds = []
       // Store-side stamps (activity entries, lifecycle timestamps, completion)
       // land on the LIVE task, not this editor clone. Sync them back, or the
@@ -247,9 +276,20 @@ export class TaskDetailView extends ItemView {
         this.task.respondedAt = live.respondedAt
         this.task.resolvedAt = live.resolvedAt
         this.task.completed = live.completed
+        // A subtask added here gets its key and note from the store, on the
+        // store's copy. Copied onto the panel's own subtask objects in place,
+        // since the subtask rows hold those objects.
+        const byId = new Map(flattenTasks(live.subtasks).map((f) => [f.task.id, f.task]))
+        for (const { task: sub } of flattenTasks(this.task.subtasks)) {
+          const stored = byId.get(sub.id)
+          if (stored) {
+            sub.key = stored.key
+            sub.filePath = stored.filePath
+          }
+        }
       }
       // Snapshot follows the save: the next diff is relative to what's on disk.
-      this.snapshot = JSON.parse(JSON.stringify({ ...this.task, title: this.persistedTitle })) as Task
+      this.snapshot = JSON.parse(JSON.stringify(saved())) as Task
       // The store marks this write as a self-write, so open boards deliberately
       // skip their file-watcher reload — but that skip assumes the SAVING view
       // refreshes itself. The panel is a different view: poke the boards.
@@ -315,7 +355,9 @@ export class TaskDetailView extends ItemView {
     const socBoard = config.boardType !== 'plain'
     renderSeverityBadge(
       header,
-      config.severities.find((s) => s.id === task.severity)
+      config.severities.find((s) => s.id === task.severity),
+      'solid',
+      task.severity
     )
     if (socBoard && task.issueType === 'incident') {
       // Registered chips unregister themselves: the shared 30s tick drops any
@@ -333,7 +375,8 @@ export class TaskDetailView extends ItemView {
     header.createDiv('pm-td-header-spacer')
     if (task.filePath) {
       const filePath = task.filePath
-      const noteBtn = header.createSpan({ cls: 'pm-td-note-btn' })
+      // A real button, so it takes focus and Enter/Space; clickable-icon keeps it an icon.
+      const noteBtn = header.createEl('button', { cls: 'pm-td-note-btn clickable-icon' })
       setIcon(noteBtn, 'file-text')
       noteBtn.setAttribute('aria-label', 'Open as note')
       noteBtn.addEventListener('click', () => {
@@ -385,6 +428,8 @@ export class TaskDetailView extends ItemView {
         this.scheduleSave()
         this.render()
       },
+      // The multi-selects pick outside this panel's DOM, so the body listeners below never hear them.
+      onChange: () => this.scheduleSave(),
       shownExtras: this.shownExtras
     })
 
@@ -414,7 +459,7 @@ export class TaskDetailView extends ItemView {
           ...this.plugin.reputationKeys()
         },
         ownedAssets: () => this.plugin.settings.ownedAssets,
-        findSightings: (value) => iocSightings(value, project.tasks, task.id, this.plugin.settings.ownedAssets)
+        findSightings: () => sightingsIndex(project.tasks, task.id, this.plugin.settings.ownedAssets)
       })
     }
     this.commentsSection?.destroy()
@@ -427,6 +472,7 @@ export class TaskDetailView extends ItemView {
     })
     renderActivitySection(body, task, this.activityState)
     renderSubtasksPanel(body, task, this.plugin, config.statuses, {
+      project,
       onOpen: (sub) => {
         const live = findTaskById(project, sub.id)
         if (!live) {
@@ -467,8 +513,11 @@ export class TaskDetailView extends ItemView {
     // Any input inside the body (subtask titles, time logs) marks the clone
     // dirty; the field controls above already do it via rerender(), and the
     // description editor via its onChange. Event delegation keeps this one
-    // listener instead of N hooks.
+    // listener instead of N hooks. 'change' too: time logs, the estimate and
+    // the custom fields write the clone only on change, which can come after
+    // the debounce for their typing has already saved.
     body.addEventListener('input', () => this.scheduleSave())
+    body.addEventListener('change', () => this.scheduleSave())
 
     // Restore the pre-rebuild snapshot (scroll always; focus only where it was).
     contentEl.scrollTop = scrollTop

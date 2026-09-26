@@ -4,11 +4,17 @@ import type { Project, Task, CustomFieldDef } from '../types'
 import { renderChipList } from '../ui/FormField'
 import { stringifyCustomValue } from '../utils'
 
+/**
+ * One custom field's input. Every type but multiselect commits on its own
+ * 'change' event, which a host can listen for; the multiselect edits through
+ * a menu and chip buttons instead, so it reports through `onChange`.
+ */
 export function renderCustomFieldInput(
   cf: CustomFieldDef,
   task: Task,
   project: Project,
-  plugin: PMPlugin
+  plugin: PMPlugin,
+  onChange?: () => void
 ): HTMLElement {
   const currentVal = task.customFields[cf.id]
   const wrap = createDiv('pm-prop-value')
@@ -27,7 +33,11 @@ export function renderCustomFieldInput(
       const input = wrap.createEl('input', { type: 'number', cls: 'pm-prop-text' })
       input.value = stringifyCustomValue(currentVal)
       input.addEventListener('change', () => {
-        task.customFields[cf.id] = parseFloat(input.value)
+        // A cleared or unreadable number is not recorded, never stored as NaN
+        // (TimeTrackingPanel precedent).
+        const n = parseFloat(input.value)
+        if (Number.isFinite(n)) task.customFields[cf.id] = n
+        else Reflect.deleteProperty(task.customFields, cf.id)
       })
       break
     }
@@ -69,6 +79,7 @@ export function renderCustomFieldInput(
             if (idx > -1) vals.splice(idx, 1)
             task.customFields[cf.id] = [...vals]
             renderMulti()
+            onChange?.()
           },
           onAdd: (e) => {
             const menu = new Menu()
@@ -79,6 +90,7 @@ export function renderCustomFieldInput(
                     vals.push(opt)
                     task.customFields[cf.id] = [...vals]
                     renderMulti()
+                    onChange?.()
                   })
                 )
               }

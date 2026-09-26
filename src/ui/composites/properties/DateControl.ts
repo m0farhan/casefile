@@ -1,6 +1,6 @@
 import { setIcon } from 'obsidian'
 import { Popover } from '../../primitives/Popover'
-import { formatDate, today, type DueTone } from '../../../dates'
+import { formatDate, parsePlainDate, today, type DueTone } from '../../../dates'
 
 export interface DateControlOpts {
   container: HTMLElement
@@ -37,18 +37,27 @@ export function renderDateControl(opts: DateControlOpts): void {
     // segment — committing there would re-render the modal and yank focus to the title
     // mid-edit. Instead the popover reports the final value once, when it closes (the
     // user clicks away, presses Enter, or picks Today/Clear), so manual editing is free.
+    // Today and Clear set `next` and always commit. Otherwise only a whole new date
+    // does: the input reads '' while a segment is half-typed, and that is an edit in
+    // progress, not a clear (LifecyclePanel's rule); clearing goes through Clear.
     let next: string | null = null
     pop = new Popover({
       anchor: trigger,
       width: 160,
       onClose: () => {
         pop = null
-        const value = next ?? field.value
-        if (value !== opts.value) opts.onChange(value)
+        if (next !== null) opts.onChange(next)
+        else if (field.value && field.value !== initial) opts.onChange(field.value)
       }
     })
     const field = pop.contentEl.createEl('input', { type: 'date', cls: 'pm-pop-field' })
-    field.value = opts.value
+    // Seeded with the day the trigger shows. A stored value with a time
+    // ('2026-09-26T17:00', as Obsidian's date-and-time property writes it) is
+    // not a value a date input holds, and the browser would read it as ''.
+    // Compared against what the input really holds, so opening and closing
+    // the picker never rewrites the stored value.
+    field.value = parsePlainDate(opts.value)?.toString() ?? ''
+    const initial = field.value
     field.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault()

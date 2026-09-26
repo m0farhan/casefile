@@ -27,6 +27,11 @@ export interface TaskFormFieldsContext {
   /** Hosts without a working parent picker (their setParentId is a no-op) pass
    * false to drop 'Subtask of…' from the merged Type dropdown. Default true. */
   parentPickerEnabled?: boolean
+  /** Called after an edit that does not rerender: the multi-selects, whose
+   * pickers sit outside the host's DOM, so no input or change event of theirs
+   * reaches it. The side panel schedules its autosave here; the modal saves
+   * the whole clone and passes nothing. */
+  onChange?: () => void
 }
 
 /* The structural kinds fold into the ONE type dropdown alongside the issue
@@ -77,6 +82,7 @@ const REPEAT_OPTIONS: SelectItem[] = [
  */
 export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFieldsContext): void {
   const { task, project, plugin, rerender, shownExtras } = ctx
+  const changed = () => ctx.onChange?.()
   const { statuses, issueTypes, severities, verdicts, boardType } = plugin.store.configFor(project)
   // A plain board records no verdict and runs no clocks; a verdict stays on any
   // note that already has one and returns if the board is switched back.
@@ -189,6 +195,9 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
           { id: '', label: 'None' },
           ...severities.map((s) => ({ id: s.id, label: s.label, color: s.color, icon: s.icon || undefined }))
         ],
+        // Shown only when no option matches: a recorded id missing from the
+        // severity list reads as itself, never as unset.
+        placeholder: task.severity,
         onChange: (id) => {
           task.severity = id
           rerender()
@@ -327,12 +336,15 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
         options: () => allMembers().map((m) => ({ id: m, label: m })),
         add: (id) => {
           if (!task.assignees.includes(id)) task.assignees.push(id)
+          changed()
         },
         remove: (id) => {
           task.assignees = task.assignees.filter((a) => a !== id)
+          changed()
         },
         create: (label) => {
           if (!task.assignees.includes(label)) task.assignees.push(label)
+          changed()
         }
       })
       return cell
@@ -411,12 +423,15 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
         options: () => projectTags.map((t) => ({ id: t, label: t })),
         add: (id) => {
           if (!task.tags.includes(id)) task.tags.push(id)
+          changed()
         },
         remove: (id) => {
           task.tags = task.tags.filter((t) => t !== id)
+          changed()
         },
         create: (label) => {
           if (!task.tags.includes(label)) task.tags.push(label)
+          changed()
         }
       })
       return cell
@@ -451,9 +466,11 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
               .map((t) => ({ id: t.id, label: t.title })),
           add: (id) => {
             if (!task.dependencies.includes(id)) task.dependencies.push(id)
+            changed()
           },
           remove: (id) => {
             task.dependencies = task.dependencies.filter((d) => d !== id)
+            changed()
           }
         })
         return cell
@@ -485,7 +502,7 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     cfSection.createEl('h4', { text: 'Custom fields', cls: 'pm-modal-section-title' })
     const cfGrid = cfSection.createDiv('pm-prop-grid')
     for (const cf of project.customFields) {
-      renderPropRow(cfGrid, cf.name, () => renderCustomFieldInput(cf, task, project, plugin))
+      renderPropRow(cfGrid, cf.name, () => renderCustomFieldInput(cf, task, project, plugin, ctx.onChange))
     }
   }
 }

@@ -1,18 +1,18 @@
 import { setIcon } from 'obsidian'
 import type PMPlugin from '../main'
-import type { StatusConfig, Task } from '../types'
+import type { Project, StatusConfig, Task } from '../types'
 import { makeTask } from '../types'
 import { today } from '../dates'
 import { renderKeyChip } from '../ui/composites/issueMeta'
 import { IconButton } from '../ui/primitives/IconButton'
-import { isTerminalStatus, getCompleteStatusId, getDefaultStatusId } from '../utils'
+import { guardVerdictOnClose } from '../soc/verdictGuard'
+import { isTerminalStatus, getCompleteStatusId, getDefaultStatusId, safeAsync } from '../utils'
 
 /**
  * Checkbox semantics for a subtask row: terminal/default status, full/zero
  * progress, and the completion date stamped the same way the store stamps a
- * top-level task (ProjectStore.stampCompletion idiom).
- * ponytail: no per-subtask activity entry — activity is store-owned and
- * stamped for the parent patch only; accepted remainder.
+ * top-level task (ProjectStore.stampCompletion idiom). The store stamps the
+ * activity rows and lifecycle times when the parent is saved.
  */
 export function applySubtaskChecked(sub: Task, checked: boolean, statuses: StatusConfig[]): void {
   sub.status = checked ? getCompleteStatusId(statuses) : getDefaultStatusId(statuses)
@@ -31,7 +31,13 @@ export function renderSubtasksPanel(
   task: Task,
   plugin: PMPlugin,
   statuses: StatusConfig[],
-  opts: { onOpen: (sub: Task) => void; onChange?: () => void; onRemove?: (subtaskId: string) => void }
+  opts: {
+    /** The board the task is on, for the verdict prompt. */
+    project: Project
+    onOpen: (sub: Task) => void
+    onChange?: () => void
+    onRemove?: (subtaskId: string) => void
+  }
 ): void {
   const subSection = container.createDiv('pm-modal-section')
 
@@ -61,12 +67,26 @@ export function renderSubtasksPanel(
 
       const cb = row.createEl('input', { type: 'checkbox', cls: 'pm-subtask-checkbox' })
       cb.checked = isTerminalStatus(sub.status, statuses)
-      cb.addEventListener('change', () => {
-        applySubtaskChecked(sub, cb.checked, statuses)
-        renderSubtasks()
-        renderCount()
-        opts.onChange?.()
-      })
+      cb.addEventListener(
+        'change',
+        safeAsync(async () => {
+          const checked = cb.checked
+          // Ticking closes the subtask, and closing an incident asks for its
+          // verdict on this path too. Cancel leaves it open and unticked.
+          if (checked) {
+            const extra = await guardVerdictOnClose(plugin, opts.project, sub, getCompleteStatusId(statuses))
+            if (extra === null) {
+              cb.checked = false
+              return
+            }
+            if (extra.verdict) sub.verdict = extra.verdict
+          }
+          applySubtaskChecked(sub, checked, statuses)
+          renderSubtasks()
+          renderCount()
+          opts.onChange?.()
+        })
+      )
 
       if (sub.key) renderKeyChip(row, sub.key)
 
