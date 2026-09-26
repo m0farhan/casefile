@@ -2,8 +2,16 @@
  *
  * Strategy: define the --gs-* design tokens AND remap the Obsidian theme
  * variable names the inherited stylesheets consume, scoped to every mount
- * point the plugin owns. The plugin therefore renders identically under any
- * Obsidian theme (dark-only by design: SOC analyst, dim room).
+ * point the plugin owns, so the plugin renders the same under any Obsidian
+ * theme (dark-only by design: SOC analyst, dim room).
+ *
+ * Remapping a base variable is not enough on its own. Obsidian declares its
+ * derived variables on body (--icon-color: var(--text-muted) and so on), and a
+ * var() resolves where it is declared, so they arrive here already holding the
+ * theme's colours: under a light theme the caret and icons went dark on these
+ * dark surfaces and a hovered select turned light under white text. Every
+ * derived variable the plugin's DOM reaches is therefore declared again below,
+ * along with caret-color, which body sets as a property.
  *
  * Scope list must cover every DOM mount:
  *  - .pm-root                     project/dashboard/styleguide leaves
@@ -106,6 +114,7 @@
   --text-muted: var(--gs-ink-subtle);
   --text-faint: var(--gs-ink-tertiary);
   --text-accent: var(--gs-accent-hover);
+  --text-accent-hover: var(--gs-accent-hover);
   --text-on-accent: #ffffff;
   --text-error: var(--gs-red);
   --interactive-accent: var(--gs-accent);
@@ -128,6 +137,23 @@
   --font-ui-large: 16px;
   --shadow-s: none; /* no shadows on dark; depth = surface ladder */
   --input-height: 32px;
+
+  /* --- Obsidian's body-level derived variables, declared again (see top) --- */
+  --caret-color: var(--text-normal);
+  --icon-color: var(--text-muted);
+  --icon-color-hover: var(--text-muted);
+  --icon-color-active: var(--text-accent);
+  --icon-color-focused: var(--text-normal);
+  --dropdown-background: var(--interactive-normal);
+  --dropdown-background-hover: var(--interactive-hover);
+  --checklist-done-color: var(--text-muted);
+  --table-header-color: var(--text-normal);
+  --link-color: var(--text-accent);
+  --link-color-hover: var(--text-accent-hover);
+  --link-external-color: var(--text-accent);
+  --link-external-color-hover: var(--text-accent-hover);
+  --link-unresolved-color: var(--text-accent);
+  caret-color: var(--caret-color);
 
   /* --- Legacy plugin tokens (now theme-constant) --- */
   --pm-ghost-border: var(--gs-hairline);
