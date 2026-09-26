@@ -1,7 +1,8 @@
 # Installing Responder on another machine
 
 Responder is a self-contained Obsidian plugin. No dev tooling, no network
-access, and no specific vault name are required on the target machine.
+access, and no specific vault name are required on the target machine, only
+Obsidian 1.8.7 or newer (needed for device-local key storage).
 
 ## 1. Build the bundle (on the dev machine)
 
@@ -35,9 +36,10 @@ bundle files to reproduce your setup; omit it to start from defaults.
 Reputation API keys are per-device (Obsidian's local storage) and are NOT
 carried by `data.json` — re-enter them in settings on the new machine.
 
-Project and task data is **not** in the plugin — it's plain markdown in the
-vault (default folder: `Projects/`, configurable in settings), so syncing the
-vault syncs the data.
+Board and case data is **not** in the plugin — it's plain markdown in the
+vault, one folder per board (`<Board>/<Board>.md` plus `<Board>/Tasks/`),
+created at the vault root unless you set a default folder in settings. Syncing
+the vault syncs the data.
 
 ## Upgrading from GreySurface PM (pre-2.1.0)
 
