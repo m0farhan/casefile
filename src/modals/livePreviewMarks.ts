@@ -76,9 +76,9 @@ function codeSpans(line: string): InlineMark[] {
  * ponytail: no nesting inside consumed content (`**a *b* c**` bolds the
  * whole, inner em stays literal) — recurse into content if it ever matters.
  */
-function emphasis(line: string, ch: '*' | '_', inCode: (run: Run) => boolean): InlineMark[] {
+function emphasis(line: string, ch: '*' | '_', codeMask: Uint8Array): InlineMark[] {
   const marks: InlineMark[] = []
-  const runs = charRuns(line, ch).filter((r) => !inCode(r))
+  const runs = charRuns(line, ch).filter((r) => !codeMask[r.start])
   const wordy = (c: string | undefined) => c !== undefined && /[0-9A-Za-z]/.test(c)
   const canOpen = (r: Run) => {
     const next = line[r.start + r.len]
@@ -91,10 +91,14 @@ function emphasis(line: string, ch: '*' | '_', inCode: (run: Run) => boolean): I
     return ch === '*' || !wordy(line[r.start + r.len])
   }
   const maxLen = ch === '*' ? 3 : 1
+  // Lengths already known to have no closer ahead. canClose depends only on
+  // the run, so a later opener of that length searches a subset of the same
+  // runs and fails too: skipping it keeps one long line linear, not quadratic.
+  const noCloser = new Set<number>()
   let i = 0
   while (i < runs.length) {
     const open = runs[i]
-    if (open.len > maxLen || !canOpen(open)) {
+    if (open.len > maxLen || noCloser.has(open.len) || !canOpen(open)) {
       i++
       continue
     }
@@ -106,6 +110,7 @@ function emphasis(line: string, ch: '*' | '_', inCode: (run: Run) => boolean): I
       }
     }
     if (close === -1) {
+      noCloser.add(open.len)
       i++
       continue
     }
@@ -151,8 +156,11 @@ function emphasis(line: string, ch: '*' | '_', inCode: (run: Run) => boolean): I
 /** All inline marks for one line (caller skips lines fenceMap flags). */
 export function computeInlineMarks(line: string): InlineMark[] {
   const code = codeSpans(line)
-  const inCode = (r: Run) => code.some((c) => r.start >= c.from && r.start < c.to)
-  const marks = [...code, ...emphasis(line, '*', inCode), ...emphasis(line, '_', inCode)]
+  // One flag per offset, built once: code spans never overlap, so this is
+  // O(line) where a per-run code.some() was O(runs x spans).
+  const codeMask = new Uint8Array(line.length)
+  for (const c of code) codeMask.fill(1, c.from, c.to)
+  const marks = [...code, ...emphasis(line, '*', codeMask), ...emphasis(line, '_', codeMask)]
   return marks.sort((a, b) => a.from - b.from || a.to - b.to)
 }
 
