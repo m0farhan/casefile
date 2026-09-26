@@ -208,6 +208,18 @@ describe('composeCaseReport', () => {
     // The embedded image sits inside the code span, so it is text, not a fetch.
     expect(md).toMatch(/\| `[^`]*!\[a\]\(https:\/\/3232235777\/px\)[^`]*` \|/)
   })
+  it('never writes an indicator as a code span Dataview would run', () => {
+    const values = ['=x', '$=x', ' =x', "$=app['vault']['getName']()"]
+    const task = makeTask({ iocs: values.map((value) => ({ type: 'domain', value })) })
+    const md = composeCaseReport(task, ctxFor([task]))
+    const spans = [...md.matchAll(/(`+)([^`]+?)\1/g)].map((m) => m[2].trim())
+    expect(spans.length).toBeGreaterThanOrEqual(values.length)
+    for (const span of spans) expect(span).not.toMatch(/^\$?=/)
+    // Shown, not dropped: the reader still sees the value that was recorded.
+    expect(md).toContain('| domain | `$<U+003D>x` |')
+    expect(md).toContain('| domain | `<U+003D>x` |')
+  })
+
   it('reports still-running targets on an open incident', () => {
     const task = makeTask({
       issueType: 'incident',

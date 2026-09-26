@@ -62,6 +62,18 @@ export function inertLine(s: string): string {
 }
 
 /**
+ * Dataview runs a code span whose trimmed text starts with `=` (a query) or
+ * `$=` (JavaScript), and an indicator value is whatever was typed or pasted.
+ * The leading `=` is shown in visibleName's `<U+003D>` form: still visible,
+ * no invisible character added, and no longer a query prefix.
+ * ponytail: belongs in quoteUntrusted (emailHeaders.ts), where the header,
+ * phish and handover spans would get it too; this is a no-op once it is there.
+ */
+function noQueryPrefix(value: string): string {
+  return value.replace(/^(\s*\$?)=/, '$1<U+003D>')
+}
+
+/**
  * Why an incident whose severity has a target shows no clock. "No target
  * set." would be false here: the target exists, a stamp the clock needs does
  * not, or cannot be read.
@@ -194,7 +206,7 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
       const asset = assetRule(ioc.value, ctx.ownedAssets) ? OWN_ASSET_SUFFIX : ''
       // In a code span, or a defanged UNC path loses a backslash and `__x__`
       // turns bold: the reader would see an indicator that is not the recorded one.
-      const value = cell(quoteUntrusted(defangIoc(ioc.value, ioc.type))) + asset
+      const value = cell(quoteUntrusted(noQueryPrefix(defangIoc(ioc.value, ioc.type)))) + asset
       lines.push(`| ${ioc.type} | ${value} | ${cell(inertLine(ioc.note ?? ''))} |`)
     }
   }
