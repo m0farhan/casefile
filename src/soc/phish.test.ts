@@ -487,6 +487,46 @@ describe('an anchor label is dropped only when nothing else found it', () => {
     const targets = extractLinks('', html, []).links.map((l) => l.target)
     expect(targets).toEqual(['http://evil.test/go'])
   })
+
+  it('drops a label that ends a sentence, as the visible-text scan read it', () => {
+    const html = '<p>Sign in: <a href="http://evil.test/go">https://paypal.test/login.</a></p>'
+    expect(extractLinks('', html, []).links.map((l) => l.target)).toEqual(['http://evil.test/go'])
+  })
+})
+
+describe('a URL in prose ends where the sentence says it does', () => {
+  it('leaves off the quotes and punctuation around it, ASCII or typographic', () => {
+    // Outlook types curly quotes, and the closing one went into the link.
+    const text =
+      'Sign in at “https://login.evil-portal.test/verify” today, or «https://a.evil.test/x». Or https://x.test/v.'
+    const html = '<p>Or ‘https://b.evil.test/y’.</p>'
+    expect(
+      extractLinks(text, html, [])
+        .links.map((l) => l.raw)
+        .sort()
+    ).toEqual([
+      'https://a.evil.test/x',
+      'https://b.evil.test/y',
+      'https://login.evil-portal.test/verify',
+      'https://x.test/v'
+    ])
+  })
+
+  it('keeps an attribute value exactly as written, punctuation and all', () => {
+    const html =
+      '<a href="javascript:void(0)">x</a><a href="https://en.wikipedia.test/wiki/Foo_(bar)">y</a>' +
+      '<a href="https://q.test/a.">z</a><img src="https://z.test/c”">'
+    expect(
+      extractLinks('', html, [])
+        .links.map((l) => l.raw)
+        .sort()
+    ).toEqual([
+      'https://en.wikipedia.test/wiki/Foo_(bar)',
+      'https://q.test/a.',
+      'https://z.test/c”',
+      'javascript:void(0)'
+    ])
+  })
 })
 
 describe('htmlToText — the words the victim read', () => {

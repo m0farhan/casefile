@@ -1,7 +1,15 @@
 import { type Attachment, hashBytes, parseEml, withoutLeadingBlankLines } from './eml'
 import { md5 } from './md5'
 import { type HeaderAnalysis, analyseHeaders, formatHeaderReport, quoteUntrusted } from './emailHeaders'
-import { defangIoc, detectIocType, extractIocsFromText, formatIocLine, visibleName } from './ioc'
+import {
+  defangIoc,
+  detectIocType,
+  extractIocsFromText,
+  formatIocLine,
+  iocKey,
+  stripProseTail,
+  visibleName
+} from './ioc'
 import { decodePercentEscapes } from './toolbox'
 import { type PdfFacts, readPdf } from './pdf'
 import {
@@ -51,6 +59,12 @@ export interface LinkFinding {
   flags: string[]
   /** Text the link was shown as, when that text is itself a URL that disagrees. */
   shownAs: string
+  /**
+   * The attached message whose text carries it, named as Attachment.origin
+   * names it; absent for the outer message's own text. Sender text: escape it
+   * with visibleName to show it.
+   */
+  origin?: string
 }
 
 /**
@@ -596,9 +610,15 @@ const MAX_LINKS = 500
 
 /**
  * Every link in the mail: bare ones in the text AND in the HTML, plus every
- * URL-bearing attribute, CSS `url()` and `srcset` candidate.
+ * URL-bearing attribute, CSS `url()` and `srcset` candidate. `limit` is how
+ * many of them are read for their facts; the rest are counted.
  */
-export function extractLinks(text: string, html: string, brands: string[]): { links: LinkFinding[]; dropped: number } {
+export function extractLinks(
+  text: string,
+  html: string,
+  brands: string[],
+  limit = MAX_LINKS
+): { links: LinkFinding[]; dropped: number } {
   const raws = new Set<string>()
   const add = (value: string): void => {
     const url = normaliseUrl(value)
@@ -625,12 +645,19 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
   // ponytail: a space for every tag, inline ones too, so a URL split by `<b>`
   // is read up to the tag, as it always was. Gluing across inline tags and
   // breaking at block tags is the upgrade if a real lure needs it.
-  for (const m of text.matchAll(URL_RE)) add(m[0])
+  //
+  // A URL found in prose loses the punctuation the sentence put after it —
+  // `“https://x.test/a”.` is a link to https://x.test/a, and the curly quote
+  // Outlook types went into the link, the indicator and the case. Only here
+  // and at the decoy comparison below: add() also carries attribute values,
+  // and a `)` or `.` at the end of an href is part of where the click goes.
+  for (const m of text.matchAll(URL_RE)) add(stripProseTail(m[0]))
   const fromVisibleText = new Set<string>()
   for (const m of decodeEntities(stripTags(html, ' ')).matchAll(URL_RE)) {
+    const url = stripProseTail(m[0])
     const before = raws.size
-    add(m[0])
-    if (raws.size > before) fromVisibleText.add(normaliseUrl(m[0]))
+    add(url)
+    if (raws.size > before) fromVisibleText.add(normaliseUrl(url))
   }
   // Every URL an attribute carries is somewhere a click or a load goes, so a
   // decoy label equal to one of them is never dropped, whether or not the
@@ -667,12 +694,15 @@ export function extractLinks(text: string, html: string, brands: string[]): { li
   // link in the plain-text part — the URL a mail tells you to type by hand is
   // genuinely clickable in a plain-text client, and deleting it took the
   // actual phishing destination out of the links, the indicators and the case.
+  // Compared as the visible-text scan recorded it, prose tail stripped, or a
+  // decoy written `https://paypal.test/login.` came back as a destination.
   for (const label of shown.values()) {
-    if (!hrefs.has(label) && !inAttributes.has(label) && fromVisibleText.has(label)) raws.delete(label)
+    const seen = stripProseTail(label)
+    if (!hrefs.has(seen) && !inAttributes.has(seen) && fromVisibleText.has(seen)) raws.delete(seen)
   }
 
   const all = [...raws]
-  const kept = all.slice(0, MAX_LINKS)
+  const kept = all.slice(0, Math.max(0, limit))
   const out: LinkFinding[] = []
   for (const raw of kept) {
     const { target, wrappedBy } = unwrapUrl(raw)
@@ -801,6 +831,19 @@ export interface AttachmentReport {
   md5: string
   /** What the first bytes say it is, independent of name and declared type. */
   sniffed: string
+  /**
+   * The bytes are the file as it travelled, so its size and hashes are the
+   * sender's. False when they were rebuilt from the part's text as read (see
+   * REBUILT_FACT). True for a part that could not be decoded: it has no hashes
+   * to qualify.
+   */
+  exact: boolean
+  /**
+   * The attached message this part was found inside, as Attachment.origin
+   * names it; absent for the outer message's own parts. Sender text: escape
+   * it with visibleName to show it.
+   */
+  origin?: string
   facts: string[]
   /**
    * Defanged indicators a text scan found INSIDE the file's bytes, kept
@@ -853,10 +896,24 @@ export type OfficeStructure = Omit<OfficeFacts, 'images' | 'files'> & {
   files: InnerFileReport[]
 }
 
+/**
+ * The text of a message attached to this one — usually the reported phish —
+ * kept apart from the outer message's, so the phisher's sentence is never
+ * printed as the reporter's own.
+ */
+export interface ForwardedReport {
+  /** Which attached message, as Attachment.origin names it. Sender text: escape it with visibleName to show it. */
+  origin: string
+  text: string
+  htmlSource: string
+  /** As PhishReport.htmlText: the words out of its HTML, derived. */
+  htmlText: string
+}
+
 /** Everything the analyser knows about one message. */
 export interface PhishReport {
   headers: HeaderAnalysis
-  /** Plain-text body. The HTML body is deliberately NOT carried into the UI as markup. */
+  /** The outer message's plain-text body. The HTML body is deliberately NOT carried into the UI as markup. */
   text: string
   htmlSource: string
   /**
@@ -864,6 +921,8 @@ export interface PhishReport {
    * the mail had no HTML part. Derived, never a substitute for htmlSource.
    */
   htmlText: string
+  /** The bodies of attached messages, outer before inner. Their links are in `links`, each with its origin. */
+  forwarded: ForwardedReport[]
   links: LinkFinding[]
   /** Links beyond the render cap, counted rather than silently dropped. */
   droppedLinks: number
@@ -1024,7 +1083,18 @@ function headerBlockOf(raw: string): string {
 export async function analysePhishing(raw: string, owned: string[], brands: string[]): Promise<PhishReport> {
   const eml = parseEml(raw)
   const headers = analyseHeaders(raw)
-  const { links, dropped } = extractLinks(eml.text, eml.html, brands)
+  // Each attached message's text is read for links on its own, so every link
+  // says which body it came from, and all of them share the one cap.
+  const outer = extractLinks(eml.text, eml.html, brands)
+  const links = [...outer.links]
+  let dropped = outer.dropped
+  const forwarded: ForwardedReport[] = []
+  for (const f of eml.forwarded) {
+    const found = extractLinks(f.text, f.html, brands, MAX_LINKS - links.length)
+    for (const link of found.links) links.push({ ...link, origin: f.origin })
+    dropped += found.dropped
+    forwarded.push({ origin: f.origin, text: f.text, htmlSource: f.html, htmlText: htmlToText(f.html) })
+  }
   const notes = [...eml.notes]
   if (dropped > 0) notes.push(`${dropped} further links are in this message and are not listed.`)
 
@@ -1069,69 +1139,89 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   const senderHost = at < 0 ? '' : senderAddress.slice(at + 1).toLowerCase()
   const senderFacts = senderHost ? hostFacts(senderHost, brands, senderHost) : []
 
-  // Built once, from what was actually parsed, and shown by the Indicators tab
-  // and the copy button. caseIocs builds the case's list from the same parts
-  // with the same partIocs, so the three cannot disagree.
-  const seen = new Set<string>()
-  const indicators: string[] = []
-  const push = (line: string): void => {
-    if (line && !seen.has(line)) {
-      seen.add(line)
-      indicators.push(line)
-    }
-  }
-  for (const ioc of extractIocsFromText(`${headerBlockOf(raw)}\n${eml.text}`, [])) push(formatIocLine(ioc, owned))
-  for (const link of links) {
-    if (link.target) push(formatIocLine({ type: 'url', value: link.target }, owned))
-  }
-  // Every part, inline or not. Which side of the split a part lands on is a
-  // display grouping, and a wrong call there must never cost the evidence.
-  // The notes stay off this list: the same URL in the body and in a PDF would
-  // otherwise be listed twice. The case keeps them.
-  for (const part of everyPart) {
-    for (const ioc of partIocs(part)) push(formatIocLine({ type: ioc.type, value: ioc.value }, owned))
-  }
-
-  return {
+  const report: PhishReport = {
     headers,
     text: eml.text,
     htmlSource: eml.html,
     htmlText: htmlToText(eml.html),
+    forwarded,
     links,
     droppedLinks: dropped,
     attachments,
     inlineImages,
     senderFacts,
-    indicators,
+    indicators: [],
     notes: dedupe(notes)
   }
+  // The case's own list, less its notes: the Indicators tab and the copy
+  // button show exactly the values a case opened from here carries. Built
+  // twice with its own dedupe, the case dropped a bit.ly link the tab listed
+  // because it compared lower-cased paths.
+  report.indicators = [
+    ...new Set(caseIocs(report, raw).map((ioc) => formatIocLine({ type: ioc.type, value: ioc.value }, owned)))
+  ]
+  return report
 }
 
 /**
- * The indicators a case opened from this analysis carries, typed.
+ * The indicators a case opened from this analysis carries, typed, each value
+ * once by iocKey — hosts, addresses and hashes without regard to case, a URL
+ * as written, because its path is case-sensitive.
  *
- * The same values the Indicators tab shows, built from the same parts by the
- * same partIocs, so a lure the PDF reader found can no longer be on screen and
- * missing from the case — and task.iocs is what cross-case search reads.
- * Unlike that list, each value found inside an attachment says which one,
- * because in a case the note outlives the analysis that knew it.
+ * The one collector: analysePhishing derives the Indicators tab from it, so a
+ * lure can no longer be on screen and missing from the case — and task.iocs
+ * is what cross-case search reads. Unlike that list, each value found inside
+ * an attachment or an attached message says where, because in a case the
+ * note outlives the analysis that knew it. When a value turns up twice, the
+ * first place it was found keeps it, and takes the second place's note if it
+ * had none of its own.
+ *
+ * The headers, the plain text and the words out of the HTML are scanned, not
+ * the HTML source: most phishing is HTML-only, and the reply-to address a
+ * lure asks for was in what the victim read and in no indicator. Every URL
+ * is cut out of that HTML text first. A clickable one is already a link, and
+ * the text of an anchor is only what the victim was shown — scanned, a decoy
+ * `https://www.paypal.com/signin` came back as a domain the mail never sends
+ * anyone to.
  */
 export function caseIocs(report: PhishReport, raw: string): Ioc[] {
-  const iocs: Ioc[] = extractIocsFromText(`${headerBlockOf(raw)}\n${report.text}`, [])
-  const seen = new Set(iocs.map((i) => i.value.toLowerCase()))
+  const byKey = new Map<string, Ioc>()
   const add = (ioc: Ioc): void => {
-    const key = ioc.value.toLowerCase()
-    if (seen.has(key)) return
-    seen.add(key)
-    iocs.push(ioc)
+    const key = iocKey(ioc)
+    const prev = byKey.get(key)
+    if (!prev) byKey.set(key, ioc)
+    else if (!prev.note && ioc.note) prev.note = ioc.note
+  }
+  const scan = (text: string, htmlText: string): Ioc[] =>
+    extractIocsFromText(`${text}\n${htmlText.replace(URL_RE, ' ')}`, [])
+  for (const ioc of scan(`${headerBlockOf(raw)}\n${report.text}`, report.htmlText)) add(ioc)
+  for (const f of report.forwarded) {
+    for (const ioc of scan(f.text, f.htmlText)) add({ ...ioc, note: `in the body of ${visibleName(f.origin)}` })
   }
   for (const link of report.links) {
-    if (link.target) {
-      add({ type: 'url', value: link.target, note: link.wrappedBy ? `unwrapped from ${link.wrappedBy}` : '' })
-    }
+    if (!link.target) continue
+    const note = [
+      link.origin ? `in the body of ${visibleName(link.origin)}` : '',
+      link.wrappedBy ? `unwrapped from ${link.wrappedBy}` : ''
+    ]
+      .filter(Boolean)
+      .join(', ')
+    add({ type: 'url', value: link.target, ...(note ? { note } : {}) })
   }
   for (const part of [...report.attachments, ...report.inlineImages]) for (const ioc of partIocs(part)) add(ioc)
-  return iocs
+  return [...byKey.values()]
+}
+
+/**
+ * A part as a case note names it, with the attached message it came out of.
+ * eml gives every nameless part the filename below; a nameless attached
+ * message is called what its own parts' origin calls it, so its headers and
+ * its payload name the same message.
+ */
+function partLabel(part: AttachmentReport): string {
+  const nameless = part.filename === '(no filename given)' && /^message\/rfc822$/i.test(part.contentType)
+  const own = nameless ? 'an attached message' : visibleName(part.filename)
+  return part.origin ? `${own} inside ${visibleName(part.origin)}` : own
 }
 
 /**
@@ -1145,9 +1235,13 @@ export function caseIocs(report: PhishReport, raw: string): Ioc[] {
  * which a case opened from the reporter's mail otherwise never carried.
  */
 function partIocs(part: AttachmentReport): Ioc[] {
-  const name = visibleName(part.filename)
+  const name = partLabel(part)
+  // A hash of bytes rebuilt from text says so where it outlives the analysis:
+  // pasted into a sandbox as the file's own, it matches no file anyone sent.
+  // The files inside such a part were read out of the same rebuilt bytes.
+  const hashed = `hashed here${part.exact ? '' : ' from its text as read; may not match the file as sent'}`
   const out: Ioc[] = []
-  if (part.sha256) out.push({ type: 'hash', value: part.sha256, note: `${name} (hashed here)` })
+  if (part.sha256) out.push({ type: 'hash', value: part.sha256, note: `${name} (${hashed})` })
   if (part.sha256 && /^message\/rfc822$/i.test(part.contentType)) {
     for (const ioc of extractIocsFromText(headerBlockOf(utf8Text(part.bytes.subarray(0, STRINGS_CAP))), [])) {
       out.push({ ...ioc, note: `in the headers of ${name}` })
@@ -1156,7 +1250,7 @@ function partIocs(part: AttachmentReport): Ioc[] {
   for (const ioc of structureIocValues(part.pdf, part.office)) out.push({ ...ioc, note: `inside ${name}` })
   for (const file of part.office?.files ?? []) {
     if (file.sha256) {
-      out.push({ type: 'hash', value: file.sha256, note: `${visibleName(file.name)} inside ${name} (hashed here)` })
+      out.push({ type: 'hash', value: file.sha256, note: `${visibleName(file.name)} inside ${name} (${hashed})` })
     }
   }
   return out
@@ -1189,8 +1283,19 @@ function dedupe(lines: string[]): string[] {
   return out
 }
 
+/**
+ * Said about a part whose bytes are not the ones that travelled. A 7bit or
+ * 8bit part, and a quoted-printable one with a hard line break or a raw
+ * non-ASCII character, came through the reader's line normalisation or its
+ * UTF-8 decoding, so the bytes were rebuilt from its text. Whether the file as
+ * sent used CRLF is not known here, so the sentence says "may", never "does".
+ */
+export const REBUILT_FACT =
+  "this part's bytes were rebuilt here from its text as read (line breaks as LF), so its size and hashes may not match the file as sent"
+
 async function readAttachment(a: Attachment, owned: string[], media: { left: number }): Promise<AttachmentReport> {
   const facts = attachmentFacts(a)
+  const origin = a.origin ? { origin: a.origin } : {}
   if (a.undecodable) {
     // Nothing was read, so nothing is claimed. Hashing zero bytes would print
     // the SHA-256 of the empty string under "computed here from the bytes in
@@ -1204,6 +1309,8 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
       sha1: '',
       md5: '',
       sniffed: '',
+      exact: true,
+      ...origin,
       facts: [...facts, 'this part could not be decoded, so its size, hashes and type are not recorded'],
       inside: [],
       bytes: new Uint8Array()
@@ -1212,12 +1319,6 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
   const sniffed = sniffType(a.bytes)
   // An empty file has no first bytes to compare with its name.
   const mismatch = a.bytes.length ? contentMismatch(a.filename, a.contentType, sniffed) : ''
-  // A part that was not transfer-encoded reached us through the reader's line
-  // normalisation, so its bytes are the message's text, not the file as sent.
-  // base64 and quoted-printable are ASCII on the wire and round-trip exactly;
-  // these do not, and a hash that will not match the sender's copy has to say
-  // so rather than be quoted at a sandbox as if it would.
-  const wireExact = a.exact
   const { pdf, office, ole, failed } = await readStructure(a.bytes, sniffed, media)
   // The name said the contents could not be seen, and the ZIP reader has just listed them.
   const named = office?.entries.length
@@ -1289,6 +1390,8 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
     sha1: await hashBytes(a.bytes, 'SHA-1'),
     md5: md5(a.bytes),
     sniffed,
+    exact: a.exact,
+    ...origin,
     facts: [
       ...(mismatch ? [mismatch] : []),
       ...named,
@@ -1296,9 +1399,7 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
       ...scanFacts,
       ...(census ? [census] : []),
       ...(rtf ? [rtf] : []),
-      ...(wireExact
-        ? []
-        : ['this part carried no transfer encoding, so the hashes are of the decoded text, not of the bytes as sent'])
+      ...(a.exact ? [] : [REBUILT_FACT])
     ],
     inside,
     bytes: a.bytes,
@@ -1748,6 +1849,7 @@ export function formatPhishReport(report: PhishReport): string {
     for (const link of report.links) {
       const wrapped = link.wrappedBy ? ` (unwrapped from ${link.wrappedBy})` : ''
       lines.push(`- ${quoteUntrusted(defangIoc(link.target, 'url'))}${wrapped}`)
+      if (link.origin) lines.push(`  - in the body of ${quoteUntrusted(visibleName(link.origin))}`)
       if (showsDerivedDomain(link)) {
         lines.push(`  - derived domain ${quoteUntrusted(defangIoc(link.apexDomain, 'domain'))}`)
       }
@@ -1758,11 +1860,14 @@ export function formatPhishReport(report: PhishReport): string {
     lines.push(section.none)
   }
   for (const note of section.notes) lines.push('', note)
+  // A part found inside an attached message says which one, or the phisher's
+  // payload reads as something the reporter sent.
+  const inside = (a: AttachmentReport): string => (a.origin ? ` inside ${quoteUntrusted(visibleName(a.origin))}` : '')
   lines.push('', '### Attachments', '')
   if (report.attachments.length) {
     for (const a of report.attachments) {
       const size = a.sha256 ? `${a.size} bytes` : 'size not recorded'
-      lines.push(`- ${quoteUntrusted(visibleName(a.filename))} — ${quoteUntrusted(a.contentType)}, ${size}`)
+      lines.push(`- ${quoteUntrusted(visibleName(a.filename))}${inside(a)} — ${quoteUntrusted(a.contentType)}, ${size}`)
       lines.push(`  - SHA-256 ${a.sha256 || 'not recorded'}${a.sha256 ? ' (computed here)' : ''}`)
       lines.push(`  - SHA-1 ${a.sha1 || 'not recorded'}${a.sha1 ? ' (computed here)' : ''}`)
       lines.push(`  - MD5 ${a.md5 || 'not recorded'}${a.md5 ? ' (computed here)' : ''}`)
@@ -1780,7 +1885,9 @@ export function formatPhishReport(report: PhishReport): string {
     // heading already states: a PDF named as a picture, or a beacon URL in a
     // picture's bytes, reached the card and neither the report nor the case.
     for (const a of report.inlineImages) {
-      lines.push(`- ${quoteUntrusted(visibleName(a.filename))} — ${quoteUntrusted(a.contentType)}, ${a.size} bytes`)
+      lines.push(
+        `- ${quoteUntrusted(visibleName(a.filename))}${inside(a)} — ${quoteUntrusted(a.contentType)}, ${a.size} bytes`
+      )
       if (a.sha256) lines.push(`  - SHA-256 ${a.sha256} (computed here)`)
       if (a.sniffed) lines.push(`  - bytes begin as ${a.sniffed}`)
       for (const fact of a.facts) if (fact !== INLINE_FACT) lines.push(`  - ${quoteUntrusted(fact)}`)
@@ -1794,16 +1901,23 @@ export function formatPhishReport(report: PhishReport): string {
   // a mail whose text was nowhere. Fenced with a backtick run longer than
   // anything inside it, so hostile markdown cannot close its own block, and
   // nothing inside a fence autolinks.
-  lines.push('', '### Message body', '')
-  if (report.text.trim() || report.htmlSource.trim()) {
-    if (report.text.trim()) lines.push('Plain text:', '', fenced(report.text.trim()), '')
-    if (report.htmlText.trim()) {
-      lines.push('Text extracted from the HTML, not rendered:', '', fenced(report.htmlText.trim()), '')
-    }
-    if (report.htmlSource.trim()) lines.push('HTML source, not rendered:', '', fenced(report.htmlSource.trim()))
-  } else {
-    lines.push('Not recorded.')
+  //
+  // An attached message's text is its own block under its own name. Joined
+  // to the outer text, the phisher's sentence read as the reporter's.
+  const body = (b: { text: string; htmlText: string; htmlSource: string }): string[] => {
+    const blocks = [
+      ['Plain text:', b.text],
+      ['Text extracted from the HTML, not rendered:', b.htmlText],
+      ['HTML source, not rendered:', b.htmlSource]
+    ].flatMap(([label, text]) => (text.trim() ? [label, '', fenced(text.trim()), ''] : []))
+    return blocks.length ? blocks : ['Not recorded.', '']
   }
+  lines.push('', '### Message body', '', ...body(report))
+  for (const f of report.forwarded) {
+    lines.push(`Text of the attached message ${quoteUntrusted(visibleName(f.origin))}:`, '', ...body(f))
+  }
+  // Every block above ends on a blank line; the next heading brings its own.
+  lines.pop()
 
   lines.push('', '### Indicators', '')
   if (report.indicators.length) for (const i of report.indicators) lines.push(`- ${quoteUntrusted(i)}`)
