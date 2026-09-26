@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { zip } from '../../test/zip'
-import { analysePhishing } from '../soc/phish'
+import { analysePhishing, formatPhishReport, linksSection } from '../soc/phish'
 import { PhishAnalysisView } from './PhishAnalysisView'
 import { openProjectPicker } from '../ui/ModalFactory'
 
@@ -168,10 +168,12 @@ vi.stubGlobal('window', {
 const insertTask =
   vi.fn<(project: unknown, task: { title: string; description: string; iocs: { value: string }[] }) => Promise<void>>()
 
-async function openView(): Promise<{ view: PhishAnalysisView; root: FakeEl; titleEl: FakeEl }> {
+async function openView(
+  phishBrands: string[] = []
+): Promise<{ view: PhishAnalysisView; root: FakeEl; titleEl: FakeEl }> {
   const leaf = { app: {}, updateHeader: (): void => {} }
   const plugin = {
-    settings: { ownedAssets: [], phishBrands: [], projectsFolder: 'Boards' },
+    settings: { ownedAssets: [], phishBrands, projectsFolder: 'Boards' },
     store: {
       loadAllProjects: async (): Promise<unknown[]> => [{ id: 'board' }],
       configFor: () => ({ statuses: [], priorities: [] }),
@@ -510,5 +512,227 @@ describe('PhishAnalysisView: long lists are drawn when opened', () => {
     const pre = listing.children.find((el) => el.tagName === 'pre')
     expect(pre?.textContent).toContain('a.txt')
     expect(pre?.textContent).toContain('b.txt')
+  })
+})
+
+/** The panel's h4 headings, each with the texts drawn inside it, in order. */
+function headings(root: FakeEl): string[] {
+  const panel = root.querySelector('.pm-headers-panel') as FakeEl
+  return panel.children.filter((el) => el.tagName === 'h4').map((el) => el.texts().join(''))
+}
+
+const drawn = (root: FakeEl): string[] => (root.querySelector('.pm-headers-panel') as FakeEl).texts()
+
+describe('PhishAnalysisView: the Links tab says what the report says', () => {
+  it('uses the report’s heading, empty text and pointer to Attachments', async () => {
+    // "Links: None found." sat above an attachment whose lure was a PDF /URI.
+    const { view, root } = await openView()
+    const text = `From: a@example.test
+Subject: No links
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B"
+
+--B
+Content-Type: text/plain
+
+see attached
+--B
+Content-Type: application/octet-stream; name="scan.bin"
+Content-Transfer-Encoding: base64
+
+${btoa('bytes')}
+--B--
+`
+    view.analyse(text, 'l.eml (1 bytes)')
+    await showing(view, 'No links')
+    button(root, 'Links').fire('click')
+    const words = linksSection(report(view) as NonNullable<ReturnType<typeof report>>)
+    expect(words.notes).toContain(
+      'Anything found inside an attachment is listed with that attachment, under Attachments.'
+    )
+    expect(sections(root).get(words.heading)).toEqual([words.none, ...words.notes])
+  })
+
+  it('names the derived domain for what it is, with the note that says how it was derived', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('Derived', 'Sign in at https://login.paypa1.co.uk/verify today'), 'd.eml (1 bytes)')
+    await showing(view, 'Derived')
+    button(root, 'Links').fire('click')
+    const words = linksSection(report(view) as NonNullable<ReturnType<typeof report>>)
+    const rows = sections(root).get(words.heading) ?? []
+    expect(rows).toContain('derived domain paypa1[.]co[.]uk')
+    expect(rows.some((t) => t.startsWith('domain '))).toBe(false)
+    expect(rows).toContain(words.notes[0])
+    expect(words.notes[0]).toMatch(/^Derived domain = /)
+  })
+
+  it('escapes a flag that quotes the host as written', async () => {
+    // U+202E in a host the URL parser refuses: the brand fact quotes the raw host.
+    const { view, root } = await openView(['paypal.test'])
+    view.analyse(mail('Flag', 'Go to https://paypal.te‮st/x now'), 'f.eml (1 bytes)')
+    await showing(view, 'Flag')
+    button(root, 'Links').fire('click')
+    expect(drawn(root).filter((t) => /\p{Cf}/u.test(t))).toEqual([])
+    expect(drawn(root).some((t) => t.startsWith('the name "paypal" on paypal.te<U+202E>st'))).toBe(true)
+  })
+})
+
+describe('PhishAnalysisView: an attached message keeps its own text, links and parts', () => {
+  // The same shape as the report's fixture: a reporter's note, then the
+  // phisher's mail attached, holding a link and a payload of its own. The
+  // name carries U+202E, because the sender wrote it.
+  const NESTED = `From: user@corp.test
+Subject: FW: payment
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="OUT"
+
+--OUT
+Content-Type: text/plain
+
+Reporting this.
+--OUT
+Content-Type: message/rfc822
+Content-Disposition: attachment; filename="=?utf-8?Q?fwd=E2=80=AElme.eml?="
+
+From: attacker@evil.example
+Subject: Invoice
+Content-Type: multipart/mixed; boundary="IN"
+
+--IN
+Content-Type: text/html
+
+<p>Pay at https://pay.evil.example/login</p>
+--IN
+Content-Type: application/octet-stream; name="payload.exe"
+Content-Disposition: attachment; filename="payload.exe"
+Content-Transfer-Encoding: base64
+
+${btoa('MZ payload')}
+--IN--
+
+--OUT--
+`
+  const NAME = 'fwd<U+202E>lme.eml'
+
+  it('shows the attached message’s text on the Body tab, under its own name, apart from the reporter’s', async () => {
+    const { view, root } = await openView()
+    view.analyse(NESTED, 'n.eml (1 bytes)')
+    await showing(view, 'FW: payment')
+    button(root, 'Body').fire('click')
+    const s = sections(root)
+    expect(s.get('Plain text')?.join(' ')).toContain('Reporting this.')
+    expect([...s.values()].flat().join(' ')).toContain('Pay at https://pay.evil.example/login')
+    expect(s.get('Text extracted from the HTML — not rendered')?.join(' ') ?? '').not.toContain('Pay at')
+    expect(headings(root)).toContain(`Text of the attached message ${NAME}`)
+    expect(drawn(root).filter((t) => /\p{Cf}/u.test(t))).toEqual([])
+  })
+
+  it('says which message a link was in', async () => {
+    const { view, root } = await openView()
+    view.analyse(NESTED, 'n.eml (1 bytes)')
+    await showing(view, 'FW: payment')
+    button(root, 'Links').fire('click')
+    const row = root.all().find((el) => el.classes.has('pm-headers-link')) as FakeEl
+    expect(row.texts().slice(0, 2)).toEqual(['hxxps://pay[.]evil[.]example/login', `in the body of ${NAME}`])
+  })
+
+  it('says which message an attachment was inside', async () => {
+    const { view, root } = await openView()
+    view.analyse(NESTED, 'n.eml (1 bytes)')
+    await showing(view, 'FW: payment')
+    button(root, 'Attachments').fire('click')
+    const cards = root.all().filter((el) => el.classes.has('pm-att-card'))
+    const payload = cards.find((c) => c.texts()[0] === 'payload.exe') as FakeEl
+    expect(payload.texts()[1]).toBe(`inside ${NAME}`)
+    const outer = cards.find((c) => c.texts()[0] === NAME) as FakeEl
+    expect(outer.texts().some((t) => t.startsWith('inside '))).toBe(false)
+    expect(drawn(root).filter((t) => /\p{Cf}/u.test(t))).toEqual([])
+  })
+
+  it('does not say a rebuilt part’s hashes came from the bytes in the file', async () => {
+    // A message/rfc822 part is 7bit: its bytes were rebuilt from its text.
+    const { view, root } = await openView()
+    view.analyse(NESTED, 'n.eml (1 bytes)')
+    await showing(view, 'FW: payment')
+    button(root, 'Attachments').fire('click')
+    const outer = root.all().find((el) => el.classes.has('pm-att-card') && el.texts()[0] === NAME) as FakeEl
+    expect(outer.texts()).toContain(
+      "this part's bytes were rebuilt here from its text as read (line breaks as LF), so its size and hashes may not match the file as sent"
+    )
+    expect(outer.texts()).toContain('hashes computed here')
+    expect(outer.texts().some((t) => t.includes('from the bytes in the file'))).toBe(false)
+  })
+})
+
+describe('PhishAnalysisView: the attachment cards say what the report says', () => {
+  const pdfMail = (subject: string, streamBytes: number[]): string => {
+    const head = `%PDF-1.7\n1 0 obj\n<< /Type /XObject /Subtype /Image /Filter /DCTDecode /Length ${streamBytes.length} >>\nstream\n`
+    const tail = '\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n'
+    const bytes = [...head, ...tail].map((c) => c.charCodeAt(0))
+    bytes.splice(head.length, 0, ...streamBytes)
+    return `From: a@example.test\nSubject: ${subject}\nMIME-Version: 1.0\nContent-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: application/pdf\nContent-Disposition: attachment; filename="scan.pdf"\nContent-Transfer-Encoding: base64\n\n${btoa(String.fromCharCode(...bytes))}\n--B--\n`
+  }
+
+  it('calls a /DCTDecode stream whose bytes are a program a stream, not a picture', async () => {
+    const { view, root } = await openView()
+    const program = [0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00]
+    view.analyse(pdfMail('Stream', program), 's.eml (1 bytes)')
+    await showing(view, 'Stream')
+    button(root, 'Attachments').fire('click')
+    expect(drawn(root).some((t) => /^Stream at byte \d+ \(\/DCTDecode\) · 16 bytes$/.test(t))).toBe(true)
+    expect(drawn(root).some((t) => t.startsWith('Picture at'))).toBe(false)
+  })
+
+  it('still calls a JPEG stream a picture', async () => {
+    const { view, root } = await openView()
+    const jpeg = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff, 0xd9]
+    view.analyse(pdfMail('Jpeg', jpeg), 'j.eml (1 bytes)')
+    await showing(view, 'Jpeg')
+    button(root, 'Attachments').fire('click')
+    expect(drawn(root).some((t) => /^Picture at byte \d+ \(\/DCTDecode\) · 13 bytes$/.test(t))).toBe(true)
+  })
+
+  it('heads the inline images as the report does', async () => {
+    const { view, root } = await openView()
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]
+    const text = `From: a@example.test\nSubject: Logo\nMIME-Version: 1.0\nContent-Type: multipart/related; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhi\n--B\nContent-Type: image/png\nContent-Disposition: inline; filename="logo.png"\nContent-ID: <logo>\nContent-Transfer-Encoding: base64\n\n${btoa(String.fromCharCode(...png))}\n--B--\n`
+    view.analyse(text, 'i.eml (1 bytes)')
+    await showing(view, 'Logo')
+    button(root, 'Attachments').fire('click')
+    const line = formatPhishReport(report(view) as NonNullable<ReturnType<typeof report>>)
+      .split('\n')
+      .find((l) => l.startsWith('### Inline images'))
+    expect(line).toBe('### Inline images — marked inline or given a Content-ID by their own headers')
+    expect(headings(root)).toContain(line?.slice(4))
+  })
+})
+
+describe('PhishAnalysisView: Copy indicators', () => {
+  it('copies the rows as the tab draws them, with invisible characters named', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>(async () => {})
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const { view, root } = await openView()
+    view.analyse(mail('Soft', 'Sign in at https://micro­soft-login.test/verify'), 'c.eml (1 bytes)')
+    await showing(view, 'Soft')
+    button(root, 'Copy indicators').fire('click')
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalled())
+    const copied = writeText.mock.calls[0][0]
+    expect(copied).toContain('url: hxxps://micro<U+00AD>soft-login[.]test/verify')
+    expect(/\p{Cf}/u.test(copied)).toBe(false)
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('PhishAnalysisView: an authentication result with no asserting host', () => {
+  it('says there was none, rather than "asserted by no asserting host stated"', async () => {
+    // Microsoft 365 writes the result with no host in front of it.
+    const { view, root } = await openView()
+    view.analyse(
+      mail('M365', 'body', 'Authentication-Results: spf=pass (sender IP is 192.0.2.1) smtp.mailfrom=example.test\n'),
+      'a.eml (1 bytes)'
+    )
+    await showing(view, 'M365')
+    const by = root.all().filter((el) => el.classes.has('pm-headers-by'))
+    expect(by.map((el) => el.textContent)).toEqual(['no asserting host stated'])
   })
 })
