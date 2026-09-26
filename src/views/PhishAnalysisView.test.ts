@@ -422,6 +422,51 @@ Content-Transfer-Encoding: base64
   })
 })
 
+describe('PhishAnalysisView: a hop that arrived EARLIER', () => {
+  it('keeps the timestamp alone in the unbreakable span and the sentence in one that wraps', async () => {
+    const { view, root } = await openView()
+    const text = `Received: from b.test by c.test with ESMTP; Mon, 21 Sep 2026 09:10:00 +0000
+Received: from a.test by b.test with ESMTP; Mon, 21 Sep 2026 09:15:00 +0000
+From: a@example.test
+Subject: Skew
+
+body
+`
+    view.analyse(text, 's.eml (1 bytes)')
+    await showing(view, 'Skew')
+    const warn = root.querySelector('.pm-headers-result.pm-headers-warn') as FakeEl
+    expect(warn.textContent).toBe('2026-09-21T09:10:00.000Z')
+    expect(root.querySelector('.pm-hop-delay')?.textContent).toBe(
+      '(300s EARLIER than the hop before it — clock skew or a forged hop)'
+    )
+  })
+})
+
+describe('PhishAnalysisView: the tab strip from the keyboard', () => {
+  it('says which pane is showing, and keeps focus on the chosen tab after the strip is rebuilt', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('Tabs', 'body'), 't.eml (1 bytes)')
+    await showing(view, 'Tabs')
+    button(root, 'Attachments').fire('click')
+    const tabs = root.all().filter((el) => el.classes.has('pm-headers-tab'))
+    const on = tabs.filter((el) => el.getAttribute('aria-pressed') === 'true')
+    expect(on.map((el) => el.textContent)).toEqual(['Attachments (0)'])
+    expect(tabs.filter((el) => el.getAttribute('aria-pressed') === 'false')).toHaveLength(tabs.length - 1)
+    expect(focus.active).toBe(on[0])
+  })
+})
+
+describe('PhishAnalysisView: the title inside the pane', () => {
+  it('follows the subject, and goes back after Reset', async () => {
+    const { view, root, titleEl } = await openView()
+    view.analyse(mail('Invoice 4471 overdue', 'body'), 'i.eml (1 bytes)')
+    await showing(view, 'Invoice 4471 overdue')
+    expect(titleEl.textContent).toBe('Phish: Invoice 4471 overdue')
+    button(root, 'Reset').fire('click')
+    await vi.waitFor(() => expect(titleEl.textContent).toBe('Phishing analysis'))
+  })
+})
+
 describe('PhishAnalysisView: long lists are drawn when opened', () => {
   it('draws cards past the cap only when their disclosure opens, and then all of them', async () => {
     const { view, root } = await openView()

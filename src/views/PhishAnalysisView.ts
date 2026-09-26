@@ -166,6 +166,11 @@ export class PhishAnalysisView extends ItemView {
       // updateHeader, so it is looked for rather than assumed: on a build
       // without it the tab keeps the title it had instead of the call throwing.
       ;(this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.()
+      // updateHeader renames only the tab. The title inside the pane is set
+      // once, when the view loads, so it is set again here; on a phone it is
+      // the only title shown. Looked for, as above, because the typings do not
+      // declare it on a view.
+      ;(this as unknown as { titleEl?: HTMLElement }).titleEl?.setText(this.getDisplayText())
     })
     this.input = input
     this.loadNote = loadNote
@@ -330,11 +335,22 @@ export class PhishAnalysisView extends ItemView {
     strip.empty()
     const panel = out.createDiv('pm-headers-panel')
     for (const tab of tabs) {
-      const button = strip.createEl('button', { cls: 'pm-headers-tab', text: tab.label })
-      button.toggleClass('is-on', this.tab === tab.id)
+      const on = this.tab === tab.id
+      // aria-pressed says which pane is showing; the underline alone said it
+      // only to someone who can see it.
+      const button = strip.createEl('button', {
+        cls: 'pm-headers-tab',
+        text: tab.label,
+        attr: { 'aria-pressed': String(on) }
+      })
+      button.toggleClass('is-on', on)
       button.addEventListener('click', () => {
         this.tab = tab.id
         this.render(out)
+        // The strip was rebuilt, so the button that had focus is gone and focus
+        // fell to the page. Hand it to the new one, or a keyboard user starts
+        // the strip again after every switch.
+        strip.querySelector<HTMLElement>('.pm-headers-tab.is-on')?.focus()
       })
     }
     this.renderPanel(panel, report)
@@ -390,10 +406,12 @@ export class PhishAnalysisView extends ItemView {
           if (!hop.at) {
             line.createSpan({ cls: 'pm-headers-absent', text: 'no time recorded' })
           } else if (hop.delaySec !== null && hop.delaySec < 0) {
-            line.createSpan({
-              cls: 'pm-headers-result pm-headers-warn',
-              text: `${hop.at} ${formatDelay(hop.delaySec)}`
-            })
+            // The stamp keeps its own unbreakable span; the sentence after it
+            // wraps. As one unbreakable span the sentence was 650px wide and
+            // squeezed the hop beside it to a column of single letters — on
+            // the one hop this tab marks as possibly forged.
+            line.createSpan({ cls: 'pm-headers-result pm-headers-warn', text: hop.at })
+            line.createSpan({ cls: 'pm-hop-delay', text: formatDelay(hop.delaySec).trim() })
           } else {
             line.createSpan({
               cls: 'pm-headers-result',
