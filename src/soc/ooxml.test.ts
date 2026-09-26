@@ -1,106 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { entryNote, readZipDocument } from './ooxml'
+import { concat, deflateRaw, header, padCentralDirectory, type Part, zip } from '../../test/zip'
 
 const enc = new TextEncoder()
-
-/** A fixed-size header, written field by field — the same way the reader reads it back. */
-function header(size: number, fill: (view: DataView) => void): Uint8Array {
-  const bytes = new Uint8Array(size)
-  fill(new DataView(bytes.buffer))
-  return bytes
-}
-
-function concat(parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
-  let at = 0
-  for (const part of parts) {
-    out.set(part, at)
-    at += part.length
-  }
-  return out
-}
-
-interface Part {
-  name: string
-  data: Uint8Array
-  /** 0 stored, 8 deflate, anything else to exercise the naming. */
-  method?: number
-  /** General purpose flags — bit 0 is the encrypted bit. */
-  flags?: number
-  /** Declared uncompressed size, when it should differ from the payload length. */
-  size?: number
-  /** Declared compressed size in the central directory, when it should differ from the payload length. */
-  compressed?: number
-}
-
-/** A real ZIP, assembled byte by byte: local headers, payloads, central directory, EOCD. */
-function zip(parts: Part[], comment = ''): Uint8Array {
-  const locals: Uint8Array[] = []
-  const centrals: Uint8Array[] = []
-  let offset = 0
-  for (const part of parts) {
-    const name = enc.encode(part.name)
-    const method = part.method ?? 0
-    const flags = part.flags ?? 0
-    const size = part.size ?? part.data.length
-    const local = header(30, (v) => {
-      v.setUint32(0, 0x04034b50, true)
-      v.setUint16(4, 20, true)
-      v.setUint16(6, flags, true)
-      v.setUint16(8, method, true)
-      v.setUint32(18, part.data.length, true)
-      v.setUint32(22, size, true)
-      v.setUint16(26, name.length, true)
-    })
-    const central = header(46, (v) => {
-      v.setUint32(0, 0x02014b50, true)
-      v.setUint16(6, 20, true)
-      v.setUint16(8, flags, true)
-      v.setUint16(10, method, true)
-      v.setUint32(20, part.compressed ?? part.data.length, true)
-      v.setUint32(24, size, true)
-      v.setUint16(28, name.length, true)
-      v.setUint32(42, offset, true)
-    })
-    locals.push(local, name, part.data)
-    centrals.push(central, name)
-    offset += local.length + name.length + part.data.length
-  }
-  const directory = concat(centrals)
-  const commentBytes = enc.encode(comment)
-  const eocd = header(22, (v) => {
-    v.setUint32(0, 0x06054b50, true)
-    v.setUint16(8, parts.length, true)
-    v.setUint16(10, parts.length, true)
-    v.setUint32(12, directory.length, true)
-    v.setUint32(16, offset, true)
-    v.setUint16(20, commentBytes.length, true)
-  })
-  return concat([...locals, directory, eocd, commentBytes])
-}
-
-/**
- * Put bytes INSIDE the central directory, after the last entry record, and
- * count them in cdSize. Legal: APPNOTE 4.3.13 puts the archive-signature
- * record there, and writers pad — so cdSize covering bytes the entry walk does
- * not consume is an ordinary complete archive, not a short listing.
- */
-function padCentralDirectory(bytes: Uint8Array, extra: Uint8Array): Uint8Array {
-  const out = concat([bytes.subarray(0, bytes.length - 22), extra, bytes.subarray(bytes.length - 22)])
-  const eocd = new DataView(out.buffer, out.length - 22)
-  eocd.setUint32(12, eocd.getUint32(12, true) + extra.length, true)
-  return out
-}
-
-async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new CompressionStream('deflate-raw')
-  const writer = stream.writable.getWriter()
-  void (async () => {
-    await writer.write(new Uint8Array(data))
-    await writer.close()
-  })()
-  return new Uint8Array(await new Response(stream.readable).arrayBuffer())
-}
 
 const RELS = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -1070,11 +972,11 @@ describe('entryNote', () => {
   })
 })
 
-describe('pictures under media/', () => {
-  const PNG = Uint8Array.from([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82
-  ])
+const PNG = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82
+])
 
+describe('pictures under media/', () => {
   it('hands back stored and deflated pictures as bytes, and nothing else', async () => {
     const facts = await readZipDocument(
       zip([
@@ -1111,6 +1013,365 @@ describe('pictures under media/', () => {
       zip([{ name: 'xl/media/image1.png', data: broken, method: 8, size: PNG.length }])
     )
     expect(facts?.images).toEqual([])
-    expect(facts?.notes.join(' ')).toMatch(/1 picture listed under media\/ could not be read whole/)
+    expect(facts?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+  })
+})
+
+/** One local entry, and a central record per name that every one points at — the overlapping shape zip() cannot build. */
+function overlapping(names: string[], data: Uint8Array, method: number, size: number): Uint8Array {
+  const first = enc.encode(names[0] ?? '')
+  const local = header(30, (v) => {
+    v.setUint32(0, 0x04034b50, true)
+    v.setUint16(8, method, true)
+    v.setUint32(18, data.length, true)
+    v.setUint32(22, size, true)
+    v.setUint16(26, first.length, true)
+  })
+  const directory = concat(
+    names.flatMap((n) => {
+      const name = enc.encode(n)
+      const central = header(46, (v) => {
+        v.setUint32(0, 0x02014b50, true)
+        v.setUint16(10, method, true)
+        v.setUint32(20, data.length, true)
+        v.setUint32(24, size, true)
+        v.setUint16(28, name.length, true)
+        // Local offset left at 0: every row points at the one local entry.
+      })
+      return [central, name]
+    })
+  )
+  const eocd = header(22, (v) => {
+    v.setUint32(0, 0x06054b50, true)
+    v.setUint16(8, names.length, true)
+    v.setUint16(10, names.length, true)
+    v.setUint32(12, directory.length, true)
+    v.setUint32(16, local.length + first.length + data.length, true)
+  })
+  return concat([local, first, data, directory, eocd])
+}
+
+/** Raw deflate written as stored blocks, the last one final, so a test can cut the stream exactly between two. */
+function storedBlocks(...chunks: Uint8Array[]): Uint8Array {
+  return concat(
+    chunks.flatMap((chunk, i) => [
+      header(5, (v) => {
+        v.setUint8(0, i === chunks.length - 1 ? 1 : 0)
+        v.setUint16(1, chunk.length, true)
+        v.setUint16(3, ~chunk.length & 0xffff, true)
+      }),
+      chunk
+    ])
+  )
+}
+
+const many = <T>(count: number, make: (i: number) => T): T[] => Array.from({ length: count }, (_, i) => make(i))
+
+describe('a picture is whole when it is as long as the directory says', () => {
+  it('does not keep a cut GIF because its partial output happens to end in 0x3B', async () => {
+    const gif = new Uint8Array(58)
+    gif.set(enc.encode('GIF89a'))
+    gif[13] = 0x3b
+    gif[57] = 0x3b
+    const stream = storedBlocks(gif.subarray(0, 14), gif.subarray(14))
+    const facts = await readZipDocument(
+      zip([{ name: 'word/media/image1.gif', data: stream, method: 8, size: gif.length, compressed: 5 + 14 }])
+    )
+    // The 14-byte prefix was kept, drawn and hashed as the picture.
+    expect(facts?.images).toEqual([])
+    expect(facts?.notes.join(' ')).toContain('1 entry named as a picture could not be read whole')
+  })
+
+  it('does not keep a cut JPEG because the cut fell on an inner FF D9', async () => {
+    const jpeg = new Uint8Array(5_010)
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0])
+    jpeg.set([0xff, 0xd9], 10) // an embedded thumbnail's end
+    jpeg.set([0xff, 0xd9], jpeg.length - 2)
+    const stream = storedBlocks(jpeg.subarray(0, 12), jpeg.subarray(12))
+    const facts = await readZipDocument(
+      zip([{ name: 'word/media/image1.jpeg', data: stream, method: 8, size: jpeg.length, compressed: 5 + 12 }])
+    )
+    expect(facts?.images).toEqual([])
+  })
+
+  it('keeps a streamed JPEG with bytes after its end marker, and gives no false reason', async () => {
+    // Whole, inflated to exactly its declared length — then the decompressor
+    // errors on the rest of the file, as it does for every streamed entry. The
+    // tail check dropped it as "encrypted, damaged, over 8 MB, or …".
+    const jpeg = new Uint8Array(4_064)
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0])
+    jpeg.set([0xff, 0xd9], 4_000) // 64 bytes of padding follow
+    const facts = await readZipDocument(
+      zip([
+        {
+          name: 'word/media/image1.jpeg',
+          data: await deflateRaw(jpeg),
+          method: 8,
+          flags: 8,
+          size: jpeg.length,
+          compressed: 0
+        },
+        { name: 'word/document.xml', data: enc.encode('<w:document/>') }
+      ])
+    )
+    expect(facts?.images.map((i) => i.bytes)).toEqual([jpeg])
+    expect(facts?.notes.join(' ')).not.toContain('could not be read whole')
+  })
+})
+
+describe('every open is charged, kept or not', () => {
+  it('stops 4,096 rows aimed at one small bomb in well under a second, and says why', async () => {
+    // 294 KB of file, 32.8 GB of inflation when only kept pictures counted.
+    const bomb = await deflateRaw(new Uint8Array(8_000_001))
+    const bytes = overlapping(
+      many(4_096, (i) => `word/media/image${i}.png`),
+      bomb,
+      8,
+      8_000_001
+    )
+    const media = { left: 100_000_000 }
+    const started = performance.now()
+    const facts = await readZipDocument(bytes, media)
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(facts?.images).toEqual([])
+    const notes = facts?.notes.join(' ') ?? ''
+    expect(notes).toContain('4 entries named as pictures could not be read whole here')
+    expect(notes).toContain(
+      '4092 entries named as pictures were not opened: this reader stops once it has read 32 MB of pictures and inner files out of one file'
+    )
+    // Four 8 MB inflates, every byte charged though none was kept.
+    expect(media.left).toBe(68_000_000)
+  })
+
+  it('stops after opening 24 when every open fails at once and costs nothing', async () => {
+    // An invalid block type: each inflate errors on its first byte with no
+    // output, so the byte budget never moves and only the count bounds it.
+    const facts = await readZipDocument(
+      overlapping(
+        many(4_096, (i) => `word/media/image${i}.png`),
+        Uint8Array.from([0x07, 0xff, 0xff]),
+        8,
+        100
+      )
+    )
+    expect(facts?.notes.join(' ')).toContain(
+      '4072 of the 4096 entries named as pictures were not opened: this reader stops after opening 24.'
+    )
+  })
+
+  it('counts the cap from where the loop stopped, not from what it kept', async () => {
+    // "Only the first 24 of the 29" was said about a run that opened 27 and
+    // kept entries 4 to 27.
+    const facts = await readZipDocument(
+      zip([
+        ...many(3, (i) => ({ name: `word/media/bad${i}.png`, data: PNG, flags: 1 })),
+        ...many(26, (i) => ({ name: `word/media/good${i}.png`, data: PNG }))
+      ])
+    )
+    expect(facts?.images).toHaveLength(24)
+    const notes = facts?.notes.join(' ') ?? ''
+    expect(notes).toContain(
+      '2 of the 29 entries named as pictures were not opened: this reader stops after opening 24.'
+    )
+    expect(notes).toContain('3 entries named as pictures could not be read whole here — encrypted')
+    expect(notes).not.toContain('first 24')
+  })
+
+  it('names the spent budget, not damage, for an intact picture that did not fit', async () => {
+    // Four whole 7 MB pictures leave 4 MB of the 32; the fifth is intact,
+    // unencrypted and under 8 MB, and was told it was one of those.
+    const jpeg = new Uint8Array(7_000_000)
+    jpeg.set([0xff, 0xd8, 0xff])
+    const png = new Uint8Array(7_000_020)
+    png.set(PNG)
+    const deflated = await deflateRaw(png)
+    const stored = zip(many(5, (i) => ({ name: `word/media/image${i}.jpeg`, data: jpeg })))
+    const inflated = zip(
+      many(5, (i) => ({ name: `word/media/image${i}.png`, data: deflated, method: 8, size: png.length }))
+    )
+    for (const bytes of [stored, inflated]) {
+      const facts = await readZipDocument(bytes)
+      expect(facts?.images).toHaveLength(4)
+      const notes = facts?.notes.join(' ') ?? ''
+      expect(notes).toContain(
+        '1 entry named as a picture was not read whole: it was larger than what remained of the 32 MB of pictures and inner files this reader will read out of one file, so it is not drawn here.'
+      )
+      expect(notes).not.toContain('over 8 MB')
+    }
+  })
+})
+
+describe('pictures anywhere in the container', () => {
+  it('draws pictures outside media/, as an .odt or a plain .zip keeps them', async () => {
+    const facts = await readZipDocument(
+      zip([
+        { name: 'Pictures/1000.png', data: PNG },
+        { name: 'scan.png', data: PNG }
+      ])
+    )
+    expect(facts?.images.map((i) => i.name)).toEqual(['Pictures/1000.png', 'scan.png'])
+  })
+
+  it('says a picture in a format it does not draw was not drawn, rather than nothing', async () => {
+    const facts = await readZipDocument(
+      zip([
+        { name: '[Content_Types].xml', data: enc.encode('<Types/>') },
+        { name: 'word/document.xml', data: enc.encode('<w:document/>') },
+        { name: 'word/media/image1.emf', data: enc.encode('EMF-bytes') }
+      ])
+    )
+    expect(facts?.images).toEqual([])
+    expect(facts?.notes.join(' ')).toContain(
+      '1 entry is named as a picture in a format this does not draw (EMF, WMF, SVG, TIFF, BMP or WebP), so it is not drawn. Not drawn is not absent.'
+    )
+  })
+
+  it('says nothing about pictures when no entry is named as one', async () => {
+    const facts = await readZipDocument(
+      zip([
+        { name: 'a.txt', data: enc.encode('one') },
+        { name: 'b.txt', data: enc.encode('two') }
+      ])
+    )
+    expect(facts?.notes).toEqual([])
+  })
+})
+
+describe('one picture budget across a whole message', () => {
+  const docx = (...pictures: Part[]) =>
+    zip([{ name: '[Content_Types].xml', data: enc.encode('<Types/>') }, ...pictures])
+
+  it('stops reading pictures once the attachments before this one have used the budget', async () => {
+    const media = { left: PNG.length }
+    const first = await readZipDocument(docx({ name: 'word/media/image1.png', data: PNG }), media)
+    const second = await readZipDocument(docx({ name: 'word/media/image1.png', data: PNG }), media)
+    expect(first?.images).toHaveLength(1)
+    expect(second?.images).toEqual([])
+    expect(second?.notes).toEqual([
+      "1 entry named as a picture was not opened: this message's budget for pictures and inner files was used up by what was read before it, so it is not drawn here. Not drawn is not absent."
+    ])
+    expect(media.left).toBe(0)
+  })
+
+  it('names the message budget when it is the one a picture did not fit', async () => {
+    const media = { left: PNG.length + 5 }
+    const facts = await readZipDocument(
+      docx({ name: 'word/media/image1.png', data: PNG }, { name: 'word/media/image2.png', data: PNG }),
+      media
+    )
+    expect(facts?.images).toHaveLength(1)
+    expect(facts?.notes.join(' ')).toContain(
+      "1 entry named as a picture was not read whole: it was larger than what remained of this message's budget for pictures and inner files"
+    )
+  })
+
+  it('reads every picture of an ordinary message and says nothing about a budget', async () => {
+    const media = { left: 64_000_000 }
+    for (let i = 0; i < 12; i++) {
+      const facts = await readZipDocument(docx({ name: 'word/media/image1.png', data: PNG }), media)
+      expect(facts?.images).toHaveLength(1)
+      expect(facts?.notes).toEqual([])
+    }
+    expect(media.left).toBe(64_000_000 - 12 * PNG.length)
+  })
+})
+
+describe('files inside the archive', () => {
+  const mz = concat([enc.encode('MZ'), new Uint8Array(100).fill(0x90)])
+
+  it('hands back each file a plain archive carries, whole, with its first bytes', async () => {
+    const html = enc.encode('<html><script>location.href="https://x.test"</script></html>')
+    const js = enc.encode('WScript.Echo(1)')
+    const facts = await readZipDocument(
+      zip([
+        { name: 'Invoice.pdf', data: mz },
+        { name: 'view.html', data: await deflateRaw(html), method: 8, size: html.length },
+        { name: 'run.js', data: js },
+        { name: 'docs/', data: new Uint8Array(0) },
+        { name: 'empty.txt', data: new Uint8Array(0) }
+      ])
+    )
+    expect(facts?.files.map((f) => f.name)).toEqual(['Invoice.pdf', 'view.html', 'run.js'])
+    expect(facts?.files[0]?.bytes).toEqual(mz)
+    expect(facts?.files[0]?.head).toEqual(mz.subarray(0, 32))
+    expect(facts?.files[1]?.bytes).toEqual(html)
+    expect(facts?.files[2]?.head).toEqual(js) // shorter than the head: the head is the whole file
+    // An empty file and a folder are not unreadable files.
+    expect(facts?.notes).toEqual([])
+  })
+
+  it('reads only the non-markup parts of an Office file, and a planted [Content_Types].xml hides nothing', async () => {
+    const office = await readZipDocument(
+      zip([
+        { name: '[Content_Types].xml', data: enc.encode('<Types/>') },
+        { name: 'word/document.xml', data: enc.encode('<w:document/>') },
+        { name: 'word/_rels/document.xml.rels', data: enc.encode(RELS) },
+        { name: 'word/vbaProject.bin', data: enc.encode('macro-bytes') },
+        { name: 'word/media/image1.png', data: PNG }
+      ])
+    )
+    expect(office?.files.map((f) => f.name)).toEqual(['word/vbaProject.bin'])
+    expect(office?.images.map((i) => i.name)).toEqual(['word/media/image1.png'])
+
+    const planted = await readZipDocument(
+      zip([
+        { name: '[Content_Types].xml', data: enc.encode('<Types/>') },
+        { name: 'payload.exe', data: mz }
+      ])
+    )
+    expect(planted?.files.map((f) => f.name)).toEqual(['payload.exe'])
+  })
+
+  it('gives a file it cannot read whole its first bytes and no body', async () => {
+    const big = new Uint8Array(8_000_001)
+    big.set([0x4d, 0x5a])
+    const facts = await readZipDocument(
+      zip([{ name: 'payload/Invoice.pdf', data: await deflateRaw(big), method: 8, size: big.length }])
+    )
+    expect(facts?.files).toHaveLength(1)
+    expect(facts?.files[0]?.bytes).toBeNull()
+    expect(facts?.files[0]?.head).toEqual(big.subarray(0, 32))
+    expect(facts?.notes.join(' ')).toContain(
+      '1 inner file could not be read whole here — encrypted, damaged, over 8 MB, or compressed in a way this device cannot inflate — so it is not hashed here.'
+    )
+  })
+
+  it('hands back no head shorter than a signature from a stream that broke early', async () => {
+    // Three bytes of a shortcut are not "its first bytes" for a 20-byte check:
+    // "no signature this recognises" from them would be about bytes nobody read.
+    const facts = await readZipDocument(
+      zip([
+        {
+          name: 'Invoice.lnk',
+          data: storedBlocks(Uint8Array.from([0x4c, 0, 0]), new Uint8Array(40)),
+          method: 8,
+          size: 43,
+          compressed: 5 + 3
+        }
+      ])
+    )
+    expect(facts?.files).toEqual([])
+    expect(facts?.notes.join(' ')).toContain('1 inner file could not be read whole here')
+  })
+
+  it('opens at most 24 files and says how many were left', async () => {
+    const facts = await readZipDocument(zip(many(30, (i) => ({ name: `f${i}.bin`, data: mz }))))
+    expect(facts?.files).toHaveLength(24)
+    expect(facts?.notes).toEqual(['6 of the 30 inner files were not opened: this reader stops after opening 24.'])
+  })
+})
+
+describe('entryNote rows for what a victim double-clicks', () => {
+  it('calls a disk image a disk image, not an executable', () => {
+    for (const name of ['a/b.iso', 'Invoice.img', 'x.vhd', 'x.vhdx']) {
+      expect(entryNote(name)).toBe('named like a disk image')
+    }
+    expect(entryNote('payload/Invoice.pdf.exe')).toBe('named like an executable or script')
+  })
+
+  it('names web pages, SVG and OneNote files', () => {
+    for (const name of ['view.html', 'view.htm', 'a.svg', 'Notes.one']) {
+      expect(entryNote(name)).toBe('named as a web page, SVG or OneNote file')
+    }
   })
 })
