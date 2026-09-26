@@ -238,9 +238,90 @@ describe('parser evasions that used to hide content from the analyst', () => {
     const outer =
       'Content-Type: multipart/mixed; boundary="OUT"\n\n--OUT\nContent-Type: text/plain\n\nSee attached.\n' +
       `--OUT\nContent-Type: message/rfc822\nContent-Disposition: attachment; filename="fwd.eml"\n\n${inner}--OUT--\n`
+    const [, ...inside] = parseEml(outer).attachments
+    expect(inside.map((a) => a.origin)).toEqual(['fwd.eml'])
     const names = parseEml(outer).attachments.map((a) => a.filename)
     expect(names).toContain('fwd.eml')
     expect(names).toContain('payload.exe')
+  })
+})
+
+describe('a forwarded message is kept apart from the message that carries it', () => {
+  const b64of = (s: string): string => btoa(s)
+  // The shape of the shipped reported.eml: a user forwards the phish as an attachment.
+  const original =
+    'Received: from mail.m1crosoft-verify.test ([198.51.100.23])\nFrom: "Microsoft 365" <it@m1crosoft-verify.test>\n' +
+    'Subject: Action required\nContent-Type: multipart/mixed; boundary="IN"\n\n' +
+    '--IN\nContent-Type: text/plain\n\nScan the QR code in the attached PDF to keep your account.\n' +
+    '--IN\nContent-Type: text/html\n\n<p>Scan the <a href="https://evil.test/qr">QR code</a></p>\n' +
+    '--IN\nContent-Type: application/pdf\nContent-Disposition: attachment; filename="Scan.pdf"\n' +
+    `Content-Transfer-Encoding: base64\n\n${b64of('%PDF-1.7')}\n--IN--\n`
+  const reported = (rfc822Headers: string, inner = original, outerHtml = ''): string =>
+    'From: user@corp.test\nSubject: FW: Action required\nContent-Type: multipart/mixed; boundary="OUT"\n\n' +
+    '--OUT\nContent-Type: text/plain\n\nReporting this, it came with a PDF.\n' +
+    (outerHtml ? `--OUT\nContent-Type: text/html\n\n${outerHtml}\n` : '') +
+    `--OUT\n${rfc822Headers}\n\n${inner}--OUT--\n`
+
+  it("does not print the phisher's text as the reporter's", () => {
+    const eml = parseEml(
+      reported('Content-Type: message/rfc822\nContent-Disposition: attachment; filename="original.eml"')
+    )
+    expect(eml.text).toBe('Reporting this, it came with a PDF.')
+    expect(eml.html).toBe('')
+    expect(eml.forwarded).toHaveLength(1)
+    expect(eml.forwarded[0].origin).toBe('original.eml')
+    expect(eml.forwarded[0].text).toContain('Scan the QR code')
+    expect(eml.forwarded[0].html).toContain('https://evil.test/qr')
+  })
+
+  it('says which attached message each attachment was found inside', () => {
+    const eml = parseEml(
+      reported('Content-Type: message/rfc822\nContent-Disposition: attachment; filename="original.eml"')
+    )
+    expect(eml.attachments.map((a) => [a.filename, a.origin])).toEqual([
+      ['original.eml', undefined],
+      ['Scan.pdf', 'original.eml']
+    ])
+  })
+
+  it('lists an unnamed inline forward as a row of its own, so its headers can be read', () => {
+    const eml = parseEml(reported('Content-Type: message/rfc822\nContent-Disposition: inline'))
+    expect(eml.attachments.map((a) => [a.contentType, a.origin])).toEqual([
+      ['message/rfc822', undefined],
+      ['application/pdf', 'an attached message']
+    ])
+    expect(new TextDecoder().decode(eml.attachments[0].bytes)).toContain('it@m1crosoft-verify.test')
+    expect(eml.forwarded[0].origin).toBe('an attached message')
+    expect(eml.text).not.toContain('Scan the QR code')
+  })
+
+  it('names a forward inside a forward by the whole chain', () => {
+    const named = reported(
+      'Content-Type: message/rfc822\nContent-Disposition: attachment; filename="fwd.eml"',
+      'From: someone@corp.test\nContent-Type: multipart/mixed; boundary="MID"\n\n' +
+        '--MID\nContent-Type: text/plain\n\nsee below\n' +
+        `--MID\nContent-Type: message/rfc822\nContent-Disposition: attachment; filename="original.eml"\n\n${original}--MID--\n`
+    )
+    const eml = parseEml(named)
+    expect(eml.forwarded.map((f) => f.origin)).toEqual(['fwd.eml', 'fwd.eml › original.eml'])
+    expect(eml.forwarded[0].text).toBe('see below')
+    expect(eml.attachments.find((a) => a.filename === 'Scan.pdf')?.origin).toBe('fwd.eml › original.eml')
+    const unnamed = parseEml(
+      named.replace('Content-Disposition: attachment; filename="original.eml"', 'Content-Type: message/rfc822')
+    )
+    expect(unnamed.forwarded.map((f) => f.origin)).toEqual(['fwd.eml', 'fwd.eml › an attached message'])
+  })
+
+  it("keeps an unclosed comment in the outer HTML from swallowing the inner message's HTML", () => {
+    const eml = parseEml(
+      reported(
+        'Content-Type: message/rfc822\nContent-Disposition: attachment; filename="original.eml"',
+        original,
+        '<p>See attached.</p><!--'
+      )
+    )
+    expect(eml.html).toBe('<p>See attached.</p><!--')
+    expect(eml.forwarded[0].html).toContain('https://evil.test/qr')
   })
 
   it('tolerates the stray bytes RFC 2045 says to ignore, as every client does', () => {

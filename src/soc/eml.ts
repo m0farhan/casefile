@@ -59,16 +59,39 @@ export interface Attachment {
    * hashes may not match the sender's copy and the caller has to say so.
    */
   exact: boolean
+  /**
+   * The attached message this part was found inside, as the chain of their
+   * names joined by ` › ` ("an attached message" for one with no name).
+   * Absent for the outer message's own parts. The names are the sender's
+   * text: pass them through visibleName before showing them.
+   */
+  origin?: string
+}
+
+/** The body of a message attached to this one — the reported phish, usually. */
+export interface Forwarded {
+  /** Which attached message, named as on Attachment.origin. */
+  origin: string
+  /** text/plain, decoded. */
+  text: string
+  /** text/html as SOURCE, like Eml.html. */
+  html: string
 }
 
 export interface Eml {
   headers: HeaderField[]
-  /** text/plain body, decoded. */
+  /** The outer message's own text/plain body, decoded. */
   text: string
-  /** text/html body as SOURCE. Never rendered, never fetched from. */
+  /** The outer message's own text/html body as SOURCE. Never rendered, never fetched from. */
   html: string
+  /**
+   * The bodies of attached messages, kept apart from the outer one. Joined to
+   * it, the phisher's sentence read as the reporter's own, and an unclosed
+   * `<!--` in the outer HTML hid the inner message's text.
+   */
+  forwarded: Forwarded[]
   attachments: Attachment[]
-  /** Parts whose declared charset could not be honoured, named not hidden. */
+  /** What could not be read, or not read faithfully, named not hidden. */
   notes: string[]
 }
 
@@ -377,12 +400,14 @@ export function parseEml(raw: string): Eml {
   // The root only: a MIME part that opens on a blank line genuinely has no
   // headers, and splitHeadersAndBody keeps that rule for parts.
   const root = splitHeadersAndBody(withoutLeadingBlankLines(raw))
-  const out: Eml = { headers: root.headers, text: '', html: '', attachments: [], notes: [] }
-  walk(root, out, 0)
+  const out: Eml = { headers: root.headers, text: '', html: '', forwarded: [], attachments: [], notes: [] }
+  walk(root, out, 0, null)
+  // An attached message with no text of its own is still listed, as an attachment.
+  out.forwarded = out.forwarded.filter((f) => f.text || f.html)
   // Only when nothing at all was found or noted: every note that can stand
   // beside an empty result says something was not read, and "headers only"
   // next to it contradicted it.
-  if (!out.text && !out.html && !out.attachments.length && !out.notes.length) {
+  if (!out.text && !out.html && !out.forwarded.length && !out.attachments.length && !out.notes.length) {
     out.notes.push(
       out.headers.length
         ? 'No message body in this paste — headers only.'
@@ -392,7 +417,8 @@ export function parseEml(raw: string): Eml {
   return out
 }
 
-function walk(part: RawPart, out: Eml, depth: number): void {
+/** `into` is the attached message being read, or null for the outer message's own parts. */
+function walk(part: RawPart, out: Eml, depth: number, into: Forwarded | null): void {
   // Deeply nested multiparts are a real shape (forwarded chains), but a cycle
   // is not: a bound keeps a malformed file from walking forever.
   if (depth > 12) {
@@ -419,7 +445,7 @@ function walk(part: RawPart, out: Eml, depth: number): void {
         `A ${mime} part has no line opening a part with its declared boundary, so its contents were not read.`
       )
     }
-    for (const chunk of parts) walk(splitHeadersAndBody(chunk), out, depth + 1)
+    for (const chunk of parts) walk(splitHeadersAndBody(chunk), out, depth + 1, into)
     return
   }
 
@@ -442,22 +468,41 @@ function walk(part: RawPart, out: Eml, depth: number): void {
     )
   }
 
+  const attachment: Attachment = {
+    filename: filename || '(no filename given)',
+    contentType: mime,
+    size: bytes.length,
+    bytes,
+    inline,
+    attached,
+    undecodable: failed,
+    exact: hashExact,
+    ...(into ? { origin: into.origin } : {})
+  }
+
   // A forwarded message is the commonest way a reported phish reaches a SOC —
   // the user hits "forward as attachment". Walking into it is what puts the
   // real payload's name, bytes and hash in front of the analyst instead of a
-  // single row reading `fwd.eml — message/rfc822`.
+  // single row reading `fwd.eml — message/rfc822`. It is a row of its own
+  // whether it has a name or not: its headers — the phisher's From, the
+  // Received chain — are read from that row, and an unnamed inline forward
+  // used to leave no row, so they were read from nowhere.
   if (mime === 'message/rfc822') {
-    if (filename || attached) pushAttachment(out, filename, mime, bytes, inline, failed, hashExact, attached)
+    out.attachments.push(attachment)
+    const name = filename || 'an attached message'
+    const entry: Forwarded = { origin: into ? `${into.origin} › ${name}` : name, text: '', html: '' }
+    out.forwarded.push(entry)
     walk(
       splitHeadersAndBody(decodeText(bytes, param(contentType, 'charset'), exact, part.body, out, mime)),
       out,
-      depth + 1
+      depth + 1,
+      entry
     )
     return
   }
 
   if (isAttachment || !mime.startsWith('text/')) {
-    pushAttachment(out, filename, mime, bytes, inline, failed, hashExact, attached)
+    out.attachments.push(attachment)
     return
   }
 
@@ -469,30 +514,9 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   // Separated, not run together: two adjacent text parts ending and starting
   // mid-token were being joined into a token that appears in neither part —
   // which invented a URL that was never in the mail.
-  if (mime === 'text/html') out.html += (out.html ? '\n' : '') + text
-  else out.text += (out.text ? '\n' : '') + text
-}
-
-function pushAttachment(
-  out: Eml,
-  filename: string,
-  contentType: string,
-  bytes: Uint8Array,
-  inline: boolean,
-  undecodable: boolean,
-  exact: boolean,
-  attached = false
-): void {
-  out.attachments.push({
-    filename: filename || '(no filename given)',
-    contentType,
-    size: bytes.length,
-    bytes,
-    inline,
-    attached,
-    undecodable,
-    exact
-  })
+  const body = into ?? out
+  if (mime === 'text/html') body.html += (body.html ? '\n' : '') + text
+  else body.text += (body.text ? '\n' : '') + text
 }
 
 /**
