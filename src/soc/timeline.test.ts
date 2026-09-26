@@ -26,7 +26,9 @@ describe('caseTimelineEvents', () => {
       detectedAt: '2026-08-03T08:00:00.000Z',
       completed: '2026-08-05',
       comments: [{ at: '2026-08-01 09:30', text: 'Checked the proxy logs' }],
-      activity: [{ at: '2026-08-04T10:00:00.000Z', field: 'status', from: 'todo', to: 'done' }]
+      // A day clear of the completion date even at UTC+14, where a status
+      // change on the completion day would be read as the close itself.
+      activity: [{ at: '2026-08-03T10:00:00.000Z', field: 'status', from: 'todo', to: 'in-progress' }]
     })
     expect(caseTimelineEvents(task).map((e) => e.kind)).toEqual([
       'created',
@@ -35,6 +37,48 @@ describe('caseTimelineEvents', () => {
       'activity',
       'completed'
     ])
+  })
+
+  it('sorts a same-day close at the status change that made it, not at UTC midnight', () => {
+    // Built from local wall time, so the day is the same day in any zone.
+    const local = (hh: number, mm = 0) => new Date(2026, 7, 5, hh, mm).toISOString()
+    const task = makeTask({
+      createdAt: local(10),
+      detectedAt: local(10, 5),
+      resolvedAt: local(16),
+      completed: '2026-08-05',
+      comments: [{ at: '2026-08-05 16:30', text: 'Closed with the user' }],
+      activity: [
+        { at: local(16), field: 'status', from: 'in-progress', to: 'done' },
+        { at: local(17), field: 'archived', from: '2026-08-05', to: 'manual' }
+      ]
+    })
+    expect(caseTimelineEvents(task).map((e) => (e.kind === 'activity' ? e.label : e.kind))).toEqual([
+      'created',
+      'detected',
+      'resolved',
+      'completed',
+      'status',
+      'comment',
+      'archived'
+    ])
+  })
+
+  it('sorts a completed date with no status entry at the end of that local day', () => {
+    const task = makeTask({
+      createdAt: new Date(2026, 7, 5, 22).toISOString(),
+      completed: '2026-08-05',
+      comments: [{ at: '2026-08-06 00:10', text: 'Next morning' }]
+    })
+    expect(caseTimelineEvents(task).map((e) => e.kind)).toEqual(['created', 'completed', 'comment'])
+  })
+
+  it('shows indicator values in activity entries defanged', () => {
+    const task = makeTask({
+      createdAt: '',
+      activity: [{ at: '2026-08-04T10:00:00.000Z', field: 'iocs', from: '', to: 'http://evil.example/login' }]
+    })
+    expect(caseTimelineEvents(task)[0].detail).toBe('— → hxxp://evil[.]example/login')
   })
 
   it('maps activity entries with the em-dash placeholder for empty sides', () => {
