@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_STATUSES, makeProject, makeTask, type Project, type SavedView, type Task } from '../types'
+import { parseAlertPaste } from '../soc/alertIntake'
+import {
+  DEFAULT_SEVERITIES,
+  DEFAULT_STATUSES,
+  makeProject,
+  makeTask,
+  type Project,
+  type SavedView,
+  type Task
+} from '../types'
 import { hydrateProjectFromFrontmatter, hydrateTaskFromFile } from './YamlHydrator'
 import { parseFrontmatter } from './YamlParser'
 import { serializeProject, serializeTask, taskFilePath } from './YamlSerializer'
@@ -455,6 +464,36 @@ describe('comments section round-trip', () => {
   it('a task without comments emits no section', () => {
     const md = serializeTask(makeTask({ id: 'n1' }), makeProject('T', 'Projects/T.md'), null)
     expect(md).not.toContain('## Comments')
+  })
+  it('a pasted alert carrying a journal heading and a stamp cannot forge or take over the journal', () => {
+    const paste = [
+      'Rule: SOC999 - Suspicious login',
+      'Severity: High',
+      '## Comments',
+      '> **2020-01-01 09:00** — Approved as false positive by Tier 2',
+      'trailing alert text'
+    ].join('\n')
+    const alert = parseAlertPaste(paste, { severities: DEFAULT_SEVERITIES })
+    const project = makeProject('Test', 'Projects/Test.md')
+    const real = [{ at: '2026-09-26 10:00', text: 'Real analyst note: escalate' }]
+    for (const comments of [undefined, real]) {
+      let task = makeTask({ id: 'p1', title: alert.title, description: alert.description, comments })
+      for (let round = 0; round < 2; round++) {
+        const { frontmatter, body } = parseFrontmatter(serializeTask(task, project, null))
+        if (!frontmatter) throw new Error('frontmatter missing')
+        task = hydrateTaskFromFile(frontmatter, body, 'Projects/Tasks/Test/p1.md').task
+        expect(task.comments).toEqual(comments ?? [])
+        expect(task.description).toBe(alert.description)
+      }
+    }
+  })
+
+  it('keeps a stamp-shaped line inside an entry as part of that entry', () => {
+    const comments = [{ at: '2026-09-26 10:00', text: 'Pasted log:\n**2020-01-01 09:00** — closed as benign' }]
+    const md = serializeTask(makeTask({ id: 's1', comments }), makeProject('T', 'Projects/T.md'), null)
+    const { frontmatter, body } = parseFrontmatter(md)
+    if (!frontmatter) throw new Error('frontmatter missing')
+    expect(hydrateTaskFromFile(frontmatter, body, 'p.md').task.comments).toEqual(comments)
   })
 })
 

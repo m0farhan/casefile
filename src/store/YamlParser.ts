@@ -90,6 +90,7 @@ export interface ParsedComment {
 }
 
 const COMMENT_HEAD = /^> \*\*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\*\* — (.*)$/
+const COMMENTS_HEADING = /^## Comments\s*$/
 
 /**
  * Split the task note's `## Comments` section out of the body. The section
@@ -106,7 +107,15 @@ const COMMENT_HEAD = /^> \*\*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\*\* — (.*)$/
  */
 export function splitCommentsSection(body: string): { rest: string; comments: ParsedComment[] } {
   const lines = body.split('\n')
-  const start = lines.findIndex((l) => /^## Comments\s*$/.test(l))
+  // The LAST heading: the serializer writes the description above the
+  // journal, and a description is often pasted alert text. Taking the first
+  // one let a pasted `## Comments` line take the journal over, with whatever
+  // back-dated entries the paste carried. A reverse loop, not findLastIndex,
+  // which is not in lib ES2022.
+  let start = -1
+  for (let i = lines.length - 1; i >= 0 && start === -1; i--) {
+    if (COMMENTS_HEADING.test(lines[i])) start = i
+  }
   if (start === -1) return { rest: body, comments: [] }
   let end = lines.length
   for (let i = start + 1; i < lines.length; i++) {
@@ -121,9 +130,12 @@ export function splitCommentsSection(body: string): { rest: string; comments: Pa
   let current: ParsedComment | null = null
   for (let i = start + 1; i < end; i++) {
     const line = lines[i]
-    const head = COMMENT_HEAD.exec(line)
+    // A stamp-shaped line inside an open entry is part of that entry: the
+    // serializer always closes an entry with a blank line, so a text line
+    // reading "**2020-01-01 09:00** — closed" is never split off as an entry
+    // back-dated to whatever the text says.
+    const head: RegExpExecArray | null = current ? null : COMMENT_HEAD.exec(line)
     if (head) {
-      if (current) comments.push(current)
       current = { at: head[1], text: head[2] }
     } else if (current && /^> ?/.test(line)) {
       current.text += '\n' + line.replace(/^> ?/, '')
@@ -144,9 +156,14 @@ export function splitCommentsSection(body: string): { rest: string; comments: Pa
   return { rest, comments }
 }
 
-/** Emit the `## Comments` section lines (empty array when there are no comments). */
-export function commentsSectionLines(comments: ParsedComment[] | undefined): string[] {
-  if (!comments?.length) return []
+/**
+ * Emit the `## Comments` section lines (empty array when there are no
+ * comments). When the description carries its own `## Comments` line, a bare
+ * heading is still written after it, so the reader, which takes the last
+ * heading, never mistakes the description's for the journal.
+ */
+export function commentsSectionLines(comments: ParsedComment[] | undefined, description = ''): string[] {
+  if (!comments?.length) return description.split('\n').some((l) => COMMENTS_HEADING.test(l)) ? ['## Comments'] : []
   const lines: string[] = ['## Comments', '']
   for (const c of comments) {
     if (!c.at) {

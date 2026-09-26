@@ -236,7 +236,7 @@ export function serializeTask(
 
   // Comments live BEFORE the Parent/Project link so the `## Subtasks`-to-EOF
   // strip on the next load can never destroy them.
-  const commentLines = commentsSectionLines(task.comments)
+  const commentLines = commentsSectionLines(task.comments, cleanDesc)
   if (commentLines.length) {
     yamlLines.push(...commentLines)
     yamlLines.push('')
