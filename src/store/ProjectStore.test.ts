@@ -1232,6 +1232,50 @@ describe('issue keys', () => {
     ).toEqual(['Alpha', 'XX-1: Beta'])
   })
 
+  it('never repeats a key after keys were switched off and on again', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Toggle', 'Projects')
+    project.keyPrefix = 'SOC'
+    await addNamed(store, project, 'First')
+    project.keyPrefix = ''
+    await store.saveProject(project)
+
+    const reloaded = await reloadProject(app, vault, project.filePath)
+    const store2 = new ProjectStore(app, () => SETTINGS)
+    reloaded.keyPrefix = 'SOC'
+    const second = makeTask({ title: 'Second' })
+    await store2.insertTask(reloaded, second)
+    expect(second.key).toBe('SOC-2')
+  })
+
+  it('a board note whose counter lags its cases never hands out an existing key', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Lag', 'Projects')
+    project.keyPrefix = 'SOC'
+    await addNamed(store, project, 'First')
+    await addNamed(store, project, 'Second')
+    const pf = vault.getAbstractFileByPath(project.filePath) as TFile
+    await vault.modify(pf, (await vault.cachedRead(pf)).replace('nextKeySeq: 3', 'nextKeySeq: 1'))
+
+    const reloaded = await reloadProject(app, vault, project.filePath)
+    const third = makeTask({ title: 'Third' })
+    await new ProjectStore(app, () => SETTINGS).insertTask(reloaded, third)
+    expect(third.key).toBe('SOC-3')
+  })
+
+  it('re-running adoptIssueKeys never lowers the counter below a deleted key', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Readopt', 'Projects')
+    await addNamed(store, project, 'First')
+    const second = await addNamed(store, project, 'Second')
+    await store.adoptIssueKeys(project, 'SOC')
+    expect(second.key).toBe('SOC-2')
+    await store.deleteTask(project, second.id)
+    await store.adoptIssueKeys(project, 'SOC')
+    const third = await addNamed(store, project, 'Third')
+    expect(third.key).toBe('SOC-3')
+  })
+
   it('adoptIssueKeys keys a case with no recorded creation time after the dated ones', async () => {
     const { store } = newStore()
     const project = await store.createProject('Undated', 'Projects')

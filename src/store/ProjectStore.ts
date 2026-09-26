@@ -671,9 +671,27 @@ export class ProjectStore implements TaskSource {
       // keys to dirty keyless tasks covers them all with zero per-path code.
       // nextKeySeq persists in the project rewrite below, in the same save.
       if (project.keyPrefix) {
+        const pre = `${project.keyPrefix}-`
+        let floored = false
         for (const id of dirty.keys()) {
           const task = findTaskById(project, id)
-          if (task && task.key === '') task.key = `${project.keyPrefix}-${project.nextKeySeq++}`
+          if (!task || task.key !== '') continue
+          // The stored counter can lag the keys already handed out: switching
+          // keys off drops it from the board note, a crash between the case
+          // file and the board note leaves it behind, and Sync can deliver
+          // cases first. So before the first key of this save, raise it past
+          // every existing PREFIX-N. Only ever raise: a deleted case's key is
+          // never reused. startsWith, not a regex built from a prefix a hand
+          // edit could make anything.
+          if (!floored) {
+            floored = true
+            for (const { task: t } of project.taskIndex.values()) {
+              const n =
+                t.key.startsWith(pre) && /^\d+$/.test(t.key.slice(pre.length)) ? Number(t.key.slice(pre.length)) : 0
+              if (n >= project.nextKeySeq) project.nextKeySeq = n + 1
+            }
+          }
+          task.key = `${pre}${project.nextKeySeq++}`
         }
       }
 
@@ -1409,7 +1427,9 @@ export class ProjectStore implements TaskSource {
 
     // Pass 2: fresh keys for the keyless, oldest first. A case whose creation
     // time is not recorded goes last: '' would otherwise sort as the oldest.
-    let nextSeq = usedSeqs.size ? Math.max(...usedSeqs) + 1 : 1
+    // Never below the stored counter: a re-run after the top case was
+    // deleted would otherwise hand that case's key out again.
+    let nextSeq = Math.max(project.nextKeySeq, usedSeqs.size ? Math.max(...usedSeqs) + 1 : 1)
     const keyless = flat
       .filter((t) => !t.key)
       .sort(
