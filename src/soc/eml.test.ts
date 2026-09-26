@@ -272,6 +272,39 @@ describe('parser evasions that used to hide content from the analyst', () => {
     expect(parseEml(part('cp1252')).notes).toEqual([])
   })
 
+  describe('a quoted-printable attachment', () => {
+    const qp = (body: string, type = 'application/octet-stream'): string =>
+      `Content-Type: ${type}\nContent-Disposition: attachment; filename="a.bin"\n` +
+      `Content-Transfer-Encoding: quoted-printable\n\n${body}`
+
+    it('is exact when it is ASCII on one line, soft breaks and all', () => {
+      const [a] = parseEml(qp('hello=3D=\nworld')).attachments
+      expect(new TextDecoder().decode(a.bytes)).toBe('hello=world')
+      expect(a.exact).toBe(true)
+    })
+
+    it('is not exact when a hard line break was rewritten from CRLF', () => {
+      // The file was `<html>\r\n<script>…\r\n</html>`; the reader hands us LF.
+      const [a] = parseEml(
+        qp('<html>\r\n<script>location=3D"https://evil.test"</script>\r\n</html>', 'text/html')
+      ).attachments
+      expect(a.exact).toBe(false)
+    })
+
+    it('is not exact when it carries a raw non-ASCII character', () => {
+      expect(parseEml(qp('p\u0430y=3D')).attachments[0].exact).toBe(false)
+    })
+  })
+
+  it('still decodes a multi-line quoted-printable HTML body and joins its soft-broken link', () => {
+    const mail =
+      'Content-Type: text/html; charset=utf-8\nContent-Transfer-Encoding: quoted-printable\n\n' +
+      '<p>Your account</p>\n<a href=3D"https://evil.te=\nst/x">Sign in</a>\n'
+    const eml = parseEml(mail)
+    expect(eml.html).toContain('href="https://evil.test/x"')
+    expect(eml.notes).toEqual([])
+  })
+
   it('does not run two text parts together into a token that is in neither', () => {
     const mail =
       'Content-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: text/plain\n\nhttp://a.test' +

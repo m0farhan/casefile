@@ -13,11 +13,14 @@ import { type HeaderField, decodeEncodedWords, parseHeaderBlock, quotedPrintable
  * the caller decides whether bytes reach the disk, and hashes them first.
  *
  * ASSUMPTION worth knowing: the raw text arrives already decoded from the file
- * as UTF-8. base64 and quoted-printable parts therefore round-trip exactly,
- * because they are ASCII on the wire, but a 7bit/8bit part in a non-UTF-8
- * charset was decoded by the file read before this module saw it and its
- * declared charset can no longer be applied. Those parts are marked so the
- * analyst is not told a clean story about a body that may be mangled.
+ * as UTF-8, with its line breaks as LF. base64 parts therefore round-trip
+ * exactly, because they are ASCII on the wire. A quoted-printable part's text
+ * decodes exactly too, but its bytes are the file's only when it is pure ASCII
+ * with no hard line break, which stands for a CRLF the reader has rewritten.
+ * A 7bit/8bit part in a non-UTF-8 charset was decoded by the file read before
+ * this module saw it and its declared charset can no longer be applied. Those
+ * parts are marked so the analyst is not told a clean story about a body that
+ * may be mangled, or handed a hash of bytes nobody sent.
  */
 
 export interface Attachment {
@@ -49,10 +52,11 @@ export interface Attachment {
    */
   undecodable: boolean
   /**
-   * The bytes are the file exactly as it travelled. base64 and quoted-printable
-   * are ASCII on the wire and round-trip exactly; a 7bit/8bit part reached us
-   * through the reader's line normalisation, so its hashes will not match the
-   * sender's copy and the caller has to say so.
+   * The bytes are the file exactly as it travelled. base64 is ASCII on the
+   * wire and round-trips exactly. A 7bit/8bit part, and a quoted-printable
+   * one with a hard line break or a raw non-ASCII character, reached us
+   * through the reader's line normalisation or its UTF-8 decoding, so its
+   * hashes may not match the sender's copy and the caller has to say so.
    */
   exact: boolean
 }
@@ -260,8 +264,18 @@ export function latin1Bytes(text: string): Uint8Array {
 
 interface Decoded {
   bytes: Uint8Array
-  /** The bytes are the file's real bytes, so a hash of them means something. */
+  /**
+   * The bytes came out of a transfer encoding, so the text is decoded from
+   * them in the part's charset. False for 7bit/8bit, whose text the file read
+   * has already decoded.
+   */
   exact: boolean
+  /**
+   * The bytes are the file's real bytes, so a hash of them means something.
+   * The same as `exact` except for quoted-printable, which decodes exactly as
+   * text while its bytes may not be the file's.
+   */
+  hashExact?: boolean
   /** Decoding failed outright — `bytes` is empty because nothing was read. */
   failed: boolean
 }
@@ -298,7 +312,17 @@ function decodeBody(body: string, encoding: string): Decoded {
   }
   if (enc === 'quoted-printable') {
     // Soft line breaks first: `=` at end of line means "no break here".
-    return { bytes: quotedPrintableBytes(body.replace(/=\n/g, '')), exact: true, failed: false }
+    const joined = body.replace(/=\n/g, '')
+    return {
+      bytes: quotedPrintableBytes(joined),
+      exact: true,
+      failed: false,
+      // A hard line break stands for CRLF (RFC 2045 §6.7), which the reader has
+      // already rewritten as LF, and a raw non-ASCII character came through the
+      // file read's UTF-8 decoding: either way these are not the bytes that
+      // were sent, and a hash of them would be quoted at a sandbox as if they were.
+      hashExact: !/[\u0080-\uffff]/.test(joined) && !joined.includes('\n')
+    }
   }
   // 7bit/8bit/binary: the file read already decoded these as UTF-8, so the
   // true bytes are that text re-encoded, not its code units truncated to
@@ -410,7 +434,7 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   // source, no links, and one unremarkable row under Attachments.
   const attached = /^attachment/i.test(disposition)
   const isAttachment = attached || (Boolean(filename) && !inline)
-  const { bytes, exact, failed } = decodeBody(part.body, encoding)
+  const { bytes, exact, failed, hashExact = exact } = decodeBody(part.body, encoding)
   if (failed) {
     out.notes.push(
       `A ${encoding.trim() || 'transfer-encoded'} part${filename ? ` named ${filename}` : ''} could not be decoded, ` +
@@ -423,7 +447,7 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   // real payload's name, bytes and hash in front of the analyst instead of a
   // single row reading `fwd.eml — message/rfc822`.
   if (mime === 'message/rfc822') {
-    if (filename || attached) pushAttachment(out, filename, mime, bytes, inline, failed, exact, attached)
+    if (filename || attached) pushAttachment(out, filename, mime, bytes, inline, failed, hashExact, attached)
     walk(
       splitHeadersAndBody(decodeText(bytes, param(contentType, 'charset'), exact, part.body, out, mime)),
       out,
@@ -433,7 +457,7 @@ function walk(part: RawPart, out: Eml, depth: number): void {
   }
 
   if (isAttachment || !mime.startsWith('text/')) {
-    pushAttachment(out, filename, mime, bytes, inline, failed, exact, attached)
+    pushAttachment(out, filename, mime, bytes, inline, failed, hashExact, attached)
     return
   }
 
