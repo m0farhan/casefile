@@ -30,6 +30,16 @@ describe('buildTimelineConfig range ceiling', () => {
     expect(outOfRange(cfg, due)).toBe(false)
   })
 
+  it('draws a board of old cases whose whole span fits, however far from today', () => {
+    const start = today().subtract({ days: 480 })
+    const due = start.add({ days: 9 })
+    const cfg = buildTimelineConfig([makeTask({ start: start.toString(), due: due.toString() })], 'day')
+    expect(outOfRange(cfg, start)).toBe(false)
+    expect(outOfRange(cfg, due)).toBe(false)
+    expect(outOfRange(cfg, today())).toBe(false)
+    expect(cfg.totalDays).toBeLessThanOrEqual(MAX_DAYS.day)
+  })
+
   it('leaves a far date outside the range instead of stretching to it', () => {
     const cfg = buildTimelineConfig([makeTask({ start: '', due: '2206-09-26' })], 'day')
     expect(outOfRange(cfg, today())).toBe(false)

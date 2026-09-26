@@ -140,13 +140,19 @@ export function renderMultiSelect(opts: MultiSelectOpts): void {
         })
       : null
     const listEl = popover.contentEl.createDiv('pm-pop-list')
+    listEl.setAttr('aria-multiselectable', 'true')
+    // The option rows as last drawn. renderList() empties the list, which drops
+    // the focused row's focus to the document; a pick puts it back on the row
+    // drawn in the same place. The index holds because a pick changes neither
+    // the options nor the query.
+    let rows: HTMLElement[] = []
 
     const renderList = () => {
       listEl.empty()
       const q = query.trim().toLowerCase()
       const selectedIds = new Set(opts.selected())
       const items = opts.options().filter((it) => !q || it.label.toLowerCase().includes(q))
-      for (const it of items) {
+      rows = items.map((it, i) =>
         renderOptionRow(listEl, {
           label: it.label,
           color: it.color ?? opts.colorFor?.(it.id),
@@ -158,9 +164,10 @@ export function renderMultiSelect(opts: MultiSelectOpts): void {
             else opts.add(it.id)
             renderValues()
             renderList()
+            rows[i]?.focus()
           }
         })
-      }
+      )
       const create = opts.create
       if (create && q && !opts.options().some((it) => it.label.toLowerCase() === q)) {
         const label = query.trim()
@@ -174,6 +181,8 @@ export function renderMultiSelect(opts: MultiSelectOpts): void {
             if (searchInput) searchInput.value = ''
             renderValues()
             renderList()
+            // Create clears the query, so its row is gone; the search field is where it was typed.
+            searchInput?.focus()
           }
         })
       }

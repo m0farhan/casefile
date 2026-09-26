@@ -98,14 +98,7 @@ export class ProjectView extends ItemView {
           .setTitle('Edit this board')
           .setIcon('settings')
           .onClick(() => {
-            openProjectModal(this.plugin, {
-              project: here,
-              onSave: (updated) => {
-                this.project = updated
-                this.renderProjectToolbar()
-                this.renderCurrentView()
-              }
-            })
+            openProjectModal(this.plugin, { project: here, onSave: (updated) => this.onBoardSaved(updated) })
           })
       )
     }
@@ -352,10 +345,30 @@ export class ProjectView extends ItemView {
     })
   }
 
+  /** Board settings saved, from the board menu or the gear: the header's statuses and verdicts may have changed too. */
+  private onBoardSaved(updated: Project): void {
+    this.project = updated
+    this.renderProjectToolbar()
+    this.renderProjectHeader()
+    this.renderCurrentView()
+  }
+
   private renderProjectHeader(): void {
     if (!this.project) return
     this.headerEl.empty()
     const config = this.plugin.store.configFor(this.project)
+    // A filter value the board no longer offers has no control to clear it, yet
+    // it still hides cases: a verdict on a board switched to plain, a status the
+    // board settings removed. Drop those before the header draws the rest.
+    const statusIds = new Set(config.statuses.map((s) => s.id))
+    const statuses = this.filter.statuses.filter((id) => statusIds.has(id))
+    const verdicts = config.boardType === 'plain' ? [] : this.filter.verdicts
+    if (statuses.length !== this.filter.statuses.length || verdicts.length !== this.filter.verdicts.length) {
+      this.filter.statuses = statuses
+      this.filter.verdicts = verdicts
+      this.activeSavedViewId = null
+      void this.persistFilter()
+    }
     // The `sla:` query field reads these in every subview's matchesFilter call.
     setQuerySlaPolicies(this.plugin.settings.slaPolicies)
     this.header = new ProjectHeader(this.headerEl, {
@@ -600,14 +613,7 @@ export class ProjectView extends ItemView {
       .setIcon('settings')
       .setTooltip('Board settings')
       .onClick(() => {
-        openProjectModal(this.plugin, {
-          project: this.project,
-          onSave: (updated) => {
-            this.project = updated
-            this.renderProjectToolbar()
-            this.renderCurrentView()
-          }
-        })
+        openProjectModal(this.plugin, { project: this.project, onSave: (updated) => this.onBoardSaved(updated) })
       })
   }
 

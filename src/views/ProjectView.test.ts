@@ -11,7 +11,7 @@ import {
   type SavedView,
   type ViewMode
 } from '../types'
-import { openTaskModal } from '../ui/ModalFactory'
+import { openProjectModal, openTaskModal } from '../ui/ModalFactory'
 import { ProjectView } from './ProjectView'
 
 /** Every toolbar button built, by its label or tooltip. */
@@ -350,6 +350,41 @@ describe('ProjectView paths', () => {
     const { view } = harness([p])
     await view.setState({ filePath: p.filePath }, {})
     expect(headers[headers.length - 1].verdicts).toBeUndefined()
+  })
+})
+
+describe('ProjectView board settings', () => {
+  it('redraws the header and drops filter values the saved board no longer offers', async () => {
+    const p = board('Queue')
+    const { view, settings } = harness([p])
+    await view.setState({ filePath: p.filePath }, {})
+    view.filter.verdicts.push('tp')
+    view.filter.statuses.push('todo', 'gone')
+    await view.persistFilter()
+    const before = headers.length
+
+    buttons.find((b) => b.label === 'Board settings')?.click()
+    const { onSave } = vi.mocked(openProjectModal).mock.calls.at(-1)?.[1] ?? {}
+    await onSave?.({ ...p, config: { ...p.config, boardType: 'plain' } })
+
+    // A plain board offers no verdict control, so no verdict may keep filtering it.
+    expect(headers.length).toBe(before + 1)
+    expect(headers[headers.length - 1].verdicts).toBeUndefined()
+    expect(view.filter.verdicts).toEqual([])
+    expect(view.filter.statuses).toEqual(['todo'])
+    expect(settings.projectFilters[p.filePath].filter).toMatchObject({ verdicts: [], statuses: ['todo'] })
+  })
+
+  it('drops a verdict filter saved before the board went plain, on load', async () => {
+    const p = board('Goals', { config: { boardType: 'plain' } })
+    const { view, settings } = harness([p])
+    settings.projectFilters[p.filePath] = {
+      filter: { ...makeDefaultFilter(), verdicts: ['tp'] },
+      activeSavedViewId: null
+    }
+    await view.setState({ filePath: p.filePath }, {})
+    expect(view.filter.verdicts).toEqual([])
+    expect(settings.projectFilters[p.filePath].filter.verdicts).toEqual([])
   })
 })
 
