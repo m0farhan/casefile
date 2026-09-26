@@ -288,6 +288,39 @@ describe('images', () => {
       pdf('%PDF-1.5\n<< /Filter [/DCTDecode /DCTDecode] >>\nstream\n', JPEG, '\nendstream', TRAILER)
     )
     expect(facts?.images).toHaveLength(1)
+    // The second name reaches the same start, which is the image itself and
+    // not a stream beginning inside it.
+    expect(facts?.notes.join(' ')).not.toContain('begin inside the data')
+  })
+
+  it('takes bytes into one picture only, so 24 nested dictionaries are not 24 pictures', () => {
+    // Each dictionary is written inside the previous stream's data, and each
+    // declares a /Length that lands on the one `endstream` they all share, so
+    // every one confirmed. All 24 came back, overlapping views over the same
+    // bytes: 24 times the file, which a mail of copies multiplied again.
+    const soi = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0])
+    let data = pdf(soi, 'x'.repeat(1000), Uint8Array.from([0xff, 0xd9]))
+    for (let k = 0; k < 23; k++) {
+      data = pdf(soi, `<< /Filter /DCTDecode /Length ${data.length} >>\nstream\n`, data)
+    }
+    const file = pdf(
+      '%PDF-1.5\n1 0 obj\n',
+      `<< /Filter /DCTDecode /Length ${data.length} >>\nstream\n`,
+      data,
+      '\nendstream\nendobj\n2 0 obj\n<< /Filter /DCTDecode /Length 15 >>\nstream\n',
+      JPEG,
+      '\nendstream\nendobj',
+      TRAILER
+    )
+    const facts = readPdf(file)
+    // The outer image whole, and the ordinary one after the shared endstream
+    // still taken: the skip is for streams inside a picture, not after one.
+    expect(facts?.images.map((i) => [...i.bytes])).toEqual([[...data], [...JPEG]])
+    const notes = facts?.notes.join(' ') ?? ''
+    expect(notes).toContain('23 /DCTDecode or /JPXDecode entr(ies) begin inside the data of an image already extracted')
+    expect(notes).toContain('unread as pictures here, not absent')
+    const total = facts?.images.reduce((n, i) => n + i.bytes.length, 0) ?? 0
+    expect(total).toBeLessThanOrEqual(file.length)
   })
 
   it('says so when a stream has no endstream, instead of returning half a file', () => {

@@ -634,6 +634,10 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
   let empty = 0
   let unverified = 0
   let bySearch = 0
+  let nested = 0
+  // Where the last image taken ends. Stream starts arrive in file order, so one
+  // number is enough to know whether a new one begins inside bytes already taken.
+  let keptEnd = 0
   for (let m = re.exec(text); m; m = re.exec(text)) {
     // Before streamDataStart, not after: three of the `continue`s below reach
     // the next iteration without growing `out`, so the cap on out.length never
@@ -656,6 +660,18 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
     // /DCTDecode]` reaches this loop from its own entry — one stream, one image.
     if (seen.has(start)) continue
     seen.add(start)
+    // A stream whose data begins inside an image already taken. After the
+    // repeat check, because a repeat of the taken image's own start is not one.
+    // Every image handed back is a view over the file, so a file of 24
+    // dictionaries each written inside the previous one's data, all closing at
+    // one `endstream`, turned 492KB into 24 overlapping pictures and 11.8MB —
+    // and a mail of 36 copies into 424MB for the caller to hash and draw.
+    // Skipping these keeps each byte of the file in at most one picture, so
+    // what this returns is never more than the file.
+    if (start < keptEnd) {
+      nested++
+      continue
+    }
     // Where the stream ends is decided by the declared length when there is
     // one, and only CONFIRMED by `endstream`. Where the length is an indirect
     // reference — common in real files, so refusing those would lose most real
@@ -710,6 +726,7 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
     }
     total += end - start
     if (unconfirmed) bySearch++
+    keptEnd = end
     out.push({ offset: start, bytes: scan.subarray(start, end), filter: `/${m[1]}` })
   }
   if (overrun) {
@@ -755,6 +772,17 @@ function readImages(scan: Uint8Array, text: string, notes: string[]): PdfImage[]
     notes.push(
       `${empty} /DCTDecode or /JPXDecode entr(ies) held nothing but line-ending bytes between 'stream' and ` +
         `'endstream', so there was no image in them to extract.`
+    )
+  }
+  // Not "they are bytes of that image, not separate streams": a reader goes
+  // where the xref table points, and one pointing into another stream's data
+  // opens an object there. What is known is where they begin and that they
+  // were not taken, so that is what is said.
+  if (nested) {
+    notes.push(
+      `${nested} /DCTDecode or /JPXDecode entr(ies) begin inside the data of an image already extracted. This scan ` +
+        'hands back each byte of the file in at most one picture, so they were not extracted as pictures of their ' +
+        'own — unread as pictures here, not absent.'
     )
   }
   // Only the images whose end was SEARCHED for. One cut at its declared
