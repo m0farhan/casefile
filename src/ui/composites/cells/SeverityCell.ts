@@ -21,12 +21,16 @@ export class SeverityCell {
   constructor(parentRow: HTMLElement, props: SeverityCellProps) {
     this.el = parentRow.createEl('td', { cls: 'pm-table-cell' })
     const config = props.severities.find((s) => s.id === props.task.severity)
+    // A stored id the catalog does not know is shown as written: a dash would
+    // say the case has no severity, and the note says otherwise.
     const badge = config
       ? new Chip(this.el)
           .setLabel(formatBadgeText(config.icon, config.label))
           .setColor(config.color)
           .setVariant('solid')
-      : new Chip(this.el).setLabel('—').setVariant('plain').setTooltip('Set severity')
+      : props.task.severity
+        ? new Chip(this.el).setLabel(props.task.severity).setVariant('plain').setTooltip('Not in the severity list')
+        : new Chip(this.el).setLabel('—').setVariant('plain').setTooltip('Set severity')
     badge.onClick((e) => {
       const menu = new Menu()
       menu.addItem((item) =>

@@ -124,8 +124,13 @@ export function tickAllSlaChips(): void {
 }
 
 /**
- * Severity badge (config label in the config color). No-op without a config.
- * Shared by the kanban card and the table row.
+ * Severity badge (config label in the config color). Shared by the kanban
+ * card and the table row.
+ *
+ * A severity id the catalog does not know (a hand-edited note, a severity
+ * removed from settings) is still a stored value, so `rawId` renders it as an
+ * uncoloured chip instead of hiding it: an empty space would read as "no
+ * severity", which the note does not say. With neither, nothing renders.
  *
  * 'text' drops the tint and keeps the colored word. The board card uses it
  * because the card already carries its severity as a spine down its left
@@ -137,9 +142,14 @@ export function tickAllSlaChips(): void {
 export function renderSeverityBadge(
   el: HTMLElement,
   cfg: SeverityConfig | undefined,
-  variant: 'solid' | 'text' = 'solid'
+  variant: 'solid' | 'text' = 'solid',
+  rawId?: string
 ): void {
-  if (!cfg) return
+  if (!cfg) {
+    // The stored id as-is, uncoloured: there is no catalog colour or label to give it.
+    if (rawId) new Chip(el).setLabel(rawId).setSize('sm').setVariant('plain').setTooltip('Not in the severity list')
+    return
+  }
   // One label primitive for severity everywhere (VD-03): the table cell
   // already used Chip; cards/modal/panel had a parallel hand-rolled span.
   const chip = new Chip(el).setLabel(cfg.label).setColor(cfg.color).setSize('sm')
