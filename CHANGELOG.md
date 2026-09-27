@@ -45,6 +45,16 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [Unreleased]
+
+### Added
+
+- **Attach files to a case:** the Evidence section has an Attach button, and files dropped on it attach too. Each file is copied into the vault where Obsidian's attachment setting puts it and linked from the end of the description, so it lists under Evidence. Pictures are embedded and show inline; anything else is only ever a link, never an embed (it may be the sample). Names are cleaned so the link always resolves (`# ^ [ ] |` and path characters become `-`). The section now shows on every case, with "No files attached" when there are none
+
+### Changed
+
+- **Done cards read as done:** in a complete column the card eases back to 65% (90% under the pointer, to read it), and everything under the title is lightly struck through. The title stays whole so the card still says what it was, and so do avatars
+
 ## [2.41.0] - 2026-09-27
 
 ### Added

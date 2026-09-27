@@ -542,7 +542,13 @@ export class TaskModal extends Modal {
     })
 
     // ── Evidence (files referenced in description/comments) ─────────────────
-    renderAttachmentsSection(body, { app: this.app, project: this.project, task: this.task })
+    // Attaching links the file from the description, so the rerender redraws both.
+    renderAttachmentsSection(body, {
+      app: this.app,
+      project: this.project,
+      task: this.task,
+      onChange: () => this.render()
+    })
 
     // ── Incident sections (timeline + indicators) ───────────────────────────
     // onChange is a no-op here: the modal persists the whole clone on Save.

@@ -466,8 +466,17 @@ export class TaskDetailView extends ItemView {
       onChange: () => this.scheduleSave(),
       onRemove: (id) => this.removedSubtaskIds.push(id)
     })
-    // Evidence (files referenced in description/comments) — read-only, no save wiring.
-    renderAttachmentsSection(body, { app: this.app, project, task })
+    // Evidence (files referenced in description/comments); attaching one links it
+    // from the description, so it saves like a description edit.
+    renderAttachmentsSection(body, {
+      app: this.app,
+      project,
+      task,
+      onChange: () => {
+        this.scheduleSave()
+        this.render()
+      }
+    })
     if (config.boardType !== 'plain' && task.issueType === 'incident') {
       if (this.plugin.settings.showIncidentTimeline) {
         renderLifecyclePanel(body, task, {

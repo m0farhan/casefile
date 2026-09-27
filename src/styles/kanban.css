@@ -452,13 +452,22 @@
   filter: saturate(0.5);
 }
 
-/* Done (Jira): full strength, not faded — the column already says it is
-   finished. Settled work reads as crossed off: the key, never the title, with
-   a green check leading the row. */
-.pm-kanban-card--done .pm-key-chip {
+/* Done: settled work reads as crossed off. The card eases back (full
+   strength again under the pointer, to read it), a green check leads the row,
+   and everything under the title is struck through lightly — the title never,
+   so the card still says what it was. Avatars are left whole: a line through
+   initials in a circle reads as a rendering fault, not as "done". */
+.pm-kanban-card--done {
+  opacity: 0.65;
+}
+.pm-kanban-card--done:hover,
+.pm-kanban-card--done:focus-visible {
+  opacity: 0.9;
+}
+.pm-kanban-card--done .pm-kanban-card-chips *:not(.pm-avatar-stack, .pm-avatar-stack *) {
   text-decoration: line-through;
-  text-decoration-thickness: 1.5px;
-  text-decoration-color: var(--gs-ink-muted);
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 70%, transparent);
 }
 .pm-kanban-card-done-mark {
   display: inline-flex;
