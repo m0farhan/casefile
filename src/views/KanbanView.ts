@@ -53,7 +53,9 @@ export function laneCreatePatch(groupBy: KanbanLaneGroup, laneKey: string): Part
     case 'bucket':
       return { bucket: laneKey as Task['bucket'] }
     case 'assignee':
-      return laneKey === '' ? {} : { assignees: [laneKey] }
+      // The Unassigned lane names nobody, explicitly: an empty patch would let
+      // the current-user default win and file the card in someone's lane.
+      return { assignees: laneKey === '' ? [] : [laneKey] }
     case 'none':
       return {}
   }
@@ -132,6 +134,8 @@ export class KanbanView implements SubView {
     }
     this.container.empty()
     this.container.addClass('pm-kanban-view')
+    // The rebuilt DOM matches the data again, so nesting connectors are true again.
+    this.container.removeClass('pm-kanban-view--dragging')
 
     const groupBy = this.laneGroup()
     this.container.toggleClass('pm-kanban-view--lanes', groupBy !== 'none')
@@ -163,15 +167,18 @@ export class KanbanView implements SubView {
         const cards = tasks.map((task) => this.buildCardData(task, groupBy !== 'epic'))
         // Jira-style nesting: a subtask directly under its parent card (or a
         // same-parent sibling run) indents instead of repeating the breadcrumb.
+        // One level only — the connector draws no depth. A parent card that is
+        // itself nested takes no children (the grandchild keeps "↳ parent"),
+        // and a run continues only after a nested sibling, so the stem never
+        // draws a card as the child of anything but its real parent.
         for (let i = 1; i < tasks.length; i++) {
           const t = tasks[i]
           if (t.type !== 'subtask') continue
           const parent = this.findParentTask(t.id)
           if (!parent) continue
           const prev = tasks[i - 1]
-          if (prev.id === parent.id || (prev.type === 'subtask' && this.findParentTask(prev.id)?.id === parent.id)) {
-            cards[i].nested = true
-          }
+          const sameRun = cards[i - 1].nested ? this.findParentTask(prev.id)?.id === parent.id : prev.id === parent.id
+          if (sameRun) cards[i].nested = true
         }
         const draftKey = `${this.project.filePath}\u0000${lane.key}\u0000${status.id}`
         new KanbanColumn(board, {
@@ -191,6 +198,11 @@ export class KanbanView implements SubView {
           onCardContextMenu: (task, e) => this.openContextMenu(task, e),
           onCardDragStart: (task) => {
             this.dragTask = task
+            // Dragover moves cards live, so a nesting connector worked out at
+            // render time would point at the wrong card: hide them all until
+            // the next render. Cleared there, not on dragend — the verdict
+            // modal can hold the drop (and the moved ghost) open past it.
+            this.container.addClass('pm-kanban-view--dragging')
           },
           onCardDragEnd: () => {
             this.dragTask = null
@@ -362,6 +374,7 @@ export class KanbanView implements SubView {
       onCardContextMenu: (task, e) => this.openContextMenu(task, e),
       onCardDragStart: (task) => {
         this.dragTask = task
+        this.container.addClass('pm-kanban-view--dragging')
       },
       onCardDragEnd: () => {
         this.dragTask = null

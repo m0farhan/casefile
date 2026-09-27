@@ -75,16 +75,21 @@ export function renderCommentsSection(
   input.placeholder = 'Add to the investigation journal…'
   input.rows = 2
   if (opts.initialDraft) input.value = opts.initialDraft
-  // Grows with what is typed (CSS caps it at a share of the window, then it scrolls).
-  const fit = () => {
-    input.setCssStyles({ height: 'auto' })
-    input.setCssStyles({ height: `${input.scrollHeight + 2}px` })
-  }
-  input.addEventListener('input', fit)
-  window.setTimeout(fit, 0)
   const addBtn = composer.createEl('button', { cls: 'pm-comment-add' })
   setIcon(addBtn.createSpan(), 'corner-down-left')
   addBtn.createSpan({ text: 'Add' })
+  // Grows with what is typed (CSS caps it at a share of the window, then it
+  // scrolls). Measured once the Add button is in, since it narrows the box.
+  const fit = () => {
+    input.setCssStyles({ height: 'auto' })
+    // Not laid out (a hidden leaf) measures 0: leave the two rows alone.
+    if (input.scrollHeight) input.setCssStyles({ height: `${input.scrollHeight + 2}px` })
+  }
+  input.addEventListener('input', fit)
+  // Now, so a restored multi-line draft has its height before the host puts
+  // its scroll position back; again next tick for a box not laid out yet.
+  fit()
+  window.setTimeout(fit, 0)
 
   const submit = () => {
     const text = input.value.trim()

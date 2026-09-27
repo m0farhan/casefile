@@ -63,6 +63,12 @@ export class TaskModal extends Modal {
   private focusedTitleOnce = false
   /** A discard prompt is open; a second Esc or click-out must not stack another. */
   private confirming = false
+  /** Set by onClose. A late callback (an attach's copies settling) must not rebuild a
+   * closed modal: nothing would destroy the editors it made. */
+  private closed = false
+  /** The title's inline error as rendered now, so an error a save reports
+   * after a rerender lands on the title on screen, not a detached one. */
+  private titleError: (message: string) => void = (m) => new Notice(m)
 
   constructor(
     app: App,
@@ -166,6 +172,7 @@ export class TaskModal extends Modal {
   }
 
   onClose(): void {
+    this.closed = true
     if (this.plugin.settings.saveTaskOnClose && !this.isNew && !this.cancelled && !this.saved) {
       // A cleared title never discards the rest of the edits — keep the
       // original title and save everything else.
@@ -355,6 +362,7 @@ export class TaskModal extends Modal {
   }
 
   private render(): void {
+    if (this.closed) return
     const { contentEl } = this
     // Snapshot before empty() so a property-change rerender doesn't jump the
     // body or drop a half-typed comment (KanbanView.renderBoard precedent).
@@ -427,12 +435,11 @@ export class TaskModal extends Modal {
 
     header.createDiv('pm-te-header-spacer')
 
-    // The title's inline error is built below; the menu reports into it.
-    let titleErrorFn: (message: string) => void = (m) => new Notice(m)
+    // The title's inline error is built below; the menu reports into it (this.titleError).
     if (!this.isNew) {
       const moreBtn = new ExtraButtonComponent(header).setIcon('more-horizontal').setTooltip('More actions')
       moreBtn.extraSettingsEl.addClass('pm-te-header-btn')
-      moreBtn.onClick(() => this.openOverflowMenu(moreBtn.extraSettingsEl, titleErrorFn))
+      moreBtn.onClick(() => this.openOverflowMenu(moreBtn.extraSettingsEl, (m) => this.titleError(m)))
     }
     const closeBtn = new ExtraButtonComponent(header).setIcon('x').setTooltip('Close')
     closeBtn.extraSettingsEl.addClass('pm-te-header-btn')
@@ -471,7 +478,7 @@ export class TaskModal extends Modal {
       titleInput.focus()
       titleInput.select()
     }
-    titleErrorFn = showTitleError
+    this.titleError = showTitleError
     titleInput.addEventListener('input', () => {
       this.task.title = titleInput.value
       clearTitleError()
@@ -547,7 +554,15 @@ export class TaskModal extends Modal {
       app: this.app,
       project: this.project,
       task: this.task,
-      onChange: () => this.render()
+      // A new case has no note, so no folder of its own to hold files yet.
+      attach: this.isNew
+        ? undefined
+        : {
+            reserve: (name) => this.plugin.store.reserveAttachmentName(name),
+            write: (name, data) => this.plugin.store.writeTaskAttachment(this.project, this.task, name, data),
+            onLinked: () => this.render(),
+            onCopied: () => this.render()
+          }
     })
 
     // ── Incident sections (timeline + indicators) ───────────────────────────
@@ -645,19 +660,19 @@ export class TaskModal extends Modal {
       if (saving) return
       saving = true
       try {
-        if (!(await this.readyToPersist(showTitleError))) return
+        if (!(await this.readyToPersist((m) => this.titleError(m)))) return
         clearTitleError()
         await this.persistTask()
         this.saved = true
         this.close()
       } catch (err) {
         if (err instanceof TaskFileNameConflictError) {
-          showTitleError(`A note named "${err.fileName}" already exists. Choose a different title.`)
+          this.titleError(`A note named "${err.fileName}" already exists. Choose a different title.`)
           return
         }
         // The store's own refusals say why; the modal stays open to fix it.
         if (err instanceof Error && err.message.startsWith(TITLE_REFUSAL)) {
-          showTitleError(err.message)
+          this.titleError(err.message)
           return
         }
         if (err instanceof Error && err.message.startsWith(BOARD_REFUSAL)) {

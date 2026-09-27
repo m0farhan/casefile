@@ -249,6 +249,8 @@ export class ProjectStore implements TaskSource {
    * Stale entries (older than the window) are treated as never-marked.
    */
   private selfWrites = new Map<string, number>()
+  /** Attachment names chosen but not yet written (reserveAttachmentName). */
+  private reservedAttachmentNames = new Set<string>()
   private static readonly SELF_WRITE_WINDOW_MS = 5000
 
   constructor(
@@ -2262,17 +2264,67 @@ export class ProjectStore implements TaskSource {
   /**
    * Save a pasted or dropped file under the task's own `attachments` folder,
    * keeping it with the task instead of Obsidian's vault-wide default attachment
-   * location. Returns the created file so the caller can embed it.
+   * location. One step: reserveAttachmentName, then writeTaskAttachment.
    */
   async saveTaskAttachment(project: Project, task: Task, fileName: string, data: ArrayBuffer): Promise<TFile> {
-    const taskPath = task.filePath ?? taskFilePath(task.title, this.projectTaskFolder(project))
+    return this.writeTaskAttachment(project, task, this.reserveAttachmentName(fileName), data)
+  }
+
+  /**
+   * A name for a case attachment that no other file in the vault has, and no
+   * link waits for. The case links it by bare name, which Obsidian resolves by
+   * name: with two files of one name it picked another case's. Unique, the link
+   * resolves from anywhere, and still does after Archive moves the folder
+   * without rewriting links. Chosen synchronously, so a caller can link the
+   * file before its bytes are written. Held until written; a name whose copy
+   * failed stays held, and after a restart its dangling link keeps it taken,
+   * so it can never come to point at another case's file.
+   */
+  reserveAttachmentName(fileName: string): string {
+    // The form Obsidian stores (NFC, no-break spaces as spaces): compared raw,
+    // a macOS screenshot name slipped past the one already in the vault.
+    const wanted = normalizePath(fileName)
+    // ponytail: a scan of every file and link per attach; a name index if attaching into huge vaults ever lags.
+    const taken = new Set(this.app.vault.getFiles().map((f) => f.name.toLowerCase()))
+    for (const links of Object.values(this.app.metadataCache.unresolvedLinks ?? {})) {
+      for (const target of Object.keys(links)) taken.add(target.slice(target.lastIndexOf('/') + 1).toLowerCase())
+    }
+    const dot = wanted.lastIndexOf('.')
+    const base = dot > 0 ? wanted.slice(0, dot) : wanted
+    const ext = dot > 0 ? wanted.slice(dot) : ''
+    let name = wanted
+    for (let n = 1; taken.has(name.toLowerCase()) || this.reservedAttachmentNames.has(name.toLowerCase()); n++) {
+      name = `${base} ${n}${ext}`
+    }
+    this.reservedAttachmentNames.add(name.toLowerCase())
+    return name
+  }
+
+  /** Reserved and not written yet: its link resolves to nothing for now (a click would make a note of that name). */
+  isAttachmentPending(name: string): boolean {
+    return this.reservedAttachmentNames.has(name.toLowerCase())
+  }
+
+  /**
+   * Write a reserved name into the case's own `attachments` folder, worked out
+   * now from the case as it is (Archive or a retitle during a long copy moved
+   * it; the file follows). A case deleted meanwhile gets nothing.
+   */
+  async writeTaskAttachment(project: Project, task: Task, name: string, data: ArrayBuffer): Promise<TFile> {
+    const live = findTaskById(project, task.id)
+    if (!live && task.filePath) throw new Error('the case was deleted while it copied')
+    const owner = live ?? task
+    const taskPath = owner.filePath ?? taskFilePath(owner.title, this.projectTaskFolder(project))
     const dir = normalizePath(`${this.taskFolder(taskPath)}/attachments`)
+    const path = normalizePath(`${dir}/${name}`)
     this.markSelfWrite(this.taskFolder(taskPath))
     this.markSelfWrite(dir)
     await this.ensureFolder(dir)
-    const path = this.uniqueChildPath(dir, fileName)
     this.markSelfWrite(path)
-    return this.app.vault.createBinary(path, data)
+    const file = await this.app.vault.createBinary(path, data)
+    // Only once it exists: from here the vault itself keeps the name taken.
+    this.reservedAttachmentNames.delete(name.toLowerCase())
+    return file
   }
 
   private uniqueChildPath(folder: string, fileName: string): string {

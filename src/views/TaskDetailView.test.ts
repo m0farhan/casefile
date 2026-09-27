@@ -138,6 +138,7 @@ interface Panel {
   projectPath: string
   taskId: string
   task: Task
+  removedSubtaskIds: string[]
   render(): void
   loadTask(): Promise<void>
   scheduleSave(): void
@@ -169,7 +170,14 @@ async function setup(fields: Partial<Task> = {}, subtaskTitles: string[] = []) {
     const fresh = await new ProjectStore(app as unknown as App, () => DEFAULT_SETTINGS).loadAllProjects('Projects')
     return fresh[0]
   }
-  return { store, project, panel, live, reload }
+  /** The case as its note holds it, journal included. */
+  const onDisk = async (): Promise<Task> => {
+    const fresh = new ProjectStore(app as unknown as App, () => DEFAULT_SETTINGS)
+    const t = (await fresh.loadAllProjects('Projects'))[0].tasks[0]
+    await fresh.loadTaskBody(t)
+    return t
+  }
+  return { store, project, panel, live, reload, onDisk }
 }
 
 afterEach(() => {
@@ -244,6 +252,33 @@ describe('TaskDetailView saving', () => {
     await panel.persist()
     expect(live(added.id).status).toBe('done')
     expect(live(added.id).filePath).toBe(added.filePath)
+  })
+
+  it('a comment deleted while the previous autosave writes still reaches disk', async () => {
+    const comments = ['first', 'second', 'third'].map((text) => ({ at: '2026-09-27 10:00', text }))
+    const { panel, onDisk } = await setup({ comments })
+    const del = (text: string) => (panel.task.comments = panel.task.comments?.filter((c) => c.text !== text))
+    del('first')
+    const writing = panel.persist()
+    del('second') // the next delete is confirmed while that save writes
+    await writing
+    await panel.flushPendingSave()
+    expect((await onDisk()).comments?.map((c) => c.text)).toEqual(['third'])
+  })
+
+  it('a subtask removed while the previous autosave writes is removed on disk too', async () => {
+    const { panel, reload } = await setup({}, ['Sub A', 'Sub B'])
+    const remove = (title: string) => {
+      const sub = panel.task.subtasks.find((t) => t.title === title)
+      panel.task.subtasks = panel.task.subtasks.filter((t) => t !== sub)
+      if (sub) panel.removedSubtaskIds.push(sub.id)
+    }
+    remove('Sub A')
+    const writing = panel.persist()
+    remove('Sub B')
+    await writing
+    await panel.flushPendingSave()
+    expect((await reload()).tasks[0].subtasks).toEqual([])
   })
 
   it('a board change to one subtask survives a panel edit of another', async () => {

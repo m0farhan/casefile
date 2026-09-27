@@ -72,6 +72,9 @@ export interface TaskSource {
   /** Runs dependency-based auto-scheduling; a no-op when the project's config disables it. */
   scheduleAfterChange(project: Project, changedTaskId?: string): Promise<number>
   saveTaskAttachment(project: Project, task: Task, fileName: string, data: ArrayBuffer): Promise<TFile>
+  reserveAttachmentName(fileName: string): string
+  isAttachmentPending(name: string): boolean
+  writeTaskAttachment(project: Project, task: Task, name: string, data: ArrayBuffer): Promise<TFile>
   /** `parentId` places a task that is not in the tree yet; left out, the tree says. */
   findTaskFileConflict(project: Project, task: Task, parentId?: string | null): TaskFileNameConflictError | null
   /** Append one audit-log entry directly (SLA breach events etc.) and save. */

@@ -49,6 +49,10 @@ export class FakeVault {
     return this.files.get(n)?.file ?? this.folders.get(n) ?? null
   }
 
+  getFiles(): TFile[] {
+    return [...this.files.values()].map((f) => f.file)
+  }
+
   getMarkdownFiles(): TFile[] {
     return [...this.files.values()].map((f) => f.file).filter((f) => f.extension === 'md')
   }

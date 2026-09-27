@@ -49,11 +49,23 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ### Added
 
-- **Attach files to a case:** the Evidence section has an Attach button, and files dropped on it attach too. Each file is copied into the vault where Obsidian's attachment setting puts it and linked from the end of the description, so it lists under Evidence. Pictures are embedded and show inline; anything else is only ever a link, never an embed (it may be the sample). Names are cleaned so the link always resolves (`# ^ [ ] |` and path characters become `-`). The section now shows on every case, with "No files attached" when there are none
+- **Attach files to a case:** the Evidence section has an Attach button, and files dropped on it attach too. Each file goes into the case's own attachments folder (the one Archive moves with the note), and its link goes on the end of the description before a single byte is copied, so no save, close, archive or panel switch while a large file copies can lose it. The file lands in the case's folder as it is when the copy finishes (archived or retitled meanwhile, it follows; deleted meanwhile, nothing is written), Evidence redraws once it is there, and clicking its link before then says it is still copying rather than making an empty note of that name. A copy that fails leaves its link listed as missing under Evidence and names the link to remove. Pictures are embedded and show inline; anything else is only ever a link, never an embed (it may be the sample). The section now shows on every saved case, with "No files attached" when there are none; a new case offers Attach once it has been created and has a folder
 
 ### Changed
 
 - **Done cards read as done:** in a complete column the card eases back to 65% (90% under the pointer, to read it), and everything under the title is lightly struck through. The title stays whole so the card still says what it was, and so do avatars
+- **Attachment names are unique across the vault.** A case links its files by bare name, which Obsidian resolves by name: with two files of one name (two cases each attaching `email.eml`) it picked the other case's. The second now saves as `email 1.eml`. Names are compared the way Obsidian stores them (a macOS screenshot's narrow no-break space is a plain space), and a name whose copy failed stays taken, so its dangling link can never come to point at another file. A name with no letter extension (a hash-named sample, `.env`, `image.001`) gets `.bin`, or Obsidian could not resolve its link and Evidence reported no file attached
+- The comment box has no resize grip: it grows as you type, and a dragged size lasted only until the next keystroke
+
+### Fixed
+
+- A file dropped or pasted on the description was always embedded, so a dropped note rendered in the preview and loaded its remote images, and its name was not cleaned (`a#b.pdf` linked a heading). It now follows the Evidence rule above
+- Side panel: an edit made while the previous autosave was still writing (a second comment deleted, a subtask removed) was marked saved but never written
+- A card created in the board's Unassigned swimlane was assigned to the current user and jumped to their lane
+- Done cards struck through the avatar initials
+- A subtask card let long chips spill past its border and the column scrolled sideways; a sub-subtask was drawn as a sibling of its own parent subtask; and while a card was dragged the connector lines pointed at the wrong cards (they now hide until the drop)
+- A restored multi-line comment draft jumped the modal or panel on redraw, and a comment box in a hidden pane collapsed to 2px
+- The task-form progress handle: a phone or tablet keeps Obsidian's own finger-sized handle (a capsule on iOS); under a light theme the track no longer paints a near-white bar on the dark surface
 
 ## [2.41.0] - 2026-09-27
 

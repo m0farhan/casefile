@@ -9,14 +9,19 @@ export class Notice {
 export function setIcon(): void {}
 
 export function normalizePath(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  // As Obsidian 1.13 does: slashes collapsed, no-break spaces as spaces, NFC.
+  return p
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .replace(/\u00A0|\u202F/g, ' ')
+    .normalize('NFC')
 }
 
 export function parseLinktext(linktext: string): { path: string; subpath: string } {
   const hash = linktext.indexOf('#')
-  return hash < 0
-    ? { path: linktext, subpath: '' }
-    : { path: linktext.slice(0, hash), subpath: linktext.slice(hash) }
+  return hash < 0 ? { path: linktext, subpath: '' } : { path: linktext.slice(0, hash), subpath: linktext.slice(hash) }
 }
 
 export class TAbstractFile {

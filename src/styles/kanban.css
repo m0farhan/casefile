@@ -336,6 +336,19 @@
   border-bottom-left-radius: 0;
   background: linear-gradient(var(--gs-hairline-3), var(--gs-hairline-3)) 0 calc(50% + 4px) / 100% 1.5px no-repeat;
 }
+/* Mid-drag the DOM order no longer matches the nesting worked out at render
+   (the ghost keeps --nested, a dragged parent's subtasks stay behind), so every
+   elbow would point at the wrong card. KanbanView sets the class on dragstart
+   and clears it on the next render. */
+.pm-kanban-view--dragging .pm-kanban-card--nested::before {
+  display: none;
+}
+/* The card itself gave up its clip for the connector; its content keeps one,
+   so a long unbreakable tag clips at the card edge instead of spilling past it
+   and scrolling the whole card list sideways. */
+.pm-kanban-card--nested > .pm-kanban-card-body {
+  overflow: hidden;
+}
 .pm-kanban-card--nested > .pm-kanban-progress,
 .pm-kanban-card--nested > .pm-kanban-card-progress {
   border-radius: 0 0 calc(var(--radius-m) - 1px) calc(var(--radius-m) - 1px);
@@ -456,7 +469,10 @@
    strength again under the pointer, to read it), a green check leads the row,
    and everything under the title is struck through lightly — the title never,
    so the card still says what it was. Avatars are left whole: a line through
-   initials in a circle reads as a rendering fault, not as "done". */
+   initials in a circle reads as a rendering fault, not as "done". The owner
+   wrapper is excluded too: it is a flex box, and a decoration on it propagates
+   into the avatars where no descendant can switch it off. The due chip inside
+   it still matches on its own. */
 .pm-kanban-card--done {
   opacity: 0.65;
 }
@@ -464,7 +480,7 @@
 .pm-kanban-card--done:focus-visible {
   opacity: 0.9;
 }
-.pm-kanban-card--done .pm-kanban-card-chips *:not(.pm-avatar-stack, .pm-avatar-stack *) {
+.pm-kanban-card--done .pm-kanban-card-chips *:not(.pm-kanban-card-owner, .pm-avatar-stack, .pm-avatar-stack *) {
   text-decoration: line-through;
   text-decoration-thickness: 1px;
   text-decoration-color: color-mix(in srgb, currentColor 70%, transparent);

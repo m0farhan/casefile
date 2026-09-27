@@ -426,6 +426,55 @@ describe('ProjectStore task attachments', () => {
     expect(second.path).toBe('Projects/Imgs/Tasks/Shot/attachments/pic 1.png')
   })
 
+  it('names an attachment uniquely across the vault, so its bare-name link cannot resolve to another case', async () => {
+    // Obsidian resolves [[email.eml]] by name: with a same-named file in
+    // another case's folder it picked that one.
+    const { store } = newStore()
+    const project = await store.createProject('Mail', 'Projects')
+    const bec = await addNamed(store, project, 'BEC')
+    const wave = await addNamed(store, project, 'Phishing wave')
+    await store.saveTaskAttachment(project, bec, 'email.eml', new ArrayBuffer(1))
+    const theirs = await store.saveTaskAttachment(project, wave, 'Email.eml', new ArrayBuffer(1))
+    expect(theirs.path).toBe('Projects/Mail/Tasks/Phishing wave/attachments/Email 1.eml')
+    // Two attaches in flight at once never pick the same name either.
+    expect([store.reserveAttachmentName('dump.pcap'), store.reserveAttachmentName('dump.pcap')]).toEqual([
+      'dump.pcap',
+      'dump 1.pcap'
+    ])
+    // Compared in the form Obsidian stores: a macOS screenshot's narrow
+    // no-break space is a plain space in the vault.
+    await store.saveTaskAttachment(project, bec, 'Shot at 10.41 AM.png', new ArrayBuffer(1))
+    expect(store.reserveAttachmentName('Shot at 10.41\u202fAM.png')).toBe('Shot at 10.41 AM 1.png')
+  })
+
+  it('a failed copy keeps its name taken, so its dangling link never comes to point at another file', async () => {
+    const { store, vault } = newStore()
+    const project = await store.createProject('Mail', 'Projects')
+    const a = await addNamed(store, project, 'A')
+    const name = store.reserveAttachmentName('dump.pcap')
+    vi.spyOn(vault, 'createBinary').mockRejectedValueOnce(new Error('disk full'))
+    await expect(store.writeTaskAttachment(project, a, name, new ArrayBuffer(1))).rejects.toThrow('disk full')
+    expect(store.isAttachmentPending('dump.pcap')).toBe(true)
+    expect(store.reserveAttachmentName('dump.pcap')).toBe('dump 1.pcap')
+  })
+
+  it('writes into the case folder as it is when the copy lands, and not at all for a deleted case', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Mail', 'Projects')
+    const task = await addNamed(store, project, 'Case')
+    const name = store.reserveAttachmentName('late.pcap')
+    await store.archiveTask(project, task.id)
+    const file = await store.writeTaskAttachment(project, task, name, new ArrayBuffer(1))
+    expect(file.path).toBe(
+      `${project.taskIndex.get(task.id)?.task.filePath?.replace(/\.md$/, '')}/attachments/late.pcap`
+    )
+    expect(file.path).toContain('Archive')
+    const gone = await addNamed(store, project, 'Gone')
+    const pending = store.reserveAttachmentName('orphan.pcap')
+    await store.deleteTask(project, gone.id)
+    await expect(store.writeTaskAttachment(project, gone, pending, new ArrayBuffer(1))).rejects.toThrow('deleted')
+  })
+
   it('trashes the attachments folder when the task is deleted', async () => {
     const { store, vault } = newStore()
     const project = await store.createProject('Imgs', 'Projects')

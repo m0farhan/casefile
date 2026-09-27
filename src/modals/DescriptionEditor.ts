@@ -16,6 +16,7 @@ import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
+import { attachmentFileName, attachmentLink } from './AttachmentsSection'
 import { toggleRenderedCheckbox } from './checkboxToggle'
 import { toggleInlineMarker } from './inlineFormat'
 import { blockGaps, classifyLine, computeInlineMarks, fenceMap, listDepths } from './livePreviewMarks'
@@ -259,22 +260,33 @@ export function renderDescriptionEditor(
   const noteSuggest = new NoteLinkSuggest(app)
   noteSuggest.attach(descSection)
 
+  // The Evidence section's attach rule (AttachmentsSection.attachFiles): a
+  // name unique in the vault, only pictures embedded (a dropped note rendered
+  // in the preview, remote images and all), and the link in before any byte is
+  // copied, so no save made while a large file copies can miss it.
+  /** Set by destroy(): copies settling later must not redraw a dead preview. */
+  let destroyed = false
   const insertAttachments = async (items: { blob: Blob; name: string }[]): Promise<void> => {
-    for (const { blob, name } of items) {
+    const planned = items.map(({ blob, name }) => {
+      const saved = plugin.store.reserveAttachmentName(attachmentFileName(name))
+      const snippet = attachmentLink(saved)
+      const { from, to } = view.state.selection.main
+      view.dispatch({
+        changes: { from, to, insert: snippet },
+        selection: { anchor: from + snippet.length }
+      })
+      return { blob, name, saved }
+    })
+    for (const { blob, name, saved } of planned) {
       try {
-        const buffer = await blob.arrayBuffer()
-        const file = await plugin.store.saveTaskAttachment(project, task, name, buffer)
-        const snippet = `![[${file.name}]]`
-        const { from, to } = view.state.selection.main
-        view.dispatch({
-          changes: { from, to, insert: snippet },
-          selection: { anchor: from + snippet.length }
-        })
+        await plugin.store.writeTaskAttachment(project, task, saved, await blob.arrayBuffer())
       } catch (err) {
         console.error('Failed to save attachment', err)
-        new Notice('Failed to save attachment')
+        new Notice(`Could not copy ${name}. Its link [[${saved}]] points at nothing; remove it.`)
       }
     }
+    // The preview drew the links before their files existed: draw it again.
+    if (!destroyed && !descPreview.classList.contains('pm-hidden')) void renderPreview()
   }
 
   const showPreview = () => {
@@ -536,6 +548,12 @@ export function renderDescriptionEditor(
   editBtn.onClick(() => showEdit(task.description.length))
 
   const followLink = safeAsync(async (href: string) => {
+    // A link to a file still copying resolves to nothing yet, and Obsidian
+    // would make an empty note of that name.
+    if (plugin.store.isAttachmentPending(href.slice(href.lastIndexOf('/') + 1))) {
+      new Notice('That file is still copying. Try again in a moment.')
+      return
+    }
     if ((await ctx.onNavigateAway?.()) === false) return
     await app.workspace.openLinkText(href, sourcePath)
   })
@@ -584,6 +602,7 @@ export function renderDescriptionEditor(
 
   return {
     destroy(): void {
+      destroyed = true
       descComp.unload()
       noteSuggest.destroy()
       view.destroy()

@@ -254,11 +254,16 @@ export class TaskDetailView extends ItemView {
     const task = this.task
     const saved = () => ({ ...task, title: this.persistedTitle, status: this.lastStatus })
     const patch = diffTaskPatch(this.snapshot, saved())
-    const removed = this.removedSubtaskIds
+    // A copy: a removal made while this save writes is not part of it.
+    const removed = [...this.removedSubtaskIds]
     if (!Object.keys(patch).length && !removed.length) return
     // subtaskBase makes the subtask merge three-way, so this panel's stale
     // copy of a subtask never undoes a change made to it on the board.
     const opts = { removedSubtaskIds: removed, subtaskBase: this.snapshot.subtasks }
+    // The next snapshot is what this save sends, copied now. Taken after the
+    // write, it held any edit made meanwhile (a second comment deleted), which
+    // then never differed from it, so was never written.
+    const sent = JSON.parse(JSON.stringify(saved())) as Task
     try {
       // The store gets its own copy. Handed the panel's arrays, the live task
       // shared them, and the next edit here changed the live task before the
@@ -266,21 +271,24 @@ export class TaskDetailView extends ItemView {
       // disk, an indicator removal was never logged. structuredClone, not
       // JSON: a field cleared to undefined must stay in the patch.
       await this.plugin.store.updateTask(this.project, this.task.id, structuredClone(patch), opts)
-      this.removedSubtaskIds = []
+      this.removedSubtaskIds = this.removedSubtaskIds.filter((id) => !removed.includes(id))
       // Store-side stamps (activity entries, lifecycle timestamps, completion)
-      // land on the LIVE task, not this editor clone. Sync them back, or the
-      // next debounced patch would diff against stale values.
+      // land on the LIVE task, not this editor clone. Sync them back, onto the
+      // clone and the snapshot alike, or the next debounced patch would diff
+      // against stale values.
       const live = this.project.taskIndex.get(this.task.id)?.task
       if (live) {
-        this.task.activity = JSON.parse(JSON.stringify(live.activity)) as Task['activity']
-        this.task.respondedAt = live.respondedAt
-        this.task.resolvedAt = live.resolvedAt
-        this.task.completed = live.completed
+        for (const t of [this.task, sent]) {
+          t.activity = JSON.parse(JSON.stringify(live.activity)) as Task['activity']
+          t.respondedAt = live.respondedAt
+          t.resolvedAt = live.resolvedAt
+          t.completed = live.completed
+        }
         // A subtask added here gets its key and note from the store, on the
         // store's copy. Copied onto the panel's own subtask objects in place,
         // since the subtask rows hold those objects.
         const byId = new Map(flattenTasks(live.subtasks).map((f) => [f.task.id, f.task]))
-        for (const { task: sub } of flattenTasks(this.task.subtasks)) {
+        for (const { task: sub } of [...flattenTasks(this.task.subtasks), ...flattenTasks(sent.subtasks)]) {
           const stored = byId.get(sub.id)
           if (stored) {
             sub.key = stored.key
@@ -288,8 +296,8 @@ export class TaskDetailView extends ItemView {
           }
         }
       }
-      // Snapshot follows the save: the next diff is relative to what's on disk.
-      this.snapshot = JSON.parse(JSON.stringify(saved())) as Task
+      // Snapshot follows the save: the next diff is relative to what was sent.
+      this.snapshot = sent
       // The store marks this write as a self-write, so open boards deliberately
       // skip their file-watcher reload — but that skip assumes the SAVING view
       // refreshes itself. The panel is a different view: poke the boards.
@@ -472,9 +480,17 @@ export class TaskDetailView extends ItemView {
       app: this.app,
       project,
       task,
-      onChange: () => {
-        this.scheduleSave()
-        this.render()
+      attach: {
+        reserve: (name) => this.plugin.store.reserveAttachmentName(name),
+        write: (name, data) => this.plugin.store.writeTaskAttachment(project, task, name, data),
+        onLinked: () => {
+          this.scheduleSave()
+          this.render()
+        },
+        // Still showing this case in an open panel: redraw, so Evidence resolves the copies.
+        onCopied: () => {
+          if (this.task?.id === task.id && this.contentEl.isConnected) this.render()
+        }
       }
     })
     if (config.boardType !== 'plain' && task.issueType === 'incident') {

@@ -442,7 +442,9 @@ button.pm-comment-delete:hover {
   border-radius: var(--radius-s);
   font-size: 13px;
   padding: 6px 8px;
-  resize: vertical;
+  /* No grip: it grows as you type, and a dragged size lasted only until the
+     next keystroke. */
+  resize: none;
   overflow-y: auto;
 }
 .pm-comment-input:focus {

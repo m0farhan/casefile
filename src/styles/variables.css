@@ -141,6 +141,9 @@
 
   /* --- Obsidian's body-level derived variables, declared again (see top) --- */
   --caret-color: var(--text-normal);
+  /* The slider track: body derives it from the light/dark palette, so under a
+     light theme it painted a near-white bar on the plugin's dark surface. */
+  --slider-track-background: var(--background-modifier-border-hover);
   --icon-color: var(--text-muted);
   --icon-color-hover: var(--text-muted);
   --icon-color-active: var(--text-accent);

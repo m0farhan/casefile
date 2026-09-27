@@ -1,4 +1,4 @@
-import { Notice, setIcon, type App, type TFile } from 'obsidian'
+import { Notice, setIcon, type App } from 'obsidian'
 import { extractAttachmentRefs, opensInApp, refExtension, IMAGE_EXTENSIONS } from '../soc/attachments'
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
@@ -22,43 +22,88 @@ export function safeAttachmentName(name: string): string {
   return clean.replace(/^\.+/, '') || 'attachment'
 }
 
+// The attach rule, shared by every way a file enters a case: the Evidence
+// section's button and drop here, and the description's paste and drop.
+
 /**
- * Copy picked or dropped files into the vault where Obsidian's own attachment
- * setting puts them (next to the note, a folder, …), and link each from the
- * end of the description, which is what the Evidence list reads. Images are
- * embedded so they show inline; anything else is a plain link, never an
- * embed: the file may be the malware sample. Returns how many were attached.
+ * The name a file is saved under: safeAttachmentName, plus '.bin' when that
+ * leaves no letter extension (a hash-named sample, '.env', 'image.001').
+ * Obsidian resolves a link by file name only when the name has a '.', and the
+ * Evidence list takes only refs with a letter extension, so without one the
+ * link could be dead, and Evidence said no file was attached.
  */
-export async function attachFiles(app: App, task: Task, sourcePath: string, files: File[]): Promise<number> {
-  const links: string[] = []
-  for (const f of files) {
+export function attachmentFileName(name: string): string {
+  const clean = safeAttachmentName(name)
+  return refExtension(clean) ? clean : `${clean}.bin`
+}
+
+/** Pictures embed so they show inline; anything else is a plain link, never an embed: it may be the malware sample. */
+export function attachmentLink(name: string): string {
+  return IMAGE_EXTENSIONS.has(refExtension(name)) ? `![[${name}]]` : `[[${name}]]`
+}
+
+/** The store's two attachment steps, bound to the case (ProjectStore.reserveAttachmentName, writeTaskAttachment). */
+export interface AttachTarget {
+  /** A vault-unique name for the file, held until written. */
+  reserve: (fileName: string) => string
+  write: (name: string, data: ArrayBuffer) => Promise<unknown>
+}
+
+/**
+ * Attach files to a case: reserve each one a name unique in the vault, link
+ * them all from the end of the description at once, then copy the bytes into
+ * the case's own attachments folder. Linking first means no save can miss a
+ * link: the case holds it from the moment of the attach, whatever closes or
+ * saves while a large file copies. A copy that fails leaves its link listed as
+ * missing under Evidence, and says so. Resolves once every copy has settled,
+ * with how many were written.
+ */
+export async function attachFiles(
+  task: Task,
+  target: AttachTarget,
+  files: File[],
+  linked: () => void
+): Promise<number> {
+  const planned = files.map((f) => ({ f, name: target.reserve(attachmentFileName(f.name)) }))
+  const links = planned.map(({ name }) => attachmentLink(name))
+  task.description = [task.description.trimEnd(), links.join('\n')].filter(Boolean).join('\n\n')
+  linked()
+  let written = 0
+  for (const { f, name } of planned) {
     try {
-      const path = await app.fileManager.getAvailablePathForAttachment(safeAttachmentName(f.name), sourcePath)
-      const file: TFile = await app.vault.createBinary(path, await f.arrayBuffer())
-      const target = app.metadataCache.fileToLinktext(file, sourcePath, false)
-      links.push(IMAGE_EXTENSIONS.has(file.extension.toLowerCase()) ? `![[${target}]]` : `[[${target}]]`)
+      await target.write(name, await f.arrayBuffer())
+      written++
     } catch (e) {
-      new Notice(`Could not attach ${f.name}: ${e instanceof Error ? e.message : String(e)}`)
+      new Notice(
+        `Could not copy ${f.name}: ${e instanceof Error ? e.message : String(e)}. Its link [[${name}]] points at nothing; remove it.`
+      )
     }
   }
-  if (links.length) task.description = [task.description.trimEnd(), links.join('\n')].filter(Boolean).join('\n\n')
-  return links.length
+  return written
 }
 
 /**
  * Evidence section: every file embedded or linked in the case (description +
- * comments), listed in one place, and — when the host passes onChange — a way
- * to attach more (button or drop). Without onChange it renders nothing when
+ * comments), listed in one place, and — when the host passes attach — a way
+ * to attach more (button or drop). Without attach it renders nothing when
  * there are no refs. Never re-renders on its own; the host rebuild owns the
  * lifecycle.
  */
 export function renderAttachmentsSection(
   container: HTMLElement,
-  ctx: { app: App; project: Project; task: Task; onChange?: () => void }
+  ctx: {
+    app: App
+    project: Project
+    task: Task
+    /** Where attached files go. onLinked: the links are on the task (before
+     * any byte is copied), so the host saves and redraws. onCopied: the copies
+     * settled, so the host redraws again and Evidence resolves them. */
+    attach?: AttachTarget & { onLinked: () => void; onCopied: () => void }
+  }
 ): void {
-  const { app, project, task, onChange } = ctx
+  const { app, project, task, attach } = ctx
   const refs = extractAttachmentRefs([task.description, ...(task.comments ?? []).map((c) => c.text)])
-  if (refs.length === 0 && !onChange) return
+  if (refs.length === 0 && !attach) return
 
   const section = container.createDiv('pm-modal-section pm-evidence-section')
   const header = section.createDiv('pm-modal-section-header')
@@ -70,13 +115,12 @@ export function renderAttachmentsSection(
   // Same source-path idiom as CommentsSection: task note, else the project note.
   const sourcePath = task.filePath || project.filePath || ''
 
-  if (onChange) {
+  if (attach) {
     const add = safeAsync(async (files: File[]) => {
       if (!files.length) return
-      const n = await attachFiles(app, task, sourcePath, files)
-      if (!n) return
-      new Notice(n === 1 ? 'Attached 1 file' : `Attached ${n} files`)
-      onChange()
+      const n = await attachFiles(task, attach, files, attach.onLinked)
+      if (n) new Notice(n === 1 ? 'Attached 1 file' : `Attached ${n} files`)
+      attach.onCopied()
     })
     const picker = section.createEl('input', { type: 'file', cls: 'pm-evidence-picker', attr: { multiple: '' } })
     picker.addEventListener('change', () => {

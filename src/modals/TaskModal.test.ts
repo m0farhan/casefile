@@ -81,6 +81,7 @@ interface Harness {
   task: Task
   closed: boolean
   contentEl: { empty(): void }
+  render(): void
   persistTask(): Promise<void>
   openOverflowMenu(anchor: unknown, titleError: (m: string) => void): void
   closeThen(go: () => void): void
@@ -192,6 +193,16 @@ describe('TaskModal saving', () => {
     await vi.waitFor(() => expect(live(task.id).description).toBe('EVIDENCE: attacker IP seen'))
     expect(live(task.id).title).toBe('Case')
     expect(notices).toEqual(['Title kept — a note named "Beta" already exists.'])
+  })
+
+  it('a closed modal is never rebuilt: a late attach would leave editors nothing destroys', async () => {
+    const { open, task } = await setup()
+    const m = open(task)
+    m.close()
+    const empty = vi.fn<() => void>()
+    m.contentEl = { empty }
+    m.render()
+    expect(empty).not.toHaveBeenCalled()
   })
 })
 

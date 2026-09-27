@@ -75,8 +75,10 @@ describe('laneCreatePatch', () => {
     expect(laneCreatePatch('assignee', '[[People/Jane Doe]]')).toEqual({ assignees: ['[[People/Jane Doe]]'] })
   })
 
-  it('leaves assignees empty in the unassigned lane', () => {
-    expect(laneCreatePatch('assignee', '')).toEqual({})
+  // Explicitly empty, not {}: inline create defaults assignees to the current
+  // user and spreads this patch after, so {} filed the card in their lane.
+  it('clears assignees in the unassigned lane, overriding the current-user default', () => {
+    expect(laneCreatePatch('assignee', '')).toEqual({ assignees: [] })
   })
 
   it('refuses the create affordance in a real epic lane (no faked parentage)', () => {
@@ -96,9 +98,11 @@ describe('laneCreatePatch', () => {
 // Views have no DOM here. The container is a stand-in whose every method
 // returns another stand-in; the columns are captured instead of drawn.
 
-function fakeEl(onEmpty: () => void = () => {}): HTMLElement {
+function fakeEl(onEmpty: () => void = () => {}, classes = new Set<string>()): HTMLElement {
   const target = {
     empty: onEmpty,
+    addClass: (cls: string) => classes.add(cls),
+    removeClass: (cls: string) => classes.delete(cls),
     querySelectorAll: (): unknown[] => [],
     querySelector: (): null => null
   }
@@ -116,6 +120,8 @@ interface Board {
   store: ProjectStore
   project: Project
   settings: PMSettings
+  /** Classes the view put on its container. */
+  classes: Set<string>
   empties: () => number
   columns: () => KanbanColumnProps[]
 }
@@ -141,8 +147,9 @@ async function board(
     saveSettings: () => Promise.resolve()
   } as unknown as PMPlugin
   let empties = 0
+  const classes = new Set<string>()
   const view = new KanbanView(
-    fakeEl(() => empties++),
+    fakeEl(() => empties++, classes),
     project,
     plugin,
     () => Promise.resolve(),
@@ -153,6 +160,7 @@ async function board(
     store,
     project,
     settings,
+    classes,
     empties: () => empties,
     columns: () => vi.mocked(KanbanColumn).mock.calls.map((call) => call[1])
   }
@@ -282,6 +290,81 @@ describe('KanbanView swimlanes', () => {
     const inProgress = b.columns().filter((c) => c.status.id === 'in-progress')
     expect(inProgress.map((c) => c.cards.length)).toEqual([2, 2])
     expect(inProgress.map((c) => c.wipCount)).toEqual([4, 4])
+  })
+
+  it('a card created in the Unassigned lane stays unassigned, even with a current user set', async () => {
+    const b = await board([{ title: 'Existing' }], { lanes: 'assignee', settings: { currentUser: 'Farhan' } })
+    b.view.render()
+    const create = b.columns().find((c) => c.status.id === 'todo')?.onInlineCreate
+    if (!create) throw new Error('no create in the Unassigned lane')
+    await create('Typed in Unassigned')
+    expect(byTitle(b, 'Typed in Unassigned').assignees).toEqual([])
+  })
+})
+
+describe('KanbanView subtask nesting', () => {
+  // The connector draws one level: C nests under P, but G (C's own child)
+  // drawn nested too read as P's child. A sibling run joins one stem only
+  // behind a nested sibling — E1/E2 are stranded from their parent R.
+  it('nests one level and runs only real same-parent siblings', async () => {
+    const b = await board([{ title: 'P' }, { title: 'Q' }, { title: 'R', status: 'done' }], {
+      settings: { kanbanShowSubtasks: true }
+    })
+    const sub = async (title: string, parentId: string): Promise<Task> => {
+      const t = makeTask({ title, type: 'subtask' })
+      await b.store.insertTask(b.project, t, parentId)
+      return t
+    }
+    const c = await sub('C', byTitle(b, 'P').id)
+    await sub('G', c.id)
+    await sub('D1', byTitle(b, 'Q').id)
+    await sub('D2', byTitle(b, 'Q').id)
+    await sub('E1', byTitle(b, 'R').id)
+    await sub('E2', byTitle(b, 'R').id)
+    b.view.render()
+    const todo = b.columns().find((col) => col.status.id === 'todo')
+    expect(todo?.cards.map((card) => `${card.task.title}${card.nested ? '*' : ''}`)).toEqual([
+      'P',
+      'C*',
+      'G',
+      'Q',
+      'D1*',
+      'D2*',
+      'E1',
+      'E2'
+    ])
+  })
+})
+
+describe('KanbanView drag connectors', () => {
+  const DRAGGING = 'pm-kanban-view--dragging'
+
+  it('hides nesting connectors from dragstart until an aborted drag re-renders', async () => {
+    const b = await board([{ title: 'Beacon' }])
+    b.view.render()
+    const col = b.columns()[0]
+    col.onCardDragStart(byTitle(b, 'Beacon'))
+    expect(b.classes.has(DRAGGING)).toBe(true)
+    col.onCardDragEnd()
+    expect(b.classes.has(DRAGGING)).toBe(false)
+  })
+
+  it('keeps them hidden past dragend while the verdict modal holds the drop open', async () => {
+    let answer: (extra: Partial<Task> | null) => void = () => {}
+    vi.mocked(guardVerdictOnClose).mockReturnValue(new Promise((resolve) => (answer = resolve)))
+    const b = await board([{ title: 'Beacon', issueType: 'incident' }])
+    b.view.render()
+    const todo = b.columns().find((c) => c.status.id === 'todo')
+    const done = b.columns().find((c) => c.status.id === 'done')
+    if (!todo || !done) throw new Error('no columns')
+    const task = byTitle(b, 'Beacon')
+    todo.onCardDragStart(task)
+    const dropping = done.onDrop(task.id, 'done', null)
+    todo.onCardDragEnd()
+    expect(b.classes.has(DRAGGING)).toBe(true)
+    answer(null)
+    await dropping
+    expect(b.classes.has(DRAGGING)).toBe(false)
   })
 })
 

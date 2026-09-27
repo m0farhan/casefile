@@ -1,13 +1,16 @@
 import type { EditorState } from '@codemirror/state'
 import type { App } from 'obsidian'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { FakeEl } from '../../test/fakeDom'
+import { FakeEl, fakeEvent } from '../../test/fakeDom'
 import type PMPlugin from '../main'
 import { makeProject, makeTask, type Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorContext } from './DescriptionEditor'
 
+const { inserts } = vi.hoisted(() => ({ inserts: [] as string[] }))
+
 // The read-mode preview is driven here; the CodeMirror editor is not (views
-// have no DOM in vitest), so EditorView is a stand-in that only holds a doc.
+// have no DOM in vitest), so EditorView is a stand-in that only holds a doc
+// and records the text it is asked to insert.
 vi.mock('@codemirror/view', async (importOriginal) => {
   const real = await importOriginal<typeof import('@codemirror/view')>()
   const { EditorState: State } = await import('@codemirror/state')
@@ -21,7 +24,9 @@ vi.mock('@codemirror/view', async (importOriginal) => {
     constructor(cfg: { doc: string }) {
       this.state = State.create({ doc: cfg.doc })
     }
-    dispatch(): void {}
+    dispatch(tr: { changes?: { insert?: string } }): void {
+      if (tr.changes?.insert !== undefined) inserts.push(tr.changes.insert)
+    }
     focus(): void {}
     destroy(): void {}
   }
@@ -95,7 +100,10 @@ beforeAll(() => {
 
 const openLinkText = vi.fn<(link: string, source: string) => Promise<void>>(() => Promise.resolve())
 const app = { workspace: { openLinkText } } as unknown as App
-const plugin = { settings: { incidentTemplates: [] } } as unknown as PMPlugin
+const plugin = {
+  settings: { incidentTemplates: [] },
+  store: { isAttachmentPending: () => false }
+} as unknown as PMPlugin
 const project = makeProject('Queue', 'Cases/Queue.md')
 
 beforeEach(() => openLinkText.mockClear())
@@ -148,5 +156,39 @@ describe('description preview', () => {
     root.find('a').click()
     await flush()
     expect(openLinkText).toHaveBeenCalledExactlyOnceWith('Other note', 'Cases/Queue.md')
+  })
+})
+
+describe('a file dropped on the description', () => {
+  it('follows the Evidence attach rule: only pictures embed, every name resolves, links go in before the copy', async () => {
+    inserts.length = 0
+    const reserved: string[] = []
+    const written: string[] = []
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const store = {
+      reserveAttachmentName: (name: string) => {
+        reserved.push(name)
+        return name
+      },
+      writeTaskAttachment: async (_p: unknown, _t: unknown, name: string) => {
+        await gate
+        written.push(name)
+      }
+    }
+    const dropPlugin = { ...plugin, store } as unknown as PMPlugin
+    const root = FakeEl.root()
+    renderDescriptionEditor(root as unknown as HTMLElement, { app, plugin: dropPlugin, project, task: makeTask() })
+    const file = (name: string) => ({ name, arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)) })
+    const files = [file('phish.md'), file('shot.png'), file('invoice #2.pdf'), file('e3b0c44298fc1c14')]
+    root.find('.pm-modal-desc-section').dispatchEvent(fakeEvent('drop', { dataTransfer: { files } }))
+    await vi.waitFor(() => expect(inserts).toHaveLength(4))
+    expect(reserved).toEqual(['phish.md', 'shot.png', 'invoice -2.pdf', 'e3b0c44298fc1c14.bin'])
+    // A note embedded here rendered in the preview, remote images and all.
+    expect(inserts).toEqual(['[[phish.md]]', '![[shot.png]]', '[[invoice -2.pdf]]', '[[e3b0c44298fc1c14.bin]]'])
+    // Every link is in while the copies are still held.
+    expect(written).toEqual([])
+    release()
+    await vi.waitFor(() => expect(written).toHaveLength(4))
   })
 })
