@@ -97,6 +97,9 @@ export class TaskModal extends Modal {
         // priority is UI-retired but still written to frontmatter (round-trip default)
         priority: getDefaultPriorityId(config.priorities),
         type: parentId ? 'subtask' : 'task',
+        // New work is yours by default (Settings → Current user); a template or
+        // lane that names its own assignees still wins, being spread after.
+        assignees: plugin.settings.currentUser ? [plugin.settings.currentUser] : [],
         ...defaults
       })
       this.isNew = true
@@ -514,6 +517,30 @@ export class TaskModal extends Modal {
       onNavigateAway: () => this.leave()
     })
 
+    // ── Subtasks ────────────────────────────────────────────────────────────
+    // Straight under the description: the breakdown of the work reads with
+    // what the work is, not below the evidence and the comment thread.
+    renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses, {
+      project: this.project,
+      onOpen: (sub) => {
+        const live = findTaskById(this.project, sub.id)
+        if (!live) {
+          new Notice('Save first — this subtask has no page yet.')
+          return
+        }
+        // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
+        this.closeThen(() =>
+          openTaskModal(this.plugin, this.project, {
+            task: live,
+            onSave: () => this.plugin.refreshProjectViews()
+          })
+        )
+      },
+      onRemove: (subtaskId) => {
+        this.removedSubtaskIds.push(subtaskId)
+      }
+    })
+
     // ── Evidence (files referenced in description/comments) ─────────────────
     renderAttachmentsSection(body, { app: this.app, project: this.project, task: this.task })
 
@@ -550,28 +577,6 @@ export class TaskModal extends Modal {
       })
       renderActivitySection(body, this.task, this.activityState)
     }
-
-    // ── Subtasks ────────────────────────────────────────────────────────────
-    renderSubtasksPanel(body, this.task, this.plugin, this.plugin.store.configFor(this.project).statuses, {
-      project: this.project,
-      onOpen: (sub) => {
-        const live = findTaskById(this.project, sub.id)
-        if (!live) {
-          new Notice('Save first — this subtask has no page yet.')
-          return
-        }
-        // Navigate-away semantics (open-as-note precedent): save-on-close still applies.
-        this.closeThen(() =>
-          openTaskModal(this.plugin, this.project, {
-            task: live,
-            onSave: () => this.plugin.refreshProjectViews()
-          })
-        )
-      },
-      onRemove: (subtaskId) => {
-        this.removedSubtaskIds.push(subtaskId)
-      }
-    })
 
     // ── Linked cases ────────────────────────────────────────────────────────
     // onChange is a no-op: link mutations ride the whole-clone save like IOCs.

@@ -1379,6 +1379,7 @@ export class ProjectStore implements TaskSource {
       description: body,
       status: opts.status,
       priority: opts.priority,
+      assignees: this.getSettings().currentUser ? [this.getSettings().currentUser] : [],
       tags: strList(fm.tags, true).map((t) => t.replace(/^#/, '')),
       ...(extraFrontmatter ? { extraFrontmatter } : {})
     })

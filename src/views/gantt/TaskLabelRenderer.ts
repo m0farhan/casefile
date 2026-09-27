@@ -36,6 +36,9 @@ export function renderTaskLabel(
     el.removeClass('pm-gantt-label-row--dragging')
   })
   let dropPosition: 'before' | 'after' = 'before'
+  // dragenter too: an uncancelled entry leaves the drop operation none, so a
+  // quick release onto a new row was refused (see KanbanColumn acceptDrops).
+  el.addEventListener('dragenter', (e: DragEvent) => e.preventDefault())
   el.addEventListener('dragover', (e: DragEvent) => {
     e.preventDefault()
     const rect = el.getBoundingClientRect()

@@ -14,8 +14,8 @@ import { relativeDue } from '../dates'
 import type { SubView } from './SubView'
 
 /**
- * Backlog: a compact flat list grouped by bucket (This week / Next / Later /
- * Someday / No bucket) for planning triage. Row click routes through
+ * Backlog: a compact flat list grouped by bucket (Today / Tomorrow / This week /
+ * Next / Later / Someday / No bucket) for planning triage. Row click routes through
  * openTaskModal, so the panel-vs-modal setting applies — backlog left,
  * detail right is the intended triage layout.
  */

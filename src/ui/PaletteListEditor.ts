@@ -70,10 +70,14 @@ export function wireRowDragReorder<T>(row: HTMLElement, index: number, items: T[
     dragging = null
     row.removeClass('pm-settings-row--dragging')
   })
-  row.addEventListener('dragover', (e) => {
+  // dragenter too: an uncancelled entry leaves the drop operation none, so a
+  // quick release onto a new row was refused (see KanbanColumn acceptDrops).
+  const accept = (e: DragEvent) => {
     // Only this list's own rows are a drop target, so another list shows the no-drop cursor.
     if (dragging?.items === items) e.preventDefault()
-  })
+  }
+  row.addEventListener('dragenter', accept)
+  row.addEventListener('dragover', accept)
   row.addEventListener('drop', (e) => {
     e.preventDefault()
     const from = dragging

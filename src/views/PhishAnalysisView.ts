@@ -300,6 +300,7 @@ export class PhishAnalysisView extends ItemView {
           status: getDefaultStatusId(config.statuses),
           priority: getDefaultPriorityId(config.priorities),
           tags: ['phishing'],
+          assignees: this.plugin.settings.currentUser ? [this.plugin.settings.currentUser] : [],
           description: formatPhishReport(report),
           iocs
         })

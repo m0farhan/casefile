@@ -53,3 +53,35 @@ describe('KanbanCard issue glyph', () => {
     expect(draw('plain')).toBe('')
   })
 })
+
+describe('KanbanCard in a complete column', () => {
+  const draw = (done: boolean): FakeEl => {
+    const root = FakeEl.root()
+    const createDiv = root.createDiv.bind(root)
+    root.createDiv = (info) => Object.assign(createDiv(info), { dataset: {} })
+    Object.assign(FakeEl.prototype, {
+      hasChildNodes(this: FakeEl) {
+        return this.children.length > 0
+      }
+    })
+    new KanbanCard(root as unknown as HTMLElement, {
+      task: makeTask({ title: 'Closed out' }),
+      done,
+      loggedHours: 0,
+      overdue: false,
+      showTagColors: false,
+      onClick: () => {},
+      onContextMenu: () => {},
+      onDragStart: () => {},
+      onDragEnd: () => {}
+    })
+    return root
+  }
+
+  it('marks the card done with a check, even on a board without issue keys', () => {
+    const done = draw(true)
+    expect(done.find('.pm-kanban-card').hasClass('pm-kanban-card--done')).toBe(true)
+    expect(done.findAll('.pm-kanban-card-done-mark')).toHaveLength(1)
+    expect(draw(false).findAll('.pm-kanban-card-done-mark')).toHaveLength(0)
+  })
+})

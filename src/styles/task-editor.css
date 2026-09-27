@@ -599,13 +599,31 @@ input.pm-pop-field:focus {
   align-items: center;
   gap: 10px;
 }
-/* Capped: at 1fr the slider ate the whole half and pushed the reading hard
+/* Obsidian's own slider, themed only through its variables (no selector
+   fights): the fill runs to the handle's centre (--slider-fill-ratio is set
+   from the value in TaskFormFields), and the handle is a 14px accent dot
+   instead of macOS's 30x18 white pill, which dwarfed a 190px track. Capped
+   width: at 1fr the slider ate the whole half and pushed the reading hard
    against the next column's label. */
 .pm-prop-progress .slider {
+  --slider-track-height: 4px;
+  --slider-fill-background: var(--gs-accent);
+  --slider-thumb-width: 14px;
+  --slider-thumb-height: 14px;
+  --slider-thumb-width-active: 16px;
+  --slider-thumb-height-active: 16px;
+  --slider-thumb-radius: 50%;
+  --slider-thumb-y: -4px;
+  --slider-thumb-y-active: -5px;
+  --slider-thumb-opacity-active: 1;
+  --slider-thumb-border-width: 0px;
+  --slider-thumb-background: var(--gs-accent-hover);
+  --slider-thumb-background-hover: var(--gs-accent-hover);
   flex: 1 1 auto;
   max-width: 190px;
   min-width: 0;
   margin: 0;
+  cursor: pointer;
 }
 .pm-prop-progress-label {
   font-size: 12px;

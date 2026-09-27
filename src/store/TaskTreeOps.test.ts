@@ -178,9 +178,9 @@ describe('collectAllAssignees', () => {
     expect(collectAllAssignees(tasks)).toEqual(['Alice', 'Bob', 'Carol'])
   })
 
-  it('merges the extra list in', () => {
-    const tasks = [task({ id: 'a', assignees: ['Alice'] })]
-    expect(collectAllAssignees(tasks, ['Dave'])).toEqual(['Alice', 'Dave'])
+  it('puts the team list first in its own order, then task-only names sorted', () => {
+    const tasks = [task({ id: 'a', assignees: ['Zed', 'Carol', 'Alice'] })]
+    expect(collectAllAssignees(tasks, ['Dave', 'Carol', 'Dave'])).toEqual(['Dave', 'Carol', 'Alice', 'Zed'])
   })
 
   it('filters out empty strings', () => {

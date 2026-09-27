@@ -331,6 +331,11 @@ describe('Responder field round-trips', () => {
     expect(task.activity).toEqual(original.activity)
   })
 
+  it('round-trips the tomorrow bucket (not dropped to none by hydrateBucket)', () => {
+    const { task } = roundTripTask(makeTask({ id: 'tm-1', bucket: 'tomorrow' }))
+    expect(task.bucket).toBe('tomorrow')
+  })
+
   it('omits default-valued new fields from frontmatter (diff-clean untouched files)', () => {
     const plain = makeTask({ id: 'plain-1' })
     const project = makeProject('Test', 'Projects/Test.md')

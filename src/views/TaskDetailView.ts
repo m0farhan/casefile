@@ -447,6 +447,25 @@ export class TaskDetailView extends ItemView {
       // 'input' events the body-level delegation below relies on.
       onChange: () => this.scheduleSave()
     })
+    // Subtasks straight under the description, as in the modal.
+    renderSubtasksPanel(body, task, this.plugin, config.statuses, {
+      project,
+      onOpen: (sub) => {
+        const live = findTaskById(project, sub.id)
+        if (!live) {
+          new Notice('This subtask has not been saved yet — one moment.')
+          return
+        }
+        // Honors openTaskIn: in panel mode this panel becomes the subtask's page.
+        openTaskModal(this.plugin, project, {
+          task: live,
+          onSave: () => this.plugin.refreshProjectViews()
+        })
+      },
+      // Click-only edits never pass through the body 'input' delegation below.
+      onChange: () => this.scheduleSave(),
+      onRemove: (id) => this.removedSubtaskIds.push(id)
+    })
     // Evidence (files referenced in description/comments) — read-only, no save wiring.
     renderAttachmentsSection(body, { app: this.app, project, task })
     if (config.boardType !== 'plain' && task.issueType === 'incident') {
@@ -475,24 +494,6 @@ export class TaskDetailView extends ItemView {
       initialDraft: this.commentDraft
     })
     renderActivitySection(body, task, this.activityState)
-    renderSubtasksPanel(body, task, this.plugin, config.statuses, {
-      project,
-      onOpen: (sub) => {
-        const live = findTaskById(project, sub.id)
-        if (!live) {
-          new Notice('This subtask has not been saved yet — one moment.')
-          return
-        }
-        // Honors openTaskIn: in panel mode this panel becomes the subtask's page.
-        openTaskModal(this.plugin, project, {
-          task: live,
-          onSave: () => this.plugin.refreshProjectViews()
-        })
-      },
-      // Click-only edits never pass through the body 'input' delegation below.
-      onChange: () => this.scheduleSave(),
-      onRemove: (id) => this.removedSubtaskIds.push(id)
-    })
     // Linked cases: click-only mutations never fire the body 'input' delegation,
     // so onChange schedules the save explicitly — the panel mutates the clone's
     // links array, and diffTaskPatch picks the changed field up off it.

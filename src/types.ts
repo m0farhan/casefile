@@ -10,10 +10,11 @@ export type DueDateFilter = 'any' | 'overdue' | 'this-week' | 'this-month' | 'no
 export type TaskType = 'task' | 'milestone' | 'subtask'
 /** Lightweight planning buckets — the useful part of sprints without ceremony.
  * Triage order: Today first (SOC shift focus), then the horizon widens. */
-export type IssueBucket = 'none' | 'today' | 'this-week' | 'next' | 'later' | 'someday'
+export type IssueBucket = 'none' | 'today' | 'tomorrow' | 'this-week' | 'next' | 'later' | 'someday'
 
 export const BUCKETS: { id: IssueBucket; label: string }[] = [
   { id: 'today', label: 'Today' },
+  { id: 'tomorrow', label: 'Tomorrow' },
   { id: 'this-week', label: 'This week' },
   { id: 'next', label: 'Next' },
   { id: 'later', label: 'Later' },

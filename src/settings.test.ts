@@ -178,6 +178,7 @@ function makeTab(settings: PMSettings): { tab: PMSettingTab; store: ProjectStore
 
 type Private = {
   renderStatusList(el: HTMLElement): void
+  renderMembersList(el: HTMLElement): void
   renderAlertKindList(el: HTMLElement): void
   renderSlaRows(): void
   slaContainer: HTMLElement | null
@@ -302,6 +303,27 @@ describe('auto-archive days', () => {
     field.value = '30'
     input.on.change?.()
     expect(settings.autoArchiveDays).toBe(30)
+  })
+})
+
+describe('team members', () => {
+  it('moves a member up or down and saves, and does nothing past either end', () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS, globalTeamMembers: ['Ann', 'Bo', 'Cy'] }
+    const { tab } = makeTab(settings)
+    const move = (tip: string, row: number): void => {
+      buttons.length = 0
+      ;(tab as unknown as Private).renderMembersList(fakeEl())
+      buttons.filter((b) => b.tip === tip)[row].click()
+    }
+
+    move('Move up', 2)
+    expect(settings.globalTeamMembers).toEqual(['Ann', 'Cy', 'Bo'])
+    move('Move down', 0)
+    expect(settings.globalTeamMembers).toEqual(['Cy', 'Ann', 'Bo'])
+    move('Move up', 0)
+    move('Move down', 2)
+    expect(settings.globalTeamMembers).toEqual(['Cy', 'Ann', 'Bo'])
+    expect((tab as unknown as { plugin: Record<string, unknown> }).plugin.saveSettings).toHaveBeenCalledTimes(2)
   })
 })
 

@@ -258,6 +258,7 @@ export class AlertIntakeModal extends Modal {
       // priority is UI-retired but still written to frontmatter (round-trip default)
       priority: getDefaultPriorityId(config.priorities),
       severity: this.severitySelect.value,
+      assignees: this.plugin.settings.currentUser ? [this.plugin.settings.currentUser] : [],
       // The confirmed category, as an ordinary tag — the card glyph reads tags,
       // so nothing new is stored and the note stays plain markdown.
       tags: this.category ? [this.category] : [],

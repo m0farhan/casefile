@@ -45,6 +45,27 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.41.0] - 2026-09-27
+
+### Added
+
+- **Tomorrow bucket** between Today and This week, everywhere buckets appear (task form, backlog groups, lanes, the Move to bucket menu, `bucket:tomorrow` in search)
+- **New work is yours by default:** with Settings → Current user set, every new case, task or subtask (the task form, the column's + Create, alert intake, phishing analysis, a note turned into a case, the Subtasks panel) starts assigned to you. A template or an assignee swimlane that names its own people still wins, and the form shows it before you save
+- **Reorder team members** in Settings with up/down arrows; the assignee picker and the bulk Set assignee menu follow that order (team first, then anyone else already assigned, A to Z)
+- **Delete a comment:** each journal entry has a delete button (shown on hover, always on touch), behind a confirm
+- **Done looks done (Jira):** a card in a complete column keeps full strength instead of fading, leads with a green check, and has its issue key struck through
+
+### Changed
+
+- Subtasks sit straight under the description, in the task form and the side panel alike
+- The comment box grows as you type (up to 40% of the window, then scrolls); pictures, tables and code in a comment fit its width, the wide ones scroll inside it; on a narrow panel the Add button wraps under the box
+
+### Fixed
+
+- **Dragging a card into another column snapped it back**, most of all when dropped on an empty column's "No items" box. A drop zone only accepted `dragover`, never `dragenter`; on the move that brings the pointer onto a new element Chromium fires only `dragenter`, and uncancelled it leaves the drop refused. The board even causes that move itself (the first `dragover` hides "No items" and slides the card in under the pointer). Columns, the collapsed strip, settings list rows and Gantt label rows now accept the entry too
+- The progress slider in the task form: Obsidian 1.13 fills a `.slider` from `--slider-fill-ratio`, which only its own slider component sets, so a sliver of colour sat at the left whatever the value (and the macOS handle is a 30×18 white pill). The value now sets the ratio, and the handle is a small accent dot, all through Obsidian's own slider variables
+- Subtask connector lines on the board never showed: the card clipped everything outside its box twice over (`overflow: hidden` and the paint containment `content-visibility` brings). A nested card now draws its elbow to the parent, and a run of subtasks hangs off one continuous stem
+
 ## [2.40.0] - 2026-09-27
 
 ### Added — alert kinds you can see, record and edit

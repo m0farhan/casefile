@@ -261,16 +261,19 @@ export function filterArchived(tasks: Task[]): Task[] {
 
 /** Collect all unique assignees from a task tree */
 export function collectAllAssignees(tasks: Task[], extra?: string[]): string[] {
-  const set = new Set<string>()
-  if (extra) for (const m of extra) set.add(m)
+  // Team members lead in the order set in Settings (the list is reorderable);
+  // names found only on tasks follow, alphabetically.
+  const members = [...new Set(extra ?? [])].filter(Boolean)
+  const known = new Set(members)
+  const others = new Set<string>()
   const walk = (list: Task[]) => {
     for (const t of list) {
-      for (const a of t.assignees) set.add(a)
+      for (const a of t.assignees) if (a && !known.has(a)) others.add(a)
       walk(t.subtasks)
     }
   }
   walk(tasks)
-  return [...set].filter(Boolean).sort()
+  return [...members, ...[...others].sort()]
 }
 
 /** Collect all unique tags from a task tree */

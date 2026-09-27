@@ -106,6 +106,7 @@ export class KanbanColumn {
         parentTitle: card.parentTitle,
         parentKey: card.parentKey,
         nested: card.nested,
+        done: props.status.complete,
         issueTypes: card.issueTypes,
         boardType: card.boardType,
         epic: card.epic,
@@ -123,6 +124,7 @@ export class KanbanColumn {
       })
     }
 
+    acceptDrops(cardsEl)
     cardsEl.addEventListener('dragover', (e) => {
       e.preventDefault()
       cardsEl.addClass('pm-kanban-drop-target')
@@ -254,6 +256,7 @@ export class KanbanColumn {
     })
 
     // Dropping on the collapsed strip appends to the column (no visible cards to order against)
+    acceptDrops(col)
     col.addEventListener('dragover', (e) => {
       e.preventDefault()
       col.addClass('pm-kanban-drop-target')
@@ -292,6 +295,18 @@ function renderCount(parent: HTMLElement, visible: number, wipLimit: number | un
     el.addClass('pm-kanban-col-count--over')
     el.setAttr('title', `${wipCount} in this status across the board (all lanes, no filter) — WIP limit ${wipLimit}`)
   }
+}
+
+/**
+ * A drop zone cancels dragenter as well as dragover. On a move that changes
+ * the element under the pointer, Chromium fires only dragenter, and when that
+ * is not cancelled the drop operation is none: a release right then is
+ * refused (dragend, the card snaps back, no drop event). The board changes
+ * that element itself: the first dragover over "No items" hides it and slides
+ * the card in under the pointer, so the very next move is such an entry.
+ */
+function acceptDrops(zone: HTMLElement): void {
+  zone.addEventListener('dragenter', (e) => e.preventDefault())
 }
 
 /**

@@ -90,7 +90,9 @@ export class PMSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Current user')
-      .setDesc('Your assignee name — makes assignee:me work in the search bar.')
+      .setDesc(
+        'Your assignee name. New tasks are assigned to you automatically, and assignee:me works in the search bar.'
+      )
       .addText((text) =>
         text
           .setPlaceholder('Farhan')
@@ -236,7 +238,7 @@ export class PMSettingTab extends PluginSettingTab {
 
     containerEl.createEl('p', {
       cls: 'pm-settings-desc',
-      text: 'Global list of people available as assignees across all boards.'
+      text: 'Global list of people available as assignees across all boards. Use the arrows to reorder.'
     })
     // margin handled by .pm-settings-desc CSS class
 
@@ -726,6 +728,22 @@ export class PMSettingTab extends PluginSettingTab {
         this.plugin.settings.globalTeamMembers[i] = input.value
         void this.plugin.saveSettings()
       })
+      // The order here is the order the task dialog's assignee picker lists them in.
+      for (const [glyph, tip, to] of [
+        ['chevron-up', 'Move up', i - 1],
+        ['chevron-down', 'Move down', i + 1]
+      ] as const) {
+        const btn = new IconButton(row)
+          .setIcon(glyph)
+          .setTooltip(tip)
+          .onClick(() => {
+            if (!moveItem(members, i, to)) return
+            void this.plugin.saveSettings()
+            this.renderMembersList(container)
+          })
+        // Hidden, not left out, so the columns stay lined up at the ends.
+        if (to < 0 || to >= members.length) btn.el.setCssStyles({ visibility: 'hidden' })
+      }
       new IconButton(row)
         .setIcon('x')
         .setTooltip('Remove member')

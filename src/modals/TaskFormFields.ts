@@ -281,7 +281,16 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
         slider.step = '25'
         slider.value = String(task.progress ?? 0)
         const label = cell.createSpan({ cls: 'pm-prop-progress-label', text: `${Math.round(task.progress ?? 0)}%` })
-        slider.addEventListener('input', () => label.setText(`${slider.value}%`))
+        // Obsidian 1.13 paints a `.slider`'s fill from --slider-fill-ratio, which
+        // only its own SliderComponent sets; a bare input left it at 0, so a
+        // sliver of fill sat at the left whatever the value. Set it ourselves.
+        const paint = () => slider.setCssProps({ '--slider-fill-ratio': String(Number(slider.value) / 100) })
+        paint()
+        slider.setAttribute('aria-label', 'Progress')
+        slider.addEventListener('input', () => {
+          label.setText(`${slider.value}%`)
+          paint()
+        })
         slider.addEventListener('change', () => {
           task.progress = Number(slider.value)
           rerender()

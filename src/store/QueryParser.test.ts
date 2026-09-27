@@ -210,6 +210,7 @@ describe('field matchers', () => {
 
   it('bucket: equality including the literal none', () => {
     expect(matches('bucket:this-week', { bucket: 'this-week' })).toBe(true)
+    expect(matches('bucket:tomorrow', { bucket: 'tomorrow' })).toBe(true)
     expect(matches('bucket:none', { bucket: 'none' })).toBe(true)
     expect(matches('bucket:!none', { bucket: 'next' })).toBe(true)
     expect(matches('bucket:next', { bucket: 'none' })).toBe(false)

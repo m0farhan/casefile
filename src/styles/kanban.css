@@ -301,22 +301,56 @@
 }
 
 /* Subtask card nested directly under its parent: indent + elbow connector,
-   reaching up across the 8px card gap into the card above */
+   reaching up across the 8px card gap into the card above.
+   The connector sits outside the card's box, and a card clips everything
+   there twice over: `overflow: hidden` and the paint containment that
+   `content-visibility: auto` brings. So a nested card gives both up (there are
+   few of them; the off-screen skip still covers every top-level card), and the
+   two things that leaned on that clip keep the rounded corner on their own:
+   the progress hairline clips itself, the severity spine becomes an inset
+   shadow, which follows the inner radius exactly. */
 .pm-kanban-card--nested {
   margin-left: 20px;
   position: relative;
+  overflow: visible;
+  content-visibility: visible;
 }
 .pm-kanban-card--nested::before {
   content: '';
   position: absolute;
-  left: -12px;
-  top: -8px;
-  width: 10px;
-  height: calc(50% + 8px);
-  border-left: 1.5px solid var(--gs-hairline-strong);
-  border-bottom: 1.5px solid var(--gs-hairline-strong);
+  left: -13px;
+  top: -9px;
+  width: 12px;
+  height: calc(50% + 9px);
+  border-left: 1.5px solid var(--gs-hairline-3);
+  border-bottom: 1.5px solid var(--gs-hairline-3);
   border-bottom-left-radius: 6px;
   pointer-events: none;
+}
+/* A sibling follows: the line runs on past this card's elbow down to the next
+   one, so a run of subtasks hangs off one continuous stem (a T, not an L). */
+.pm-kanban-card--nested:has(+ .pm-kanban-card--nested)::before {
+  height: auto;
+  bottom: -1px;
+  border-bottom: 0;
+  border-bottom-left-radius: 0;
+  background: linear-gradient(var(--gs-hairline-3), var(--gs-hairline-3)) 0 calc(50% + 4px) / 100% 1.5px no-repeat;
+}
+.pm-kanban-card--nested > .pm-kanban-progress,
+.pm-kanban-card--nested > .pm-kanban-card-progress {
+  border-radius: 0 0 calc(var(--radius-m) - 1px) calc(var(--radius-m) - 1px);
+  overflow: hidden;
+}
+.pm-kanban-card--nested.pm-kanban-card--sev {
+  box-shadow: inset 3px 0 0 var(--pm-sev);
+}
+.pm-kanban-card--nested.pm-kanban-card--sev:focus-visible {
+  box-shadow:
+    inset 3px 0 0 var(--pm-sev),
+    var(--gs-focus-ring);
+}
+.pm-kanban-card--nested.pm-kanban-card--sev::after {
+  display: none;
 }
 
 /* ─ Casefile board upgrades ─ */
@@ -413,16 +447,27 @@
 }
 
 /* Archive column: cards render normally but muted */
-.pm-kanban-col[data-status='__archive__'] .pm-kanban-card,
-.pm-kanban-col--complete .pm-kanban-card {
+.pm-kanban-col[data-status='__archive__'] .pm-kanban-card {
   opacity: 0.7;
   filter: saturate(0.5);
 }
 
-/* Done: settled work reads as crossed off — the key, not the title (Jira). */
-.pm-kanban-col--complete .pm-kanban-card .pm-key-chip {
+/* Done (Jira): full strength, not faded — the column already says it is
+   finished. Settled work reads as crossed off: the key, never the title, with
+   a green check leading the row. */
+.pm-kanban-card--done .pm-key-chip {
   text-decoration: line-through;
-  text-decoration-color: var(--gs-ink-subtle);
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: var(--gs-ink-muted);
+}
+.pm-kanban-card-done-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--gs-green);
+}
+.pm-kanban-card-done-mark svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* Adjustable in-card progress: the same thin track, as a live range input.

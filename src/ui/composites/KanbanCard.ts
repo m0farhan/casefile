@@ -33,6 +33,8 @@ export interface KanbanCardProps {
   parentTitle?: string
   parentKey?: string
   nested?: boolean
+  /** The card sits in a complete status column: settled work reads as crossed off (Jira). */
+  done?: boolean
   /** Resolved issue-type catalog (configFor(project).issueTypes). Defaults apply when absent. */
   issueTypes?: IssueTypeConfig[]
   /** Epic ancestor context. TODO(board agent): the card has no project access — fill from
@@ -134,6 +136,15 @@ export class KanbanCard {
         }
       }
     )
+    // Done, Jira-style: the card keeps full strength, a green check leads the
+    // row and the key is struck through. The check carries it on a board with
+    // issue keys off, where there is no key to strike.
+    if (props.done) {
+      card.addClass('pm-kanban-card--done')
+      const mark = chips.createSpan({ cls: 'pm-kanban-card-done-mark' })
+      setIcon(mark, 'circle-check')
+      setTooltip(mark, 'Done')
+    }
     if (task.key) renderKeyChip(chips, task.key, { plain: true })
     // Severity shows on every board — it is the one urgency dial, and a plain
     // board needs it as much as a case queue. A plain board runs no clocks and

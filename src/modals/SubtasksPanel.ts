@@ -138,7 +138,8 @@ export function renderSubtasksPanel(
     if (e.key !== 'Enter') return
     const title = addInput.value.trim()
     if (!title) return
-    task.subtasks.push(makeTask({ title, type: 'subtask' }))
+    const me = plugin.settings.currentUser
+    task.subtasks.push(makeTask({ title, type: 'subtask', assignees: me ? [me] : [] }))
     addInput.value = ''
     renderSubtasks()
     renderCount()

@@ -365,34 +365,85 @@
   border-radius: var(--radius-s);
   background: var(--gs-surface-1);
   padding: 6px 10px;
+  /* Never wider than the modal or panel it sits in, whatever it holds. */
+  min-width: 0;
+  max-width: 100%;
+}
+.pm-comment-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
 }
 .pm-comment-at {
+  flex: 1;
   font-family: var(--gs-font-mono);
   font-size: 11px;
   color: var(--gs-ink-subtle);
-  margin-bottom: 2px;
+}
+/* Delete: quiet until the comment is hovered or the button has focus; always
+   there on a touch screen, which has no hover. */
+button.pm-comment-delete {
+  padding: 2px;
+  height: auto;
+  color: var(--gs-ink-subtle);
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+button.pm-comment-delete svg {
+  width: 14px;
+  height: 14px;
+}
+.pm-comment:hover button.pm-comment-delete,
+button.pm-comment-delete:focus-visible {
+  opacity: 1;
+}
+button.pm-comment-delete:hover {
+  color: var(--gs-red);
+}
+@media (hover: none) {
+  button.pm-comment-delete {
+    opacity: 1;
+  }
 }
 .pm-comment-body {
   font-size: 13px;
   /* Long unbroken tokens (VirusTotal links, hashes) must wrap inside the box */
   overflow-wrap: anywhere;
 }
+/* Pasted screenshots, tables and code fit the width; the wide ones scroll
+   inside the comment instead of pushing the whole editor sideways. */
+.pm-comment-body img {
+  max-width: 100%;
+  height: auto;
+}
+.pm-comment-body pre,
+.pm-comment-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
 .pm-comment-body p {
   margin: 0.2em 0;
 }
 .pm-comment-composer {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: flex-end;
 }
+/* Takes the row; on a narrow panel or phone the Add button wraps under it. */
 .pm-comment-input {
-  flex: 1;
+  flex: 1 1 220px;
+  min-width: 0;
+  max-height: 40vh;
   background: var(--gs-surface-1);
   border: 1px solid var(--gs-hairline);
   border-radius: var(--radius-s);
   font-size: 13px;
   padding: 6px 8px;
   resize: vertical;
+  overflow-y: auto;
 }
 .pm-comment-input:focus {
   box-shadow: var(--gs-focus-ring);

@@ -242,6 +242,9 @@ export class KanbanView implements SubView {
       title,
       status,
       priority: getDefaultPriorityId(this.config.priorities),
+      // New work is yours by default (Settings → Current user); a template or
+      // lane that names its own assignees still wins, being spread after.
+      assignees: this.plugin.settings.currentUser ? [this.plugin.settings.currentUser] : [],
       ...lanePatch
     })
     await this.plugin.store.insertTask(this.project, task)
