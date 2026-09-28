@@ -45,6 +45,12 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [Unreleased]
+
+### Fixed
+
+- **Nothing in the phishing analysis could be selected or copied** (headers, URLs, hashes, the body). Obsidian turns text selection off app-wide and the report never turned it back on. It does now; the hash labels stay out of a copy, as intended, so copying a hash row copies the hash alone
+
 ## [2.42.0] - 2026-09-27
 
 ### Added

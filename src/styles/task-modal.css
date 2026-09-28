@@ -636,6 +636,11 @@ button.pm-verdict-cancel:hover {
   margin-top: 8px;
   padding-right: 4px;
   overflow-wrap: break-word;
+  /* The report is there to be copied from: every value, header, URL and hash.
+     Obsidian turns selection off on body app-wide, so it has to be turned
+     back on here (labels meant to stay out of a copy set none themselves). */
+  user-select: text;
+  -webkit-user-select: text;
 }
 /* The same voice as every other section heading in this plugin — small,
    uppercase, muted. They were bright indigo with a rule under each, which made
