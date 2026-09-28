@@ -14,7 +14,9 @@ import {
 import { Component, MarkdownRenderer, Menu, Notice, type App } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
+import { copyText, defangCopyMenu } from '../ui/defangMenu'
 import { IconButton } from '../ui/primitives/IconButton'
+import { defangText, refangSelection } from '../soc/toolbox'
 import { safeAsync } from '../utils'
 import { attachmentFileName, attachmentLink } from './AttachmentsSection'
 import { toggleRenderedCheckbox } from './checkboxToggle'
@@ -298,6 +300,44 @@ export function renderDescriptionEditor(
     editBtn.el.classList.remove('pm-hidden')
   }
 
+  // Right-click on a selection while editing: defang or refang it in place
+  // (defanging is reversible, unlike a decode, so it replaces rather than
+  // inserting beside), or copy it defanged for a ticket or a chat.
+  const defangMenu = (e: MouseEvent, v: EditorView): boolean => {
+    const { from, to } = v.state.selection.main
+    if (from === to) return false
+    const text = v.state.sliceDoc(from, to)
+    e.preventDefault()
+    const replace = (next: string, nothing: string) => {
+      if (next === text) {
+        new Notice(nothing)
+        return
+      }
+      v.dispatch({ changes: { from, to, insert: next }, selection: { anchor: from, head: from + next.length } })
+    }
+    const menu = new Menu()
+    menu.addItem((item) =>
+      item
+        .setTitle('Defang selection')
+        .setIcon('shield')
+        .onClick(() => replace(defangText(text), 'Nothing in the selection to defang.'))
+    )
+    menu.addItem((item) =>
+      item
+        .setTitle('Refang selection')
+        .setIcon('shield-off')
+        .onClick(() => replace(refangSelection(text), 'Nothing in the selection to refang.'))
+    )
+    menu.addItem((item) =>
+      item
+        .setTitle('Copy defanged')
+        .setIcon('copy')
+        .onClick(() => copyText(defangText(text), 'Copied, defanged'))
+    )
+    menu.showAtMouseEvent(e)
+    return true
+  }
+
   const view = new EditorView({
     parent: editorWrap,
     doc: task.description,
@@ -342,6 +382,7 @@ export function renderDescriptionEditor(
         noteSuggest.onDocChanged(update.view)
       }),
       EditorView.domEventHandlers({
+        contextmenu: defangMenu,
         paste: (e) => {
           const items = e.clipboardData?.items
           if (!items) return false
@@ -562,6 +603,8 @@ export function renderDescriptionEditor(
   // display itself (a dropped .html or .lnk) from reaching the system's
   // default app; it copies the path instead (a124).
   neutralizeExternalLinks(descPreview, app, sourcePath)
+  defangCopyMenu(descPreview)
+
   descPreview.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
     if (target.instanceOf(HTMLInputElement) && target.type === 'checkbox') return

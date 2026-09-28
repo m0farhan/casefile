@@ -47,7 +47,13 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 
 ## [Unreleased]
 
+### Added
+
+- **Defang from the right-click menu.** In a case's description, select text and right-click: Defang selection, Refang selection, or Copy defanged. In the description preview, the comments and the phishing report, right-click a selection for Copy or Copy defanged. It defangs a labelled line (`Source Address : 172.16.17.56`) and, inside prose, the tokens that can be nothing else: IP addresses, URLs with a scheme and email addresses. A dotted word in a sentence (`e.g.`, `report.pdf`) is left as written
+
 ### Fixed
+
+- The toolbox's Defang bracketed an already-defanged value again (`172[[.]]16…`); a second defang now changes nothing
 
 - **Nothing in the phishing analysis could be selected or copied** (headers, URLs, hashes, the body). Obsidian turns text selection off app-wide and the report never turned it back on. It does now; the hash labels stay out of a copy, as intended, so copying a hash row copies the hash alone
 

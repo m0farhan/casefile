@@ -4,6 +4,7 @@ import {
   decodeHex,
   decodePercentEscapes,
   defangSelection,
+  defangText,
   derivedCallout,
   readTimestamp,
   refangSelection,
@@ -260,5 +261,28 @@ describe('a $ in a value does not corrupt it', () => {
   it('round-trips it through refang', () => {
     const url = 'http://evil.test/a?x=$&y=$1'
     expect(refangSelection(defangSelection(url))).toBe(url)
+  })
+})
+
+describe('defangText (right-click Defang)', () => {
+  it('defangs a selected IP, a labelled line, and IPs, URLs and emails inside prose', () => {
+    expect(defangText('172.16.17.56')).toBe('172[.]16[.]17[.]56')
+    expect(defangText('Source Address : 172.16.17.56')).toBe('Source Address : 172[.]16[.]17[.]56')
+    expect(defangText('User Sofia connected to 172.16.17.56 (and 8.8.8.8), see https://evil.example.com/a.')).toBe(
+      'User Sofia connected to 172[.]16[.]17[.]56 (and 8[.]8[.]8[.]8), see hxxps://evil[.]example[.]com/a.'
+    )
+    expect(defangText('Reported by sofia@corp.example')).not.toContain('sofia@corp.example')
+  })
+
+  it('leaves dotted words in prose and anything already defanged alone', () => {
+    expect(defangText('e.g. see report.pdf and ORDER SHEET & SPEC.xlsm')).toBe(
+      'e.g. see report.pdf and ORDER SHEET & SPEC.xlsm'
+    )
+    expect(defangText('172[.]16[.]17[.]56 and hxxps://evil[.]example[.]com')).toBe(
+      '172[.]16[.]17[.]56 and hxxps://evil[.]example[.]com'
+    )
+    expect(refangSelection(defangText('connected to 172.16.17.56'))).toBe('connected to 172.16.17.56')
+    // The toolbox's line defang too: a second Defang changes nothing.
+    expect(defangSelection(defangSelection('Source : 172.16.17.56'))).toBe('Source : 172[.]16[.]17[.]56')
   })
 })

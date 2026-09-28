@@ -252,7 +252,8 @@ function defangLines(text: string): { out: string; changed: string[] } {
       const prefix = LINE_PREFIX.exec(line)?.[0] ?? ''
       const rest = line.slice(prefix.length)
       const value = rest.trimEnd()
-      if (!value || !carriesIndicator(value)) return line
+      // Already defanged: again would bracket the brackets (172[[.]]16).
+      if (!value || refangIoc(value) !== value || !carriesIndicator(value)) return line
       const shown = defangIoc(value, detectIocType(value))
       if (shown === value) return line
       changed.push(value)
@@ -270,6 +271,23 @@ function defangLines(text: string): { out: string; changed: string[] } {
  */
 export function defangSelection(text: string): string {
   return defangLines(text).out
+}
+
+/**
+ * Defang for pasting outside the vault (the right-click Defang): every
+ * indicator line as defangSelection does it, and inside prose the tokens that
+ * can be nothing else — an IP address, a URL with a scheme, an email address.
+ * A bare word with a dot in prose ('e.g.', 'report.pdf') is left as written,
+ * and so is anything already defanged.
+ */
+export function defangText(text: string): string {
+  return defangSelection(text).replace(/\S+/g, (token) => {
+    const [, lead, core, trail] = /^([("'<[]*)(.*?)([)"'>\].,;:!?]*)$/.exec(token) ?? ['', '', token, '']
+    if (!core || refangIoc(core) !== core || !hasIocShape(core)) return token
+    const type = detectIocType(core)
+    if (type !== 'ip' && type !== 'url' && type !== 'email') return token
+    return lead + defangIoc(core, type) + trail
+  })
 }
 
 /**

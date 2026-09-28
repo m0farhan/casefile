@@ -1,6 +1,7 @@
 import { neutralizeExternalLinks, scrubRemoteEmbeds } from './safeRender'
 import { MarkdownRenderer, Component, setIcon } from 'obsidian'
 import { confirmDialog } from '../ui/ModalFactory'
+import { defangCopyMenu } from '../ui/defangMenu'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 
@@ -44,6 +45,7 @@ export function renderCommentsSection(
   const sourcePath = task.filePath || project.filePath || ''
 
   const list = section.createDiv('pm-comments-list')
+  defangCopyMenu(list)
   for (const c of task.comments ?? []) {
     const entry = list.createDiv('pm-comment')
     const head = entry.createDiv('pm-comment-head')

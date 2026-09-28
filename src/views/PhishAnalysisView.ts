@@ -18,6 +18,7 @@ import {
   relationshipType,
   showsDerivedDomain
 } from '../soc/phish'
+import { defangCopyMenu } from '../ui/defangMenu'
 import { defangIoc, visibleName } from '../soc/ioc'
 import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
 import { makeTask } from '../types'
@@ -129,6 +130,7 @@ export class PhishAnalysisView extends ItemView {
     // up through the thing you were trying to leave.
     this.tabStrip = contentEl.createDiv('pm-headers-tabs')
     const out = contentEl.createDiv('pm-headers-out')
+    defangCopyMenu(out)
     const row = contentEl.createDiv('pm-modal-btn-row')
 
     const resetBtn = new ButtonComponent(row).setButtonText('Reset').setDisabled(true)
