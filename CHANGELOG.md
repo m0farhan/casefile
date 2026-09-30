@@ -45,6 +45,12 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.42.2] - 2026-09-30
+
+### Fixed
+
+- Passes the Obsidian Community directory's automated review again. Casefile left the directory the evening 2.42.0 shipped: run under the current official rules (eslint-plugin-obsidianmd 0.4.2), three lines were errors — a lint suppression without a reason (the attachment name cleaner), and two suppressions of `obsidianmd/no-global-this`, which may no longer be disabled at all (the Office reader's feature check). None needs a suppression now: the name cleaner matches control characters with `\p{Cc}`, and the feature check reads `typeof DecompressionStream`. Zero errors under 0.4.2; the build is byte-identical to the released files
+
 ## [2.42.1] - 2026-09-30
 
 ### Added

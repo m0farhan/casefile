@@ -960,8 +960,9 @@ async function readRelationships(
   // admits it never reached. An empty target list is the honest report, and
   // every reason the listing could be short already has its own note above.
   if (rels.length === 0) return
-  // eslint-disable-next-line obsidianmd/no-global-this -- feature detection, not a window lookup: this module is pure and must not reach for a window that may not exist (tests run in node)
-  if (typeof globalThis.DecompressionStream !== 'function') {
+  // Feature detection through the bare name: typeof never throws on a missing
+  // global, and this module is pure, so it must not reach for a window.
+  if (typeof DecompressionStream !== 'function') {
     facts.notes.push(
       'This device cannot inflate compressed data, so no relationship targets were read. Treat the external links in this container as unknown, not as absent.'
     )
@@ -1278,8 +1279,8 @@ async function readMedia(
   // still read.
   const office = records.some((r) => CONTENT_TYPES.test(r.name))
   const wanted = records.filter((r) => !r.name.endsWith('/') && (MEDIA.test(r.name) || !office || !MARKUP.test(r.name)))
-  // eslint-disable-next-line obsidianmd/no-global-this -- feature detection, not a window lookup (see readRelationships)
-  const canInflate = typeof globalThis.DecompressionStream === 'function'
+  // Feature detection through the bare name (see readRelationships).
+  const canInflate = typeof DecompressionStream === 'function'
   // Which limit binds is settled here and holds for the whole container: both
   // fall by the same bytes, so the smaller one at the start stays the smaller.
   const shared = media.left < MAX_MEDIA_TOTAL

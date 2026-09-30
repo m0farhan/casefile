@@ -17,8 +17,8 @@ function formatSize(bytes: number): string {
  * outside the vault have no business in one.
  */
 export function safeAttachmentName(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  const clean = name.replace(/[\u0000-\u001f\u007f\\/:*?"<>|#^[\]]+/g, '-').trim()
+  // \p{Cc}: every control character (C0, DEL and C1) without writing one into the pattern.
+  const clean = name.replace(/[\p{Cc}\\/:*?"<>|#^[\]]+/gu, '-').trim()
   return clean.replace(/^\.+/, '') || 'attachment'
 }
 
