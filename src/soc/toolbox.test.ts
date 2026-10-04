@@ -265,6 +265,15 @@ describe('a $ in a value does not corrupt it', () => {
 })
 
 describe('defangText (right-click Defang)', () => {
+  it('leaves versions and OIDs alone, and never defangs an already-defanged token twice', () => {
+    for (const prose of ['1.3.6.1.5.5.7.3.1', '1.2.3.4.5', 'Firefox/115.0.2.1', 'Chrome/120.0.6099.109']) {
+      expect(defangText(prose)).toBe(prose)
+    }
+    expect(defangText('src="10.0.0.1"')).toBe('src="10[.]0[.]0[.]1"')
+    const once = defangText("https://x.test/?r='javascript://x'")
+    expect(defangText(once)).toBe(once)
+  })
+
   it('defangs a selected IP, a labelled line, and IPs, URLs and emails inside prose', () => {
     expect(defangText('172.16.17.56')).toBe('172[.]16[.]17[.]56')
     expect(defangText('Source Address : 172.16.17.56')).toBe('Source Address : 172[.]16[.]17[.]56')
@@ -284,5 +293,43 @@ describe('defangText (right-click Defang)', () => {
     expect(refangSelection(defangText('connected to 172.16.17.56'))).toBe('connected to 172.16.17.56')
     // The toolbox's line defang too: a second Defang changes nothing.
     expect(defangSelection(defangSelection('Source : 172.16.17.56'))).toBe('Source : 172[.]16[.]17[.]56')
+  })
+
+  it('defangs an indicator in inline code, smart quotes, braces or emphasis, and refangs it back', () => {
+    expect(defangText('C2 at `https://evil.test/gate.php` and `203.0.113.9`, sender `phisher@evil.test`')).toBe(
+      'C2 at `hxxps://evil[.]test/gate[.]php` and `203[.]0[.]113[.]9`, sender `phisher[at]evil[.]test`'
+    )
+    for (const s of [
+      '“https://evil.test/a”',
+      '‘https://evil.test/a’.',
+      '{https://evil.test/a}',
+      '*https://evil.test/a*'
+    ]) {
+      expect(defangText(s)).not.toContain('https://evil.test')
+      expect(refangSelection(defangText(s))).toBe(s)
+    }
+  })
+
+  it('defangs an indicator inside a longer token: an attribute, a markdown link, mailto', () => {
+    for (const s of [
+      '<a href="https://evil.test/login">Click</a>',
+      '[x](https://evil.test/login)',
+      '<img src=http://198.51.100.7/p.gif width=1>',
+      "style='background:url(https://evil.test/a.png)'",
+      '<a href="mailto:boss@evil.test">'
+    ]) {
+      const out = defangText(s)
+      expect(out).not.toMatch(/https?:\/\/|evil\.test|198\.51|boss@/)
+      expect(refangSelection(out)).toBe(s)
+    }
+    // Already defanged inside a token stays as written.
+    expect(defangText('href="hxxps://evil[.]test/x"')).toBe('href="hxxps://evil[.]test/x"')
+  })
+
+  it('reads a long run of wrapper or word characters in one pass', () => {
+    const start = performance.now()
+    defangText(`${'.'.repeat(100_000)}a`)
+    defangText(`x${'a'.repeat(100_000)}=`)
+    expect(performance.now() - start).toBeLessThan(1500)
   })
 })

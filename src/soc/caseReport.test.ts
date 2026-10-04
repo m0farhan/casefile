@@ -304,6 +304,29 @@ describe('sender-controlled titles', () => {
   })
 })
 
+describe('buildHandover', () => {
+  it('says which target a breached incident breached', () => {
+    const base = { issueType: 'incident' as const, severity: 'sev1', detectedAt: '2026-07-30T10:30:00.000Z' }
+    // Policy 60/240. C-1 has no response and is 30 minutes past its response
+    // target; C-2 was answered and is 30 minutes past its resolution target.
+    const unanswered = makeTask({ ...base, key: 'C-1', title: 'Unanswered' })
+    const answered = makeTask({
+      ...base,
+      key: 'C-2',
+      title: 'Answered',
+      detectedAt: '2026-07-30T07:30:00.000Z',
+      respondedAt: '2026-07-30T08:00:00.000Z'
+    })
+    const project = makeProject('Cases', 'Cases/Cases.md')
+    project.tasks = [unanswered, answered]
+    const md = buildHandover([project], { ...DEFAULT_SETTINGS, slaPolicies: POLICIES }, '2026-07-30T12:00:00.000Z')
+    expect(md).toContain('C-1 Unanswered — To Do · response target breached +30m')
+    expect(md).toContain('C-2 Answered — To Do · resolution target breached +30m')
+    expect(md).toContain('- C-1 Unanswered — breached +30m (response)')
+    expect(md).toContain('- C-2 Answered — breached +30m (resolution)')
+  })
+})
+
 describe('writeCaseReportNote', () => {
   it('creates the report beside the case file and suffixes instead of overwriting', async () => {
     const vault = new FakeVault()

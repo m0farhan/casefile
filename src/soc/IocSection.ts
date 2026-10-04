@@ -13,6 +13,7 @@ import {
 } from './ioc'
 import { IconButton } from '../ui/primitives/IconButton'
 import { safeAsync } from '../utils'
+import { GAP_SHOWN, noteScanText } from './phish'
 import { Notice, requestUrl } from 'obsidian'
 import {
   PROVIDER_LABELS,
@@ -86,23 +87,33 @@ export function renderIocSection(
   const progressEl = header.createSpan({ cls: 'pm-ioc-checkall-progress' })
   const checkAllBtn = new IconButton(header).setIcon('radar').setTooltip('Check all indicators')
   // Auto-populate from the note: scan description + comments for indicators
-  // (defanged or real), skip ones already recorded, append the rest.
+  // (defanged or real), skip ones already recorded, append the rest. A case
+  // opened from a phishing analysis is read as the analysis read it: the words
+  // beside each place its PDF reader skipped or cut, quoted with GAP_SHOWN,
+  // are left out (`co[…]l-split.com/owa` names neither host), and so are the
+  // blocks it took no indicators from, and all but the addresses in a script.
   const scanBtn = new IconButton(header).setIcon('text-search').setTooltip('Extract indicators from this note')
   scanBtn.onClick(() => {
-    const prose = [task.description, ...(task.comments ?? []).map((c) => c.text)].join('\n')
+    // Each part on its own, so a fence left open in the description cannot hide the comments.
+    const parts = [task.description, ...(task.comments ?? []).map((c) => c.text)].map((p) => noteScanText(p))
+    const text = parts.map((p) => p.text).join('\n')
+    const left = parts.reduce((n, p) => n + p.left, 0)
     const found = extractIocsFromText(
-      prose,
+      text,
       task.iocs.map((i) => i.value)
     )
+    const gaps = left ? `; ${left} word(s) beside ${GAP_SHOWN} left out` : ''
     if (!found.length) {
-      new Notice('No new indicators found in the note')
+      new Notice(`No new indicators found in the note${gaps}`)
       return
     }
     task.iocs.push(...found)
     renderRows()
     opts.onChange()
     const assets = found.filter((i) => assetRule(i.value, opts.ownedAssets())).length
-    new Notice(`Added ${found.length} indicator(s) from the note${assets ? ` · ${assets} marked as your assets` : ''}`)
+    new Notice(
+      `Added ${found.length} indicator(s) from the note${assets ? ` · ${assets} marked as your assets` : ''}${gaps}`
+    )
   })
   const copyAllBtn = new IconButton(header).setIcon('clipboard-copy').setTooltip('Copy defanged block')
   copyAllBtn.onClick(

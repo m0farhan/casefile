@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { zip } from '../../test/zip'
+import { type Obj, buildPdf, objStm, onePage } from '../../test/pdf'
 import { analysePhishing, formatPhishReport, linksSection } from '../soc/phish'
 import { PhishAnalysisView } from './PhishAnalysisView'
-import { openProjectPicker } from '../ui/ModalFactory'
+import { openProjectPicker, openTaskModal } from '../ui/ModalFactory'
 import { TITLE_REFUSAL } from '../modals/TaskModal'
 
 // -- Minimal fake DOM -------------------------------------------------------
@@ -181,6 +182,7 @@ vi.stubGlobal('window', {
 
 const insertTask =
   vi.fn<(project: unknown, task: { title: string; description: string; iocs: { value: string }[] }) => Promise<void>>()
+const refreshProjectViews = vi.fn<() => void>()
 
 const vault = {
   files: [] as unknown[],
@@ -193,6 +195,7 @@ async function openView(
 ): Promise<{ view: PhishAnalysisView; root: FakeEl; titleEl: FakeEl }> {
   const leaf = { app: { vault }, updateHeader: (): void => {} }
   const plugin = {
+    refreshProjectViews,
     settings: { ownedAssets: [], phishBrands, projectsFolder: 'Boards' },
     store: {
       loadAllProjects: async (): Promise<unknown[]> => [{ id: 'board' }],
@@ -221,8 +224,11 @@ const input = (root: FakeEl): FakeEl => root.all().find((el) => el.tagName === '
 
 /** Waits for the analysis of the message with this subject to be on screen. */
 async function showing(view: PhishAnalysisView, subject: string): Promise<void> {
-  await vi.waitFor(() =>
-    expect(report(view)?.headers.identities.find((i) => i.label === 'Subject')?.value).toBe(subject)
+  // A ceiling far above any runner's time: the PDF gap test's analysis alone
+  // takes up to half a second on a loaded machine. Returns as soon as it lands.
+  await vi.waitFor(
+    () => expect(report(view)?.headers.identities.find((i) => i.label === 'Subject')?.value).toBe(subject),
+    { timeout: 10_000 }
   )
 }
 
@@ -252,7 +258,9 @@ beforeEach(() => {
   timer.pending = null
   focus.active = null
   insertTask.mockReset()
+  refreshProjectViews.mockReset()
   vi.mocked(openProjectPicker).mockReset()
+  vi.mocked(openTaskModal).mockReset()
   h.notices.length = 0
   h.pickers.length = 0
   vault.files = []
@@ -358,6 +366,21 @@ describe('PhishAnalysisView: the old report cannot be acted on once the message 
     pick({ id: 'board' } as never)
     await vi.waitFor(() => expect(insertTask).toHaveBeenCalledTimes(1))
     expect(insertTask.mock.calls[0][1].title).toBe('Invoice AAA')
+  })
+})
+
+describe('PhishAnalysisView: a created case shows on the open board', () => {
+  it('redraws the boards once the case is filed, and again when its dialog saves', async () => {
+    const { view, root } = await openView()
+    view.analyse(mail('Invoice AAA', 'Pay at https://alpha-evil.test/a'), 'a.eml (1 bytes)')
+    await showing(view, 'Invoice AAA')
+    button(root, 'Create case').fire('click')
+    await vi.waitFor(() => expect(openProjectPicker).toHaveBeenCalled())
+    vi.mocked(openProjectPicker).mock.calls[0][2]({ id: 'board' } as never)
+    await vi.waitFor(() => expect(openTaskModal).toHaveBeenCalled())
+    expect(refreshProjectViews).toHaveBeenCalledTimes(1)
+    void vi.mocked(openTaskModal).mock.calls[0][2].onSave({} as never)
+    expect(refreshProjectViews).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -793,6 +816,306 @@ describe('PhishAnalysisView: the attachment cards say what the report says', () 
       .find((l) => l.startsWith('### Inline images'))
     expect(line).toBe('### Inline images — marked inline or given a Content-ID by their own headers')
     expect(headings(root)).toContain(line?.slice(4))
+  })
+})
+
+describe('PhishAnalysisView: what the PDF object read found', () => {
+  const HELVETICA = '<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >>'
+  const LURE_TEXT = 'Your invoice is ready: https://pay-lure.test/inv'
+  const LURE = buildPdf(
+    [
+      objStm(10, [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+        {
+          num: 3,
+          body: '<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R /Annots [6 0 R] >>'
+        },
+        { num: 5, body: '<< /S /JavaScript /JS (app.launchURL\\("https://js-lure.test/a"\\);) >>' },
+        { num: 6, body: '<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://objstm-lure.test/login) >> >>' },
+        { num: 7, body: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>' }
+      ]),
+      { num: 4, body: '<< >>', stream: `BT /F1 12 Tf 72 700 Td (${LURE_TEXT}) Tj ET`, flate: true }
+    ],
+    { xrefStream: true }
+  )
+
+  /** Opens the analyser on a mail carrying this PDF, at the Attachments tab. */
+  async function attachmentsOf(subject: string, name: string, bytes: Uint8Array): Promise<FakeEl> {
+    let binary = ''
+    for (const b of bytes) binary += String.fromCharCode(b)
+    const { view, root } = await openView()
+    view.analyse(
+      `From: a@example.test\nSubject: ${subject}\nMIME-Version: 1.0\nContent-Type: multipart/mixed; boundary="B"\n\n--B\nContent-Type: application/pdf\nContent-Disposition: attachment; filename="${name}"\nContent-Transfer-Encoding: base64\n\n${btoa(binary)}\n--B--\n`,
+      'p.eml (1 bytes)'
+    )
+    await showing(view, subject)
+    button(root, 'Attachments').fire('click')
+    return root
+  }
+
+  const pageNotes = (root: FakeEl): string[] =>
+    root
+      .all()
+      .map((el) => el.textContent)
+      .filter((t) => /^Page \d+ · /.test(t))
+
+  it('draws the page text, the link, the action and the script', async () => {
+    const root = await attachmentsOf('Lure', 'lure.pdf', LURE)
+    const texts = drawn(root)
+    expect(
+      texts.some((t) =>
+        t.startsWith(
+          "Page text, decoded here from the file's own fonts and never rendered: of 1 page(s) read whole, 1 drew text this reader could decode"
+        )
+      )
+    ).toBe(true)
+    expect(texts).toContain(`Page 1 · ${LURE_TEXT.length} characters`)
+    expect(root.all().some((el) => el.tagName === 'pre' && el.textContent === LURE_TEXT)).toBe(true)
+    expect(texts).toContain(
+      'link (/URI) hxxps://objstm-lure[.]test/login — object 6, packed in object stream 10, page 1'
+    )
+    expect(texts).toContain('/JavaScript when the document opens (/OpenAction) — object 5, packed in object stream 10')
+    const script = root
+      .all()
+      .find((el) => el.tagName === 'details' && el.children[0]?.textContent.startsWith('JavaScript at object 5'))
+    expect(script?.children[0].textContent).toBe(
+      'JavaScript at object 5, packed in object stream 10 — 40 characters, quoted as text and never run; bare domain names in it are not listed as indicators'
+    )
+    // Built when opened, as quoted text.
+    script?.fire('toggle')
+    expect(script?.children[1]?.textContent).toBe('app.launchURL("https://js-lure.test/a");')
+  })
+
+  it('draws three pages up front and the rest when their disclosure opens', async () => {
+    const objects: Obj[] = [
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R 11 0 R] /Count 5 >>' }
+    ]
+    for (let i = 0; i < 5; i++) {
+      objects.push(
+        {
+          num: 3 + 2 * i,
+          body: `<< /Type /Page /Parent 2 0 R /Resources << /Font ${HELVETICA} >> /Contents ${4 + 2 * i} 0 R >>`
+        },
+        { num: 4 + 2 * i, body: '<< >>', stream: `BT /F1 12 Tf 72 700 Td (Page number ${i + 1}) Tj ET`, flate: true }
+      )
+    }
+    const root = await attachmentsOf('Pages', 'long.pdf', buildPdf(objects))
+    expect(pageNotes(root)).toEqual(['Page 1 · 13 characters', 'Page 2 · 13 characters', 'Page 3 · 13 characters'])
+    const more = root.all().find((el) => el.tagName === 'details' && el.children[0]?.textContent === '2 more')
+    more?.fire('toggle')
+    expect(pageNotes(root)).toHaveLength(5)
+  })
+
+  it('says a page in a font it could not decode was not decoded, and draws no box of U+FFFD', async () => {
+    const bytes = onePage('BT /F1 12 Tf 72 700 Td <000100020003> Tj ET', {
+      fonts:
+        '<< /F1 << /Type /Font /Subtype /Type0 /BaseFont /Mystery /Encoding /Identity-H /DescendantFonts [5 0 R] >> >>',
+      extra: [
+        {
+          num: 5,
+          body: '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mystery /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>'
+        }
+      ]
+    })
+    const root = await attachmentsOf('Glyphs', 'glyphs.pdf', bytes)
+    expect(pageNotes(root)).toEqual(['Page 1 · 3 characters · 3 not decoded (shown as �)'])
+    expect(root.all().some((el) => el.tagName === 'pre' && el.textContent.includes('\uFFFD'))).toBe(false)
+  })
+
+  it('shows an encrypted file’s /URI strings as stored encrypted, not as links', async () => {
+    const bytes = buildPdf(
+      [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+        { num: 3, body: '<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>' },
+        { num: 6, body: '<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://cipher-lure.test/x) >> >>' },
+        { num: 30, body: '<< /Filter /Standard /V 2 /R 3 >>' }
+      ],
+      { trailer: '/Encrypt 30 0 R' }
+    )
+    const root = await attachmentsOf('Locked', 'locked.pdf', bytes)
+    const rows = root.all().filter((el) => el.textContent.includes('cipher-lure'))
+    expect(rows.map((el) => [[...el.classes].join(' '), el.textContent])).toEqual([
+      ['pm-headers-note', '/URI string, stored encrypted — not what a reader shows: hxxps://cipher-lure[.]test/x']
+    ])
+    expect(drawn(root)).toContain('PDF 1.7 · encrypted (its trailer names /Encrypt)')
+  })
+
+  it('lists an embedded file under every name it gives itself, typed and hashed, never opened', async () => {
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 8, body: '<< /Type /Filespec /UF (invoice.pdf) /F (invoice.exe.) /EF << /F 9 0 R >> >>' },
+      {
+        num: 9,
+        body: '<< /Type /EmbeddedFile /Params << /Size 1234 >> >>',
+        stream: `MZ${'\x90'.repeat(100)}`,
+        flate: true
+      }
+    ])
+    const root = await attachmentsOf('Embedded', 'lure.pdf', bytes)
+    const row = drawn(root).find((t) => t.startsWith('Embedded file '))
+    expect(row).toMatch(
+      /^Embedded file invoice\.pdf \(also named invoice\.exe\.\) · 1,234 bytes declared — object 8; named like an executable or script; named \.pdf but the bytes begin as Windows executable \(MZ\); SHA-256 [0-9a-f]{64} \(computed here\); not opened here$/
+    )
+  })
+
+  it('says invisible text drawn only in fonts it could not decode was not decoded, and draws no box of U+FFFD', async () => {
+    const bytes = onePage(
+      'BT /F1 12 Tf 72 700 Td (Visit https://plain2.test/x now) Tj 3 Tr /F2 12 Tf 0 -20 Td <000100020003> Tj ET',
+      {
+        fonts: `<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> /F2 << /Type /Font /Subtype /Type0 /BaseFont /Mystery /Encoding /Identity-H /DescendantFonts [5 0 R] >> >>`,
+        extra: [
+          {
+            num: 5,
+            body: '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mystery /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>'
+          }
+        ]
+      }
+    )
+    const root = await attachmentsOf('Hidden glyphs', 'z.pdf', bytes)
+    expect(root.all().some((el) => el.tagName === 'pre' && el.textContent.includes('�'))).toBe(false)
+    // The three are in the invisible text, so the page's own count does not claim them.
+    expect(pageNotes(root)).toEqual(['Page 1 · 31 characters'])
+    expect(drawn(root)).toContain(
+      'Page 1, drawn so a reader does not show it (invisible text mode, zero size, or a hidden annotation); the case takes no indicators from it: 3 characters drawn in fonts this reader could not decode, so none is shown.'
+    )
+  })
+
+  it('says a name in an encrypted file was not read, not that there is none', async () => {
+    const bytes = buildPdf(
+      [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+        { num: 6, body: '<< /FT /Tx /T (password) /V (hunter2) >>' },
+        { num: 8, body: '<< /Type /Filespec /UF (payload.exe) /EF << /F 9 0 R >> >>' },
+        { num: 9, body: '<< /Type /EmbeddedFile >>', stream: 'MZxxxx', flate: true },
+        { num: 30, body: '<< /Filter /Standard /V 2 /R 3 >>' }
+      ],
+      { trailer: '/Encrypt 30 0 R' }
+    )
+    const root = await attachmentsOf('Locked names', 'locked.pdf', bytes)
+    const unread = '(no name read: this file is encrypted, and a name stored encrypted is not read)'
+    expect(drawn(root).find((t) => t.startsWith('Embedded file '))).toMatch(`Embedded file ${unread} — object 8; `)
+    const fields = root
+      .all()
+      .find((el) => el.tagName === 'details' && el.children[0]?.textContent === '1 form field(s) read')
+    fields?.fire('toggle')
+    expect(fields?.children[1]?.textContent).toBe(
+      `${unread}\t/Tx\tno value listed (this file is encrypted, and a value stored encrypted is not read)`
+    )
+  })
+
+  it('does not say the report carries all of a long page, which its cap can stop short of', async () => {
+    const root = await attachmentsOf(
+      'Long',
+      'long.pdf',
+      onePage(`BT /F1 12 Tf 72 700 Td (${'word '.repeat(1000)}) Tj ET`)
+    )
+    expect(drawn(root)).toContain(
+      "Showing the first 4,000 of 4,999 characters here. The copied report and the case carry the rest, unless this message's attachment text passes 150,000 characters: past that, the report says how much it left out."
+    )
+  })
+
+  it('counts the U+FFFD a page holds, and names no cause the decoder did not count', async () => {
+    // F2's /ToUnicode maps A, B and C to U+FFFD, so nothing goes undecoded.
+    const bytes = onePage('BT /F2 12 Tf 72 700 Td (ABC) Tj 3 Tr 0 -20 Td (ABC) Tj ET', {
+      fonts:
+        '<< /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 5 0 R >> >>',
+      extra: [
+        {
+          num: 5,
+          body: '<< >>',
+          stream:
+            'begincmap 1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <41> <FFFD> <42> <FFFD> <43> <FFFD> endbfchar endcmap'
+        }
+      ]
+    })
+    const root = await attachmentsOf('Mapped', 'm.pdf', bytes)
+    expect(root.all().some((el) => el.tagName === 'pre' && el.textContent.includes('�'))).toBe(false)
+    expect(drawn(root)).toContain('Page 1: its text holds only 3 replacement characters (U+FFFD), so none is shown.')
+    expect(drawn(root)).toContain(
+      'Page 1, drawn so a reader does not show it (invisible text mode, zero size, or a hidden annotation); the case takes no indicators from it: its text holds only 3 replacement characters (U+FFFD), so none is shown.'
+    )
+    expect(drawn(root).some((t) => t.includes('0 characters drawn'))).toBe(false)
+  })
+
+  it('says a signature field’s /V was not listed, not that the field has no value', async () => {
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 6, body: '<< /FT /Sig /T (Signature1) /V 9 0 R >>' },
+      { num: 9, body: '<< /Type /Sig /Filter /Adobe.PPKLite /Name (Mallory) >>' }
+    ])
+    const root = await attachmentsOf('Signed', 'signed.pdf', bytes)
+    const fields = root
+      .all()
+      .find((el) => el.tagName === 'details' && el.children[0]?.textContent === '1 form field(s) read')
+    fields?.fire('toggle')
+    expect(fields?.children[1]?.textContent).toBe(
+      "Signature1\t/Sig\ta /V value this reader does not list (a dictionary, stream or number, an array it stopped examining before it listed anything, or an object it could not read; a signature field's /V is its signature)"
+    )
+  })
+
+  it('shows the /URI strings of a file that encrypts only its attachments as links', async () => {
+    const bytes = buildPdf(
+      [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+        { num: 3, body: '<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>' },
+        {
+          num: 6,
+          body: '<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://payslip-lure.test/login) >> >>'
+        },
+        {
+          num: 30,
+          body: '<< /Filter /Standard /V 4 /R 4 /CF << /StdCF << /CFM /AESV2 /AuthEvent /EFOpen >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>'
+        }
+      ],
+      { trailer: '/Encrypt 30 0 R' }
+    )
+    const root = await attachmentsOf('Payslip', 'payslip.pdf', bytes)
+    const rows = root.all().filter((el) => el.textContent.includes('payslip-lure'))
+    expect(rows.map((el) => [[...el.classes].join(' '), el.textContent])).toEqual([
+      ['pm-headers-ioc', 'link (/URI) hxxps://payslip-lure[.]test/login']
+    ])
+  })
+
+  it('draws each gap the reader marked as […], never as U+E000, and counts no mark as a character', async () => {
+    const lure = 'Pay at https://pad-lure.test/pay'
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /OpenAction 7 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+      {
+        num: 3,
+        body: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font ${HELVETICA} >> /Contents 4 0 R >>`
+      },
+      // More than the 4 MiB a content stream decodes to follows the lure.
+      {
+        num: 4,
+        body: '<< >>',
+        stream: `BT /F1 12 Tf 72 700 Td (${lure}) Tj ET\n${' '.repeat(5 * 2 ** 20)}`,
+        flate: true
+      },
+      // A value cut at 1,000 characters inside its URL, and a script one character past what a string holds.
+      { num: 6, body: `<< /FT /Tx /T (to) /V (${'x'.repeat(980)} https://field-lure.test/pay) >>` },
+      { num: 7, body: `<< /S /JavaScript /JS (${'a'.repeat(2 ** 20 + 1)}) >>` }
+    ])
+    const root = await attachmentsOf('Gaps', 'gaps.pdf', bytes)
+    expect(root.all().some((el) => el.tagName === 'pre' && el.textContent === `${lure}[…]`)).toBe(true)
+    expect(pageNotes(root)).toEqual([`Page 1 · ${lure.length} characters`])
+    const script = root
+      .all()
+      .find((el) => el.tagName === 'details' && el.children[0]?.textContent.startsWith('JavaScript at object 7'))
+    expect(script?.children[0].textContent).toMatch(/^JavaScript at object 7 — 1,048,576 characters, showing the first/)
+    const fields = root
+      .all()
+      .find((el) => el.tagName === 'details' && el.children[0]?.textContent === '1 form field(s) read')
+    fields?.fire('toggle')
+    expect(fields?.children[1]?.textContent).toBe(`to\t/Tx\t${'x'.repeat(980)} https://field-lure.[…]`)
+    expect(root.all().filter((el) => el.textContent.includes('\uE000'))).toEqual([])
   })
 })
 

@@ -82,8 +82,11 @@ trail, hand over cleanly.
 - Phishing analyser: paste an email's headers or the whole message, or load
   a `.eml` from the vault, and read it in its own tab. It is read offline as
   data: its HTML is shown as source, no link is resolved, and nothing in it
-  is fetched or run. It states what the message says and never reaches a
-  verdict; that stays with you, on the case it can create.
+  is fetched or run. Attached PDFs, Office files and ZIP archives are read the
+  same way: their links, scripts, embedded files and page text are listed,
+  never opened or rendered, and anything it could not read is reported as
+  unread rather than absent. It states what the message says and never
+  reaches a verdict; that stays with you, on the case it can create.
 - Analyst toolbox on a selection (defang, refang, decode, read a timestamp,
   hash), entirely offline
 

@@ -1,16 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { EXECUTABLE_NAME, SCRIPT_CARRIER_NAME, SHORTCUT_NAME, entryNote } from './ooxml'
+import { GAP } from './pdf'
 import {
   apexDomain,
   attachmentFacts,
+  charCount,
   contentMismatch,
+  decodable,
+  decodeEntities,
   entriesRead,
   extractLinks,
   hostFacts,
   htmlToText,
+  showGaps,
+  showsDerivedDomain,
   skeleton,
   sniffType,
-  unwrapUrl
+  unwrapUrl,
+  visibleText
 } from './phish'
 
 describe('unwrapUrl', () => {
@@ -601,5 +608,85 @@ describe('PhishTool parity on the parsed model', () => {
     const [link] = extractLinks('', '<a href="https://login.paypa1.co.uk/x">y</a>', []).links
     expect(link.host).toBe('login.paypa1.co.uk')
     expect(link.apexDomain).toBe('paypa1.co.uk')
+  })
+})
+
+describe('a gap the PDF reader marked, as text leaves the analyser', () => {
+  it('is shown as […] and is not counted or read as a character', () => {
+    expect(showGaps(`co${GAP}l-split.com ${GAP}x${GAP}`)).toBe('co[…]l-split.com […]x[…]')
+    expect(visibleText(`a\u202e${GAP}\tb`)).toBe('a<U+202E>[…]\tb')
+    expect(charCount(`abc${GAP}d${GAP}`)).toBe(4)
+    // A page of glyphs not decoded is not text a reader shows because a gap marks where it stopped.
+    expect([decodable(`\uFFFD\uFFFD${GAP}`), decodable(`${GAP}x`)]).toEqual([false, true])
+  })
+})
+
+describe('htmlToText — markup read the way a browser reads it', () => {
+  it('ends on a close tag that never closes, rather than looping forever', () => {
+    const started = performance.now()
+    expect(htmlToText('<p>hi</p><script>x</script')).toBe('hi')
+    expect(htmlToText('<head><title>x</title></head')).toBe('')
+    expect(htmlToText(`<p>a</p>${'<style>x</style'.repeat(20_000)}`)).toBe('a')
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
+  it('ends a head with no </head> at <body>, and drops nothing when there is neither', () => {
+    const html =
+      '<html><head><meta charset="utf-8"><title>Notice</title><body><p>Reply to helpdesk@evil-reply.test</p></body></html>'
+    expect(htmlToText(html)).toBe('Reply to helpdesk@evil-reply.test')
+    expect(htmlToText('<head><p>Server 203.0.113.50</p>')).toBe('Server 203.0.113.50')
+    // Many heads that end at <body>, with one </head> far away, stay linear.
+    const started = performance.now()
+    htmlToText(`${'<head><body>'.repeat(50_000)}</head>`)
+    htmlToText('<head></head>'.repeat(50_000))
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
+  it('does not backtrack over a long run of spaces after a <', () => {
+    const started = performance.now()
+    expect(htmlToText(`<p>a</p><${' '.repeat(100_000)}x`)).toBe('a\n< x')
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
+  it('ends a comment where a browser does, <!-->, <!---> and --!> included', () => {
+    for (const comment of ['<!-->', '<!--->', '<!---->', '<!-- a --!>']) {
+      expect(htmlToText(`<p>Hi</p>${comment}<p>Reply to x@evil.test</p>`)).toBe('Hi\nReply to x@evil.test')
+    }
+    const started = performance.now()
+    htmlToText(`${'<!-- a -->'.repeat(50_000)}<!-- open`)
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
+  it('reads a < that begins no tag as text, so the script after it is still dropped', () => {
+    expect(
+      htmlToText(`<p>Spend < $100 and don't miss out</p><script>var c2="198.51.100.7";</script><p>Click</p>`)
+    ).toBe("Spend < $100 and don't miss out\nClick")
+    expect(htmlToText('<p>a < b and <b>c</b></p>')).toBe('a < b and c')
+    expect(
+      extractLinks('', "<p>Orders < $5 don't wait: https://evil.test/pay today</p>", []).links.map((l) => l.raw)
+    ).toEqual(['https://evil.test/pay'])
+  })
+
+  it('decodes a numeric reference without its semicolon, every digit of it', () => {
+    expect(decodeEntities('https:&#47&#47e.test/a')).toBe('https://e.test/a')
+    expect(decodeEntities('&#00000047;&#x2f')).toBe('//')
+    expect(decodeEntities('&#99999999999999999999; &amp &amp;')).toBe('&#99999999999999999999; &amp &')
+    expect(extractLinks('', '<a href="https:&#47&#47evil-nosemi.test/login">Sign in</a>', []).links[0].host).toBe(
+      'evil-nosemi.test'
+    )
+  })
+})
+
+describe('a link to an IP address, and a brand list with comments', () => {
+  it('gives an IP address no derived domain of its last two octets', () => {
+    expect(apexDomain('198.51.100.7')).toBe('198.51.100.7')
+    const [link] = extractLinks('', '<img src="http://198.51.100.7/beacon.gif">', []).links
+    expect(showsDerivedDomain(link)).toBe(false)
+  })
+
+  it('never matches a # comment line in the brand list as a brand', () => {
+    // One character from the brand it comments out, it was reported as a look-alike of `#paypal`.
+    expect(hostFacts('paypal.test', ['#paypal', '# PayPal, ticket SEC-1'])).toEqual([])
+    expect(hostFacts('paypai.test', ['# note', 'paypal'])).toEqual(['one character away from "paypal"'])
   })
 })

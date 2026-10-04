@@ -94,10 +94,14 @@ function cloneNode(source: Task, includeSubtasks: boolean, idMap: Map<string, st
   const now = new Date().toISOString()
   const newId = makeId()
   idMap.set(source.id, newId)
+  const terminal = isTerminalStatus(source.status, statuses)
   return {
     ...source,
     id: newId,
-    status: isTerminalStatus(source.status, statuses) ? getDefaultStatusId(statuses) : source.status,
+    status: terminal ? getDefaultStatusId(statuses) : source.status,
+    // A closed case's 100% is the store's completion fill, like `completed`:
+    // the copy restarts unstarted. An open source keeps its progress.
+    progress: terminal ? 0 : source.progress,
     completed: '',
     // Keys are immutable and never reused — a duplicate gets a fresh one on save.
     key: '',

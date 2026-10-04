@@ -2,21 +2,40 @@ import { ButtonComponent, ItemView, Notice, SuggestModal, type TFile, type Works
 import type PMPlugin from '../main'
 import { formatDelay } from '../soc/emailHeaders'
 import { IMAGE_CAP, hexDump, imageDataUrl, previewKind, previewText } from '../soc/preview'
+import type { PdfPage } from '../soc/pdf'
 import {
   type EmbeddedImage,
+  type PdfParsedReport,
+  PAGE_TEXT_SHOWN,
   type PhishReport,
+  REPORT_TEXT_CAP,
+  SCRIPT_QUOTED,
   STRUCTURE_LIST_CAP,
   analysePhishing,
   caseIocs,
+  charCount,
+  decodable,
+  embeddedNameNotes,
+  encryptionWords,
+  firstChars,
   entriesRead,
   flaggedEntries,
   flaggedOleEntries,
   formatPhishReport,
+  hiddenCounts,
+  hiddenTextLabel,
   innerFileFacts,
   isPicture,
   linksSection,
+  noFieldValue,
+  noName,
+  pagePictures,
+  pageTextSummary,
   relationshipType,
-  showsDerivedDomain
+  showGaps,
+  showsDerivedDomain,
+  undecodedOnly,
+  visibleText
 } from '../soc/phish'
 import { defangCopyMenu } from '../ui/defangMenu'
 import { defangIoc, visibleName } from '../soc/ioc'
@@ -44,6 +63,9 @@ import { getDefaultPriorityId, getDefaultStatusId, safeAsync } from '../utils'
  */
 /** How much body is painted on screen. The full text always reaches the report. */
 const BODY_PREVIEW = 4000
+
+/** PDF pages drawn up front; the rest wait behind a disclosure, as long lists do. */
+const PAGE_TEXT_EAGER = 3
 
 /**
  * One formatter for every count on screen. `toLocaleString()` builds a new one
@@ -328,9 +350,12 @@ export class PhishAnalysisView extends ItemView {
           }
           throw err
         }
+        // An open board draws the new case now, not on some later redraw that
+        // makes the create read as failed (as the case switcher in ModalFactory).
+        this.plugin.refreshProjectViews()
         // The analysis stays open. A modal had to close to show the case; a tab
         // is exactly where the evidence should sit while the case is written.
-        openTaskModal(this.plugin, project, { task, onSave: () => {} })
+        openTaskModal(this.plugin, project, { task, onSave: () => this.plugin.refreshProjectViews() })
       })
     )
   }
@@ -684,12 +709,12 @@ export class PhishAnalysisView extends ItemView {
     if (!pdf && !office && !ole) return false
     const box = card.createDiv('pm-att-structure')
     if (pdf) {
-      // The report's words. /Encrypt is a name the scan matched in the bytes,
-      // not a resolved fact about the file; the reader's note below says what
-      // it may hide.
+      // The report's words: encrypted when the trailer the object read
+      // followed says so, and otherwise only that the scan matched the name in
+      // the bytes. The reader's note below says what that means for the rest.
       box.createDiv({
         cls: 'pm-headers-note',
-        text: `PDF ${pdf.version || 'version not recorded'}${pdf.encrypted ? ' · /Encrypt present' : ''}`
+        text: `PDF ${pdf.version || 'version not recorded'}${encryptionWords(pdf, ' · ')}`
       })
       if (pdf.markers.length) {
         box.createDiv({
@@ -697,10 +722,20 @@ export class PhishAnalysisView extends ItemView {
           text: `Names found: ${pdf.markers.map((m) => `${m.name} ×${m.count}`).join(', ')}`
         })
       }
+      // Read from ciphertext in a file whose strings are encrypted: a note, not an indicator row.
+      const encrypted = pdf.parsed?.stringsEncrypted
       cappedRows(
         box,
-        pdf.uris.map((uri) => ({ cls: 'pm-headers-ioc', text: `link (/URI) ${visibleName(defangIoc(uri, 'url'))}` }))
+        pdf.uris.map((uri) =>
+          encrypted
+            ? {
+                cls: 'pm-headers-note',
+                text: `/URI string, stored encrypted — not what a reader shows: ${visibleName(showGaps(defangIoc(uri, 'url')))}`
+              }
+            : { cls: 'pm-headers-ioc', text: `link (/URI) ${visibleName(showGaps(defangIoc(uri, 'url')))}` }
+        )
       )
+      if (pdf.parsed) parsedPdfRows(box, pdf.parsed, pdf.images)
     }
     if (office) {
       entryList(
@@ -932,12 +967,17 @@ function hashRow(host: HTMLElement, label: string, value: string): void {
  * front, twenty ZIPs of 4,096 entries were 80,000 rows nobody had opened,
  * rebuilt on every click of a tab.
  */
-function capped<T>(host: HTMLElement, items: T[], draw: (host: HTMLElement, item: T) => void): void {
-  for (const item of items.slice(0, STRUCTURE_LIST_CAP)) draw(host, item)
-  if (items.length <= STRUCTURE_LIST_CAP) return
+function capped<T>(
+  host: HTMLElement,
+  items: T[],
+  draw: (host: HTMLElement, item: T) => void,
+  limit = STRUCTURE_LIST_CAP
+): void {
+  for (const item of items.slice(0, limit)) draw(host, item)
+  if (items.length <= limit) return
   const more = host.createEl('details', { cls: 'pm-att-entries' })
-  more.createEl('summary', { text: `${NUMBER.format(items.length - STRUCTURE_LIST_CAP)} more` })
-  more.addEventListener('toggle', () => items.slice(STRUCTURE_LIST_CAP).forEach((item) => draw(more, item)), {
+  more.createEl('summary', { text: `${NUMBER.format(items.length - limit)} more` })
+  more.addEventListener('toggle', () => items.slice(limit).forEach((item) => draw(more, item)), {
     once: true
   })
 }
@@ -966,4 +1006,132 @@ function entryList(host: HTMLElement, summary: string, count: number, rows: () =
 /** A declared size, or the words for its absence — never a made-up number. */
 function sizeText(size: number | null): string {
   return size === null ? 'size not recorded' : `${NUMBER.format(size)} bytes`
+}
+
+/**
+ * What the PDF object read found, in the copied report's order: what acts —
+ * names, links, actions, scripts, embedded files, fields — then what the file
+ * says about itself, then the page text. Scripts and field lists are built
+ * when opened; pages past the first few wait behind a disclosure.
+ */
+function parsedPdfRows(box: HTMLElement, p: PdfParsedReport, images: EmbeddedImage[]): void {
+  const fmt = (ms: { name: string; count: number }[]): string => ms.map((m) => `${m.name} ×${m.count}`).join(', ')
+  if (p.hiddenMarkers.length) {
+    box.createDiv({ cls: 'pm-headers-flag', text: `Names inside compressed object streams: ${fmt(p.hiddenMarkers)}` })
+  }
+  if (p.escapedMarkers.length) {
+    box.createDiv({
+      cls: 'pm-headers-flag',
+      text: `Names written with #-escapes, decoded here: ${fmt(p.escapedMarkers)}`
+    })
+  }
+  cappedRows(
+    box,
+    p.links.map((l) => ({
+      cls: 'pm-headers-ioc',
+      text: `link (/URI) ${visibleName(showGaps(defangIoc(l.uri, 'url')))} — ${l.where}${l.page ? `, page ${l.page}` : ''}`
+    }))
+  )
+  cappedRows(
+    box,
+    p.actions.map((x) => ({
+      cls: 'pm-headers-flag',
+      text: `${visibleName(x.type)} ${x.trigger}${x.target ? ` → ${visibleName(showGaps(defangIoc(x.target, 'url')))}` : ''} — ${x.where}`
+    }))
+  )
+  for (const s of p.scripts) {
+    entryList(
+      box,
+      `JavaScript at ${s.where} — ${NUMBER.format(charCount(s.source))} characters${charCount(s.source) > SCRIPT_QUOTED ? `, showing the first ${NUMBER.format(SCRIPT_QUOTED)}` : ''}${s.whole ? '' : ', not all of it read'}, quoted as text and never run; bare domain names in it are not listed as indicators`,
+      // Never zero: an empty script is still a script, and says so.
+      1,
+      () => [visibleText(firstChars(s.source, SCRIPT_QUOTED))]
+    )
+  }
+  cappedRows(
+    box,
+    p.embeddedFiles.map((f) => {
+      const also = f.names.length > 1 ? ` (also named ${f.names.slice(1).map(visibleName).join(', ')})` : ''
+      const named = embeddedNameNotes(f.names)
+      const size = f.size !== null ? ` · ${NUMBER.format(f.size)} bytes declared` : ''
+      return {
+        cls: 'pm-headers-flag',
+        text: `Embedded file ${f.name ? visibleName(f.name) : noName(p.stringsEncrypted, '(unnamed)')}${also}${size} — ${f.where}; ${named ? `${named}; ` : ''}${innerFileFacts(f)}; not opened here`
+      }
+    })
+  )
+  // The sender's text ends each row, so nothing it writes can pass for a column.
+  entryList(box, `${p.fields.length} form field(s) read`, p.fields.length, () =>
+    p.fields.map(
+      (f) =>
+        `${f.name ? visibleName(f.name) : noName(p.stringsEncrypted, '(no name set, /T)')}\t${visibleName(f.type) || '—'}${f.password ? ' (password)' : ''}\t${f.value ? visibleName(showGaps(f.value)) : noFieldValue(p.stringsEncrypted, f.unread)}`
+    )
+  )
+  if (p.xfa) {
+    box.createDiv({
+      cls: 'pm-headers-flag',
+      text: 'An /XFA form is present; its XML is not read here, so any script or link in it is unread, not absent.'
+    })
+  }
+  entryList(box, 'Information the file declares about itself', p.info.length, () =>
+    p.info.map((i) => `${i.key}\t${visibleName(i.value)}`)
+  )
+  if (!p.pages.length) return
+  box.createDiv({
+    cls: 'pm-headers-note',
+    text: `Page text, decoded here from the file's own fonts and never rendered: ${pageTextSummary(p)}.`
+  })
+  capped(
+    box,
+    p.pages.filter((page) => page.text || page.hidden || page.undecoded || page.pictures.length),
+    (at, page) => drawPdfPage(at, page, images),
+    PAGE_TEXT_EAGER
+  )
+}
+
+/**
+ * One page's text as its fonts decode it, its invisible text apart under its
+ * own label, and the pictures it draws. Text of nothing but U+FFFD, visible or
+ * not, gets its count and no box: a box of them would look like text that was
+ * read. Each count is of its own buffer, never the two added together.
+ */
+function drawPdfPage(host: HTMLElement, page: PdfPage, images: EmbeddedImage[]): void {
+  const label = page.number !== null ? `Page ${page.number}` : `Page object outside the page tree (${page.where})`
+  host.createDiv({
+    cls: 'pm-headers-note',
+    text: `${label} · ${NUMBER.format(charCount(page.text))} characters${page.undecoded ? ` · ${NUMBER.format(page.undecoded)} not decoded (shown as �)` : ''}${page.assumed ? ' · partly read through an assumed encoding' : ''}`
+  })
+  // "Unless": the report copies attachment text only up to its cap, and past
+  // it says how much it left out, so "all of it" was not always true.
+  const preview = (text: string): void => {
+    host.createEl('pre', { cls: 'pm-headers-pre', text: visibleText(firstChars(text, PAGE_TEXT_SHOWN)) })
+    if (charCount(text) > PAGE_TEXT_SHOWN) {
+      host.createDiv({
+        cls: 'pm-headers-note',
+        text: `Showing the first ${NUMBER.format(PAGE_TEXT_SHOWN)} of ${NUMBER.format(charCount(text))} characters here. The copied report and the case carry the rest, unless this message's attachment text passes ${NUMBER.format(REPORT_TEXT_CAP)} characters: past that, the report says how much it left out.`
+      })
+    }
+  }
+  if (decodable(page.text)) preview(page.text)
+  else if (page.text) {
+    host.createDiv({
+      cls: 'pm-headers-note',
+      text: `${label}: ${undecodedOnly(page.text, page.undecoded)}, so none is shown.`
+    })
+  }
+  if (decodable(page.hidden)) {
+    host.createDiv({ cls: 'pm-headers-note', text: `${label}, ${hiddenTextLabel(page)}${hiddenCounts(page)}:` })
+    preview(page.hidden)
+  } else if (page.hidden) {
+    host.createDiv({
+      cls: 'pm-headers-note',
+      text: `${label}, ${hiddenTextLabel(page)}: ${undecodedOnly(page.hidden, page.hiddenUndecoded)}, so none is shown.`
+    })
+  }
+  if (page.pictures.length) {
+    host.createDiv({
+      cls: 'pm-headers-note',
+      text: `Draws ${page.pictures.length} picture(s): ${pagePictures(page, images, visibleName)}`
+    })
+  }
 }

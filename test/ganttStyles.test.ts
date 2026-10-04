@@ -13,3 +13,14 @@ describe('gantt.css', () => {
     expect(rule).toContain('color: var(--interactive-accent-hover);')
   })
 })
+
+// Linking is by tap, but the dots only showed on hover, which a touch screen never has.
+describe('widgets.css', () => {
+  it('shows the gantt link dots on a touch screen, after the rule that hides them', () => {
+    const css = readFileSync(new URL('../src/styles/widgets.css', import.meta.url), 'utf8')
+    const base = css.indexOf('.pm-gantt-link-dot {')
+    const touch = css.indexOf('@media (hover: none) {\n  .pm-gantt-link-dot {\n    opacity: 0.5;')
+    expect(base).toBeGreaterThanOrEqual(0)
+    expect(touch).toBeGreaterThan(base)
+  })
+})

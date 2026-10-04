@@ -1,4 +1,4 @@
-import { setIcon } from 'obsidian'
+import { Notice, setIcon } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, StatusConfig, Task } from '../types'
 import { makeTask } from '../types'
@@ -7,6 +7,7 @@ import { renderKeyChip } from '../ui/composites/issueMeta'
 import { IconButton } from '../ui/primitives/IconButton'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { isTerminalStatus, getCompleteStatusId, getDefaultStatusId, safeAsync } from '../utils'
+import { isNameableTitle } from '../store/ProjectStore'
 
 /**
  * Checkbox semantics for a subtask row: terminal/default status, full/zero
@@ -139,7 +140,22 @@ export function renderSubtasksPanel(
     const title = addInput.value.trim()
     if (!title) return
     const me = plugin.settings.currentUser
-    task.subtasks.push(makeTask({ title, type: 'subtask', assignees: me ? [me] : [] }))
+    const sub = makeTask({ title, type: 'subtask', assignees: me ? [me] : [] })
+    // Refused where it is typed: the store refuses a subtask whose note name
+    // is taken, or that makes none, and so every later save carrying it. Only
+    // a saved parent has a folder to clash in.
+    const clash = opts.project.taskIndex.has(task.id)
+      ? plugin.store.findTaskFileConflict(opts.project, sub, task.id)
+      : null
+    if (clash || !isNameableTitle(title)) {
+      new Notice(
+        clash
+          ? `Subtask not added: a note named "${clash.fileName}" already exists.`
+          : 'Subtask not added: the title needs a character a file name can hold.'
+      )
+      return
+    }
+    task.subtasks.push(sub)
     addInput.value = ''
     renderSubtasks()
     renderCount()

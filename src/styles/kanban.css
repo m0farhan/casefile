@@ -503,7 +503,13 @@
    (otherwise mid-drag you get its default 18px white thumb at top: -6px). */
 /* Progress lives on the card's bottom edge, inside its `overflow: hidden`, so
    it reads as part of the card rather than as another row with its own margins.
-   The input is 8px tall for a real hit target; only the 3px track is painted. */
+   A scrubber, as a video player's: at rest a 3px line on the edge; under the
+   pointer (or on a touch screen, always) the line thickens to 6px and shows a
+   6px knob. The line is the input's own background, so it runs edge to edge,
+   while the 4px side padding insets the knob's travel: at 0% and 100% it
+   clears the 3px severity spine and the card's 7px inner corner, which cut it
+   when it rode the very end. The input is 12px tall for a real hit target,
+   inside the 13px lane the card body leaves at its foot. */
 .pm-kanban-card > .pm-kanban-progress,
 .pm-kanban-card > .pm-kanban-card-progress {
   position: absolute;
@@ -512,37 +518,48 @@
   right: 0;
 }
 .pm-kanban-card > .pm-kanban-progress {
-  --slider-thumb-width: 10px;
-  --slider-thumb-height: 10px;
-  --slider-thumb-width-active: 12px;
-  --slider-thumb-height-active: 12px;
+  --slider-thumb-width: 6px;
+  --slider-thumb-height: 6px;
+  --slider-thumb-width-active: 6px;
+  --slider-thumb-height-active: 6px;
   --slider-thumb-background: var(--gs-accent-hover);
   --slider-thumb-background-hover: var(--gs-accent-hover);
   --slider-thumb-border-width: 0;
   --slider-thumb-y: 0px;
   --slider-thumb-y-active: 0px;
   --slider-thumb-opacity-active: 1;
+  /* The knob's surface ring in every state app.css draws (rest, hover, drag,
+     focus), as literals: body declares these, where a var() of ours would not
+     resolve. Keyboard focus adds the accent halo, since on desktop app.css
+     takes the input's own box-shadow away on :focus. */
+  --slider-thumb-shadow: 0 0 0 2px var(--gs-surface-2);
+  --slider-thumb-shadow-hover: 0 0 0 2px var(--gs-surface-2);
+  --slider-thumb-shadow-active: 0 0 0 2px var(--gs-surface-2);
+  --slider-thumb-shadow-focus: 0 0 0 2px var(--gs-surface-2), 0 0 0 4px rgba(94, 105, 209, 0.5);
   appearance: none;
   -webkit-appearance: none;
   display: block;
+  box-sizing: border-box;
   width: 100%;
   min-width: 100%;
-  height: 8px;
+  height: 12px;
   margin: 0;
-  padding: 0;
-  background: transparent;
+  padding: 0 4px;
+  border-radius: 0;
+  background: linear-gradient(
+      to right,
+      var(--gs-accent) var(--pm-progress-pct, 0%),
+      var(--gs-hairline-strong) var(--pm-progress-pct, 0%)
+    )
+    bottom / 100% 3px no-repeat;
   cursor: pointer;
   outline: none;
 }
+/* The track only seats the knob on the input's bottom 6px; the line is above. */
 .pm-kanban-card > .pm-kanban-progress::-webkit-slider-runnable-track {
-  height: 3px;
-  margin-top: 5px;
-  border-radius: 99px;
-  background: linear-gradient(
-    to right,
-    var(--gs-accent) var(--pm-progress-pct, 0%),
-    var(--gs-hairline-strong) var(--pm-progress-pct, 0%)
-  );
+  height: 6px;
+  margin-top: 6px;
+  background: transparent;
 }
 .pm-kanban-card > .pm-kanban-progress::-webkit-slider-thumb {
   appearance: none;
@@ -551,20 +568,37 @@
   height: var(--slider-thumb-height);
   border-radius: 99px;
   background: var(--slider-thumb-background);
+  box-shadow: var(--slider-thumb-shadow);
   cursor: pointer;
   opacity: 0;
   transition: opacity 150ms ease-out;
+}
+.pm-kanban-card > .pm-kanban-progress:hover,
+.pm-kanban-card > .pm-kanban-progress:focus-visible {
+  background-size: 100% 6px;
 }
 .pm-kanban-card > .pm-kanban-progress:hover::-webkit-slider-thumb,
 .pm-kanban-card > .pm-kanban-progress:focus-visible::-webkit-slider-thumb {
   opacity: 1;
 }
-/* No hover on a touch screen, so the thumb shows all the time. */
+/* No hover on a touch screen, so the scrubber shows all the time. */
 @media (hover: none) {
+  .pm-kanban-card > .pm-kanban-progress {
+    background-size: 100% 6px;
+  }
   .pm-kanban-card > .pm-kanban-progress::-webkit-slider-thumb {
     opacity: 1;
   }
 }
+/* The thickening is movement, so it waits on both the OS preference and the
+   Reduce animations setting (motion.css). */
+@media (prefers-reduced-motion: no-preference) {
+  body:not(.gs-reduce-motion) .pm-kanban-card > .pm-kanban-progress {
+    transition: background-size 150ms ease-out;
+  }
+}
+/* Mobile only in effect: on desktop app.css's :focus rule removes it, and the
+   knob's halo above is the focus ring. */
 .pm-kanban-card > .pm-kanban-progress:focus-visible {
   box-shadow: var(--gs-focus-ring);
 }

@@ -2,6 +2,7 @@ import { guardVerdictOnClose } from '../../soc/verdictGuard'
 import { ButtonComponent, ExtraButtonComponent, Menu, Notice } from 'obsidian'
 import type { Task } from '../../types'
 import { flattenTasks, collectAllAssignees, collectAllTags } from '../../store'
+import { STATUS_STAMPED_FIELDS, undoOfStatusChange } from '../../store/ProjectStore'
 import { findTaskById } from '../../store/TaskIndex'
 import { formatBadgeText, isTerminalStatus } from '../../utils'
 import { today } from '../../dates'
@@ -288,12 +289,13 @@ export async function runBulkPatch(ctx: TableContext, patch: Partial<Task>): Pro
     }
     // Capture each task's prior values of the patched fields BEFORE the write.
     // A status change also moves the stamps the store sets beside it (the
-    // completion date and the incident response/resolution times), so those
-    // are captured too: undoing a close must not leave the SLA clock stopped.
+    // completion date, the Done fill of progress and the incident
+    // response/resolution times), so those are captured too: undoing a close
+    // must not leave the SLA clock stopped or the bar full.
     const keys = [
       ...Object.keys(patch),
       ...(verdict ? ['verdict'] : []),
-      ...(patch.status !== undefined ? ['completed', 'respondedAt', 'resolvedAt'] : [])
+      ...(patch.status !== undefined ? STATUS_STAMPED_FIELDS : [])
     ] as (keyof Task)[]
     const prior = new Map<string, Partial<Task>>()
     for (const id of ids) {
@@ -307,6 +309,13 @@ export async function runBulkPatch(ctx: TableContext, patch: Partial<Task>): Pro
       )
     } else {
       await ctx.plugin.store.updateTasks(ctx.project, ids, patch)
+    }
+    if (patch.status !== undefined) {
+      const { statuses } = ctx.plugin.store.configFor(ctx.project)
+      for (const [id, prev] of prior) {
+        const after = findTaskById(ctx.project, id)
+        if (after) undoOfStatusChange(prev, after, statuses)
+      }
     }
     ctx.state.selectedTaskIds.clear()
     await ctx.onRefresh()

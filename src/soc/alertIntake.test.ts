@@ -203,6 +203,10 @@ describe('parseAlertPaste, markdown-formatted alerts', () => {
     expect(parseAlertPaste('**Rule :** host_01 beaconing', CFG).title).toBe('host_01 beaconing')
   })
 
+  it('records a backticked indicator without the backtick', () => {
+    expect(parseAlertPaste('**URL :** `https://x.test/a`', CFG).iocs.map((i) => i.value)).toEqual(['https://x.test/a'])
+  })
+
   // The SOC138 alert from a user's case, whose Indicators section was empty.
   const SOC138 = [
     'Event Time : 2021-03-13T20:20:58+03:00',

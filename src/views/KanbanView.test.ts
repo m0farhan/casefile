@@ -98,13 +98,14 @@ describe('laneCreatePatch', () => {
 // Views have no DOM here. The container is a stand-in whose every method
 // returns another stand-in; the columns are captured instead of drawn.
 
-function fakeEl(onEmpty: () => void = () => {}, classes = new Set<string>()): HTMLElement {
+function fakeEl(onEmpty: () => void = () => {}, classes = new Set<string>(), extra: object = {}): HTMLElement {
   const target = {
     empty: onEmpty,
     addClass: (cls: string) => classes.add(cls),
     removeClass: (cls: string) => classes.delete(cls),
-    querySelectorAll: (): unknown[] => [],
-    querySelector: (): null => null
+    querySelectorAll: (_selector: string): unknown[] => [],
+    querySelector: (): null => null,
+    ...extra
   }
   return new Proxy(target, {
     get: (t, prop) => {
@@ -117,6 +118,7 @@ function fakeEl(onEmpty: () => void = () => {}, classes = new Set<string>()): HT
 
 interface Board {
   view: KanbanView
+  plugin: PMPlugin
   store: ProjectStore
   project: Project
   settings: PMSettings
@@ -157,6 +159,7 @@ async function board(
   )
   return {
     view,
+    plugin,
     store,
     project,
     settings,
@@ -206,6 +209,16 @@ describe('KanbanView drop undo', () => {
     expect(reopened?.resolvedAt).toBe('')
     expect(reopened?.respondedAt).toBe('')
     expect(reopened?.completed).toBe('')
+  })
+
+  it('undoing a drop into Done puts back the progress the close filled to 100', async () => {
+    const b = await board([{ title: 'Beacon', status: 'in-progress', progress: 25 }])
+    b.view.render()
+    await drop(b, byTitle(b, 'Beacon'), 'done')
+    expect(byTitle(b, 'Beacon').progress).toBe(100)
+
+    await h.undos[0]()
+    expect(byTitle(b, 'Beacon').progress).toBe(25)
   })
 
   it('undoing a drop also takes back the verdict the close guard recorded', async () => {
@@ -333,6 +346,41 @@ describe('KanbanView subtask nesting', () => {
       'E1',
       'E2'
     ])
+  })
+})
+
+describe('KanbanView card progress', () => {
+  it('keeps keyboard focus on the slider after a step rebuilds the board', async () => {
+    const b = await board([{ title: 'Beacon' }])
+    const id = byTitle(b, 'Beacon').id
+    const focus = vi.fn<() => void>()
+    const slider = { matches: (sel: string) => sel === '.pm-kanban-progress', focus }
+    const card = { dataset: { taskId: id }, querySelector: () => slider }
+    const container = fakeEl(undefined, undefined, {
+      ownerDocument: { activeElement: slider },
+      querySelectorAll: (sel: string) => (sel === '.pm-kanban-card[data-task-id]' ? [card] : [])
+    })
+    new KanbanView(container, b.project, b.plugin, () => Promise.resolve(), makeDefaultFilter()).render()
+    b.columns()
+      .find((c) => c.status.id === 'todo')
+      ?.onCardProgressChange?.(byTitle(b, 'Beacon'), 50)
+    await vi.waitFor(() => expect(focus).toHaveBeenCalledOnce())
+    expect(byTitle(b, 'Beacon').progress).toBe(50)
+  })
+})
+
+describe('KanbanView subtask drop order', () => {
+  it('a subtask dropped beside a top-level card says the subtask is the nested one', async () => {
+    const b = await board([{ title: 'P' }, { title: 'Beacon', status: 'done' }], {
+      settings: { kanbanShowSubtasks: true }
+    })
+    const sub = makeTask({ title: 'Isolate endpoint', type: 'subtask' })
+    await b.store.insertTask(b.project, sub, byTitle(b, 'P').id)
+    const reorder = vi.spyOn(b.store, 'reorderTask')
+    b.view.render()
+    await drop(b, sub, 'done')
+    expect(reorder).not.toHaveBeenCalled()
+    expect(h.notices).toContain("A subtask stays under its parent card, so it can't be ordered among other cards")
   })
 })
 

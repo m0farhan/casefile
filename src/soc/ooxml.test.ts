@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { entryNote, readZipDocument } from './ooxml'
+import { entryNote, inflate, readZipDocument } from './ooxml'
+import { inflating, keptByChromium } from '../../test/pdf'
 import { concat, deflateRaw, header, padCentralDirectory, type Part, zip } from '../../test/zip'
 
 const enc = new TextEncoder()
@@ -1305,7 +1306,7 @@ describe('one picture budget across a whole message', () => {
     expect(first?.images).toHaveLength(1)
     expect(second?.images).toEqual([])
     expect(second?.notes).toEqual([
-      "1 entry named as a picture was not opened: this message's budget for pictures and inner files was used up by what was read before it, so it is not drawn here. Not drawn is not absent."
+      "1 entry named as a picture was not opened: this message's budget for pictures, inner files and decompressed PDF data was used up by what was read before it, so it is not drawn here. Not drawn is not absent."
     ])
     expect(media.left).toBe(0)
   })
@@ -1318,7 +1319,7 @@ describe('one picture budget across a whole message', () => {
     )
     expect(facts?.images).toHaveLength(1)
     expect(facts?.notes.join(' ')).toContain(
-      "1 entry named as a picture was not read whole: it was larger than what remained of this message's budget for pictures and inner files"
+      "1 entry named as a picture was not read whole: it was larger than what remained of this message's budget for pictures, inner files and decompressed PDF data"
     )
   })
 
@@ -1524,5 +1525,113 @@ describe('entryNote rows for what a victim double-clicks', () => {
     for (const name of ['view.html', 'view.htm', 'a.svg', 'Notes.one']) {
       expect(entryNote(name)).toBe('named as a web page, SVG or OneNote file')
     }
+  })
+})
+
+describe('inflate on Chromium, which loses the output of the write that meets junk', () => {
+  // Noise, then zeros: the last 1 KiB of input expands far past what it was
+  // given, and Chromium threw that write's output away with the junk error.
+  const payload = new Uint8Array(65_536)
+  payload.set([0x4d, 0x5a])
+  for (let i = 2, x = 1; i < 2_500; i++) payload[i] = (x = (Math.imul(x, 1_103_515_245) + 12_345) >>> 0) >>> 24
+
+  it('replays a failed 1 KiB write a byte at a time and keeps every byte, unless told not to', async () => {
+    const body = await deflateRaw(payload)
+    // Two bytes of junk start in the one-byte tail and fail a write that made
+    // no output: nothing was lost, so nothing is run again.
+    const eol = await inflating(() => inflate(concat([body, enc.encode('\n\n')]), 16 * 2 ** 20, () => true), true)
+    expect(eol.value.bytes).toEqual(payload)
+    expect([eol.value.failed, eol.value.retried, eol.value.lossy, eol.passes]).toEqual([true, false, false, 1])
+
+    // Sixteen start in the write that holds the stream's end, and its output went with it.
+    const data = concat([body, enc.encode('\n'.repeat(16))])
+    const { value, passes } = await inflating(() => inflate(data, 16 * 2 ** 20, () => true), true)
+    expect(value.bytes).toEqual(payload)
+    // The junk is real, so the stream still failed.
+    expect([value.failed, value.truncated, value.retried, value.lossy, passes]).toEqual([true, false, true, false, 2])
+
+    const once = await inflating(() => inflate(data, 16 * 2 ** 20, () => false), true)
+    expect(once.value.bytes.length).toBeLessThan(payload.length)
+    expect([once.value.retried, once.value.lossy, once.passes]).toEqual([false, true, 1])
+  })
+
+  it('says which byte a failed one-byte write carried, so a caller can cut the stream there', async () => {
+    const body = await deflateRaw(payload)
+    const tail = await inflating(() => inflate(concat([body, enc.encode('\n\n')]), 16 * 2 ** 20, () => true), true)
+    expect([tail.value.failed, tail.value.retried, tail.value.junkAt]).toEqual([true, false, body.length])
+    // Found by the replay, which writes the failed 1 KiB piece a byte at a time.
+    const long = concat([body, enc.encode('\n'.repeat(16))])
+    const replayed = await inflating(() => inflate(long, 16 * 2 ** 20, () => true), true)
+    expect([replayed.value.retried, replayed.value.junkAt]).toEqual([true, body.length])
+    // Refused, there is no byte to name; nor in a stream that ends cleanly.
+    const refused = await inflating(() => inflate(long, 16 * 2 ** 20, () => false), true)
+    expect([refused.value.lossy, refused.value.junkAt]).toEqual([true, -1])
+    expect((await inflating(() => inflate(body, 16 * 2 ** 20, () => true), true)).value.junkAt).toBe(-1)
+  })
+
+  it('hashes a streamed inner file read to the end of the archive', async () => {
+    // A streamed entry with no compressed size is read on past its stream, into the next entry and the directory.
+    const data = await deflateRaw(payload)
+    const archive = zip([
+      { name: 'setup.exe', data, method: 8, flags: 8, size: payload.length, compressed: 0 },
+      { name: 'readme.txt', data: enc.encode('hello') }
+    ])
+    const { value: facts } = await inflating(() => readZipDocument(archive), true)
+    expect(facts?.files[0]?.bytes).toEqual(payload)
+    expect(facts?.notes).toEqual([])
+  })
+
+  it('replays a streamed inner file whose failed write lost nothing, since only the file could say so', async () => {
+    // Incompressible, so one stored block of 2,048 bytes: the stream ends on a
+    // write boundary, and the junk after it fails a 1 KiB write that made no
+    // output. Only the declared size says nothing was lost, and the file
+    // writes that, so the write is run again all the same.
+    const noise = new Uint8Array(2_043)
+    for (let i = 0, x = 1; i < noise.length; i++) noise[i] = (x = (Math.imul(x, 1_103_515_245) + 12_345) >>> 0) >>> 24
+    const data = await deflateRaw(noise)
+    expect(data.length).toBe(2_048)
+    const archive = zip([
+      { name: 'setup.exe', data, method: 8, flags: 8, size: noise.length, compressed: 0 },
+      { name: 'readme.txt', data: enc.encode('hello') }
+    ])
+    const { value: facts, passes } = await inflating(() => readZipDocument(archive), true)
+    expect(facts?.files[0]?.bytes).toEqual(noise)
+    expect(passes).toBe(2)
+  })
+
+  it('does not hash what Chromium kept of a streamed inner file that declares that size', async () => {
+    // Declaring the size of the prefix a lossy first pass keeps skipped the
+    // replay, called the prefix whole and put its hash on the case.
+    const data = await deflateRaw(payload)
+    const kept = keptByChromium(data)
+    expect(kept.length).toBeLessThan(payload.length)
+    const archive = zip([
+      { name: 'setup.exe', data, method: 8, flags: 8, size: kept.length, compressed: 0 },
+      { name: 'readme.txt', data: enc.encode('hello') }
+    ])
+    const { value: facts } = await inflating(() => readZipDocument(archive), true)
+    // The whole stream comes out, longer than declared, so it is not whole.
+    expect(facts?.files[0]?.bytes).toBeNull()
+    expect(facts?.notes.join(' ')).toContain('1 inner file could not be read whole')
+  })
+
+  it('reads the targets at the end of a streamed .rels that declares the size Chromium kept', async () => {
+    // Hex noise in a comment, so the external target sits in the stream's last 1 KiB write.
+    let hex = ''
+    for (let i = 0, x = 1; i < 3_000; i++) {
+      x = (Math.imul(x, 1_103_515_245) + 12_345) >>> 0
+      hex += (x >>> 28).toString(16)
+    }
+    const rels = RELS.replace('  <Relationship Id="rId2"', `  <!-- ${hex} -->\n  <Relationship Id="rId2"`)
+    const data = await deflateRaw(enc.encode(rels))
+    const kept = keptByChromium(data)
+    expect(new TextDecoder().decode(kept)).not.toContain('lure.test')
+    const archive = zip([
+      { name: 'word/_rels/document.xml.rels', data, method: 8, flags: 8, size: kept.length, compressed: 0 },
+      { name: 'readme.txt', data: enc.encode('hello') }
+    ])
+    const { value: facts } = await inflating(() => readZipDocument(archive), true)
+    expect(facts?.externalTargets.map((t) => t.target)).toEqual(['https://lure.test/pay?a=1&b=2'])
+    expect(facts?.notes.join(' ')).not.toContain('could not be fully decompressed')
   })
 })

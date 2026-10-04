@@ -147,6 +147,13 @@
   stroke-width: 2;
   filter: drop-shadow(0 0 3px var(--interactive-accent));
 }
+/* No hover on a touch screen, and linking works by tap: show the dots. After
+   the base rule, so it wins at equal specificity; hover and active still win. */
+@media (hover: none) {
+  .pm-gantt-link-dot {
+    opacity: 0.5;
+  }
+}
 
 /* -- Gantt milestone ----------------------------------------------------- */
 .pm-gantt-milestone {

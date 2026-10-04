@@ -21,19 +21,24 @@ vi.mock('../ui/composites/properties', () => ({
   renderMultiSelect: vi.fn<() => void>(),
   renderAddProperty: vi.fn<() => void>()
 }))
+/** Each row's built cell, by label. */
+const cells: Record<string, unknown> = vi.hoisted(() => ({}))
 vi.mock('../ui/FormField', async () => {
   const { FakeEl } = await import('../../test/fakeDom')
   return {
     renderPropRow: (_grid: unknown, label: string, build: () => unknown) => {
-      build()
+      cells[label] = build()
       return new FakeEl('div', { attr: { 'data-label': label } })
     }
   }
 })
 vi.stubGlobal('createDiv', (info?: string) => new FakeEl('div', info))
 
+/** The board's own team; a test may set it before rendering. */
+let teamMembers = ['alice']
+
 function render(task: Task, onChange?: () => void, rerender = () => {}, boardType = 'soc'): void {
-  const project = { tasks: [task], teamMembers: ['alice'], customFields: [] } as unknown as Project
+  const project = { tasks: [task], teamMembers, customFields: [] } as unknown as Project
   const plugin = {
     store: {
       configFor: () => ({
@@ -66,6 +71,7 @@ const multi = (addLabel: string): MultiOpts => {
 }
 
 beforeEach(() => {
+  teamMembers = ['alice']
   vi.mocked(renderMultiSelect).mockClear()
   vi.mocked(renderSelectControl).mockClear()
 })
@@ -90,6 +96,26 @@ describe('renderTaskFormFields', () => {
     multi('Add dependency').remove('other-id')
     expect(task.assignees).toEqual(['bob'])
     expect(onChange).toHaveBeenCalledTimes(7)
+  })
+})
+
+describe('Progress and assignees', () => {
+  it('progress off the 25 grid draws where it is, not snapped to the next notch', () => {
+    const slider = () => (cells.Progress as FakeEl).find('input') as FakeEl & { step: string }
+    render(makeTask({ progress: 40 }))
+    expect([slider().step, slider().value]).toEqual(['1', '40'])
+    render(makeTask({ progress: 50 }))
+    expect(slider().step).toBe('25')
+  })
+
+  it('a blank team member is not offered as an assignee', () => {
+    teamMembers = ['alice', '', '  ']
+    render(makeTask({}))
+    expect(
+      multi('Assign')
+        .options()
+        .map((o) => o.id)
+    ).toEqual(['alice'])
   })
 })
 

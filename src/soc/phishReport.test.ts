@@ -1,8 +1,34 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deflateRaw, zip } from '../../test/zip'
+import { type Obj, buildPdf, inflating, objStm, onePage, zlib } from '../../test/pdf'
 import { hashBytes } from './eml'
-import { REBUILT_FACT, analysePhishing, caseIocs, formatPhishReport, linksSection, structureLines } from './phish'
-import { formatIocLine } from './ioc'
+import {
+  REBUILT_FACT,
+  analysePhishing,
+  caseIocs,
+  formatPhishReport,
+  linksSection,
+  noteScanText,
+  structureLines
+} from './phish'
+import { extractIocsFromText, formatIocLine } from './ioc'
+import { GAP } from './pdf'
+
+// Counts the indicator scans of one exact text, for the test that a script
+// shared by many actions is read once, and lets the deadline test act on a
+// scan. Every other call passes straight on.
+const iocScan = vi.hoisted(() => ({ watch: '', count: 0, onScan: null as ((text: string) => void) | null }))
+vi.mock('./ioc', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./ioc')>()
+  return {
+    ...real,
+    extractIocsFromText: (...args: Parameters<typeof real.extractIocsFromText>) => {
+      if (args[0] === iocScan.watch) iocScan.count++
+      iocScan.onScan?.(args[0])
+      return real.extractIocsFromText(...args)
+    }
+  }
+})
 
 // A switch for the one test that needs the PDF reader to break. Everything
 // else in this file gets the real reader.
@@ -795,7 +821,7 @@ describe('a message’s pictures share one budget', () => {
     expect(held).toBeLessThanOrEqual(64_000_000)
     const last = report.attachments[report.attachments.length - 1]
     expect(last.office?.notes.join(' ')).toContain(
-      "this message's budget for pictures and inner files was used up by what was read before them"
+      "this message's budget for pictures, inner files and decompressed PDF data was used up by what was read before them"
     )
   })
 
@@ -818,7 +844,7 @@ describe('a message’s pictures share one budget', () => {
     const { pdf: read } = report.attachments[2]
     expect(read?.images).toEqual([])
     expect(read?.notes).toContain(
-      "1 image stream was extracted and not kept: this message's budget for pictures and inner files was used up by what was read before it, so it is not hashed or drawn — unread, not absent."
+      "1 image stream was extracted and not kept: this message's budget for pictures, inner files and decompressed PDF data was used up by what was read before it, so it is not hashed or drawn — unread, not absent."
     )
     // Alone, the same PDF keeps its picture and says nothing about a budget.
     const alone = await analysePhishing(mailWith(attached('scan.pdf', scan, 'application/pdf')), [], [])
@@ -1473,6 +1499,51 @@ describe('Indicators and the case are one list', () => {
     expect(caseIocs(report, mail).map((i) => i.value)).not.toContain('www.paypal.com')
   })
 
+  it('names a decoy host written without a scheme, and keeps it on the case saying what it is', async () => {
+    const mail = htmlOnly(
+      '<p>Sign in at <a href="https://evil.test/x">www.paypal.com</a> or <a href="https://evil.test/y">paypal.com/signin</a>.</p>' +
+        '<p>Mail <a href="mailto:billing@acme-payments.xyz">billing@acme-payments.xyz</a>, or get <a href="https://cdn.test/a/invoice.pdf">invoice.pdf</a></p>'
+    )
+    const report = await analysePhishing(mail, [], [])
+    const flags = (raw: string): string[] | undefined => report.links.find((l) => l.raw === raw)?.flags
+    expect(flags('https://evil.test/x')).toEqual(['shown as a link to www.paypal.com, points at evil.test'])
+    expect(flags('https://evil.test/y')).toEqual(['shown as a link to paypal.com, points at evil.test'])
+    // A file name is not a host, and an address shown over its own mailto: is still an indicator.
+    expect(flags('https://cdn.test/a/invoice.pdf')).toEqual([])
+    const iocs = caseIocs(report, mail)
+    // The brand or a lookalike of it, which only the analyst can tell apart: kept, and said to be display text.
+    expect(iocs.find((i) => i.value === 'www.paypal.com')?.note).toBe(
+      "shown as a link's text; the link points at evil.test"
+    )
+    expect(iocs.map((i) => i.value)).toContain('billing@acme-payments.xyz')
+  })
+
+  it('does not call a link shown as its own site a decoy, and keeps a lookalike shown over a short link', async () => {
+    const mail = htmlOnly(
+      '<p><a href="https://www.brandmail.com/">brandmail.com</a> and <a href="https://bit.ly/x">royalmail-redelivery.com</a></p>'
+    )
+    const report = await analysePhishing(mail, [], [])
+    const flags = (raw: string): string[] | undefined => report.links.find((l) => l.raw === raw)?.flags
+    expect(flags('https://www.brandmail.com/')).toEqual([])
+    expect(flags('https://bit.ly/x')).toEqual(['shown as a link to royalmail-redelivery.com, points at bit.ly'])
+    expect(caseIocs(report, mail).map((i) => i.value)).toContain('royalmail-redelivery.com')
+  })
+
+  it('calls a link a decoy when it is shown as another site on the same shared host', async () => {
+    const mail = htmlOnly(
+      '<p><a href="https://evil.sharepoint.com/x">contoso.sharepoint.com</a> <a href="https://paypal.com.evil.test/">paypal.com</a> <a href="https://click.brand.test/r">brand.test</a></p>'
+    )
+    const report = await analysePhishing(mail, [], [])
+    const flags = (raw: string): string[] | undefined => report.links.find((l) => l.raw === raw)?.flags
+    expect(flags('https://evil.sharepoint.com/x')).toContain(
+      'shown as a link to contoso.sharepoint.com, points at evil.sharepoint.com'
+    )
+    expect(flags('https://paypal.com.evil.test/')).toContain(
+      'shown as a link to paypal.com, points at paypal.com.evil.test'
+    )
+    expect(flags('https://click.brand.test/r')).toEqual([])
+  })
+
   it('keeps two links whose paths differ only in case, in both lists', async () => {
     // bit.ly paths are case-sensitive; the case compared them lower-cased and
     // dropped the PDF's link the Indicators tab listed.
@@ -1713,5 +1784,1009 @@ describe('end to end, on the fixes the readers made', () => {
     ]) {
       expect(outsideFences).toContain(shown)
     }
+  })
+})
+
+// ─── The PDF object read, end to end ────────────────────────────────────────
+
+const HELVETICA = '<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >>'
+const LURE_TEXT = 'Your invoice is ready: https://pay-lure.test/inv'
+/** Everything that acts is packed in object stream 10, where the byte scan cannot see it. */
+const LURE_MEMBERS = [
+  { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>' },
+  { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+  {
+    num: 3,
+    body: '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R /Annots [6 0 R] >>'
+  },
+  { num: 5, body: '<< /S /JavaScript /JS (app.launchURL\\("https://js-lure.test/a"\\);) >>' },
+  {
+    num: 6,
+    body: '<< /Type /Annot /Subtype /Link /Rect [0 0 100 100] /A << /S /URI /URI (https://objstm-lure.test/login) >> >>'
+  },
+  { num: 7, body: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>' }
+]
+const LURE = buildPdf(
+  [
+    objStm(10, LURE_MEMBERS),
+    { num: 4, body: '<< >>', stream: `BT /F1 12 Tf 72 700 Td (${LURE_TEXT}) Tj ET`, flate: true }
+  ],
+  { xrefStream: true }
+)
+
+/** A PDF whose pages draw these strings, one page each, in Helvetica. */
+function pagesOf(...texts: string[]): Uint8Array {
+  const objects: Obj[] = [
+    { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+    {
+      num: 2,
+      body: `<< /Type /Pages /Kids [${texts.map((_, i) => `${3 + 2 * i} 0 R`).join(' ')}] /Count ${texts.length} >>`
+    }
+  ]
+  texts.forEach((text, i) => {
+    objects.push(
+      {
+        num: 3 + 2 * i,
+        body: `<< /Type /Page /Parent 2 0 R /Resources << /Font ${HELVETICA} >> /Contents ${4 + 2 * i} 0 R >>`
+      },
+      { num: 4 + 2 * i, body: '<< >>', stream: `BT /F1 12 Tf 72 700 Td (${text}) Tj ET`, flate: true }
+    )
+  })
+  return buildPdf(objects)
+}
+
+const pdfMail = (name: string, bytes: Uint8Array): string => mailWith(attached(name, bytes, 'application/pdf'))
+
+/** The one note a PDF gets when words beside a gap were left out of its indicators. */
+const gapNote = (n: number): string =>
+  `${n} word(s) next to a place where this reader skipped or could not read part of the drawing (or cut a value or script) were left out of the indicators, since what is left of a word there can name another address; where the text is quoted, […] marks the place.`
+
+/** The indicators a report's case carries from PDF page text, form fields and scripts. */
+const fromText = (iocs: { note?: string }[]): number =>
+  iocs.filter((i) => /^in (the text of page|invisible text|a form field|JavaScript)/.test(i.note ?? '')).length
+
+describe('a PDF read for its objects and page text', () => {
+  it('adds the packed link, the page text and the script to the case, each saying where it was read', async () => {
+    const mail = pdfMail('lure.pdf', LURE)
+    const report = await analysePhishing(mail, [], [])
+    const iocs = caseIocs(report, mail)
+    expect(iocs).toContainEqual({ type: 'url', value: 'https://objstm-lure.test/login', note: 'inside lure.pdf' })
+    expect(iocs).toContainEqual({
+      type: 'url',
+      value: 'https://pay-lure.test/inv',
+      note: 'in the text of page 1 of lure.pdf, as decoded here'
+    })
+    expect(iocs).toContainEqual({ type: 'url', value: 'https://js-lure.test/a', note: 'in JavaScript inside lure.pdf' })
+    expect(report.indicators).toContain('url: hxxps://objstm-lure[.]test/login')
+    expect(report.indicators).toContain('url: hxxps://pay-lure[.]test/inv')
+  })
+
+  it('reads JavaScript for addresses only, so `this.info` is not listed as a domain', async () => {
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 5, body: '<< /S /JavaScript /JS 6 0 R >>' },
+      { num: 6, body: '<< >>', stream: 'var d = this.info; app.launchURL("https://js-only.test/x");', flate: true }
+    ])
+    const mail = pdfMail('form.pdf', bytes)
+    const iocs = caseIocs(await analysePhishing(mail, [], []), mail)
+    expect(iocs).toContainEqual({ type: 'url', value: 'https://js-only.test/x', note: 'in JavaScript inside form.pdf' })
+    expect(iocs.some((i) => i.value === 'this.info')).toBe(false)
+  })
+
+  it('quotes the page and the script in their own section, between the message body and the indicators', async () => {
+    const report = await analysePhishing(pdfMail('lure.pdf', LURE), [], [])
+    const md = formatPhishReport(report)
+    const heading = '### Attachment text — decoded here, never rendered or run'
+    expect(md.indexOf('### Message body')).toBeLessThan(md.indexOf(heading))
+    expect(md.indexOf(heading)).toBeLessThan(md.indexOf('### Indicators'))
+    expect(md).toContain(`Page 1 of \`lure.pdf\`, as its fonts decode it:\n\n\`\`\`\n${LURE_TEXT}\n\`\`\``)
+    expect(md).toContain(
+      'JavaScript in `lure.pdf`, object 5, packed in object stream 10, not run:\n\n```script\napp.launchURL("https://js-lure.test/a");\n```'
+    )
+    const lines = structureLines(report.attachments[0])
+    expect(lines).toContain(
+      '  - PDF action `/JavaScript` when the document opens (/OpenAction) (object 5, packed in object stream 10)'
+    )
+    expect(lines).toContain(
+      '  - PDF link (/URI), object 6, packed in object stream 10, on page 1: `hxxps://objstm-lure[.]test/login`'
+    )
+    expect(lines).toContain(
+      "  - PDF page text: of 1 page(s) read whole, 1 drew text this reader could decode (the document declares 1) — quoted under Attachment text below, up to that section's 150,000-character limit"
+    )
+    // No PDF, no section: an ordinary mail's report is as it was.
+    expect(formatPhishReport(await analysePhishing(MAIL, [], []))).not.toContain(heading)
+  })
+
+  it('keeps hostile page text inside one fence, every invisible character named', async () => {
+    // Code 1 maps to U+202E through the font's own /ToUnicode, which a reader trusts.
+    const fonts =
+      '<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 5 0 R >> >>'
+    const cmap =
+      'begincmap 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <01> <202E> endbfchar endcmap'
+    const bytes = onePage('BT /F1 12 Tf 72 700 Td (``` ![[secret]] <img src=x> \\001gpj.exe) Tj ET', {
+      fonts,
+      extra: [{ num: 5, body: '<< >>', stream: cmap }]
+    })
+    const md = formatPhishReport(await analysePhishing(pdfMail('hostile.pdf', bytes), [], []))
+    expect(md).toMatch(/\n(`{4,})\n``` !\[\[secret\]\] <img src=x> <U\+202E>gpj\.exe\n\1\n/)
+    expect(md).not.toContain('\u202E')
+    const outsideFences = md.replace(/^(`{3,})\n[\s\S]*?\n\1$/gm, '')
+    expect(outsideFences.split('\n').filter((l) => l.startsWith('![['))).toEqual([])
+    expect(outsideFences).not.toContain('<img')
+  })
+
+  it('keeps invisible text and page objects outside the tree off the case, but not an OCR layer', async () => {
+    // Nothing else on the page: invisible text alone, with no picture under it, is not an OCR layer.
+    const hidden = onePage('BT 3 Tr /F1 12 Tf 72 700 Td (https://hidden-lure.test/x) Tj ET')
+    const scan = onePage(
+      'q 612 0 0 792 0 0 cm /Im1 Do Q BT 3 Tr /F1 12 Tf 72 700 Td (Pay at https://ocr.test/x) Tj ET',
+      {
+        fonts: `${HELVETICA} /XObject << /Im1 5 0 R >>`,
+        extra: [
+          {
+            num: 5,
+            body: '<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 >>',
+            stream: '\xff',
+            flate: true
+          }
+        ]
+      }
+    )
+    const orphan = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+      { num: 3, body: `<< /Type /Page /Parent 2 0 R /Resources << /Font ${HELVETICA} >> /Contents 4 0 R >>` },
+      { num: 4, body: '<< >>', stream: 'BT /F1 12 Tf 72 700 Td (Tree page) Tj ET', flate: true },
+      { num: 6, body: `<< /Type /Page /Resources << /Font ${HELVETICA} >> /Contents 7 0 R >>` },
+      { num: 7, body: '<< >>', stream: 'BT /F1 12 Tf 72 700 Td (https://orphan-lure.test/x) Tj ET', flate: true }
+    ])
+    const mail = mailWith(
+      attached('hidden.pdf', hidden, 'application/pdf'),
+      attached('scan.pdf', scan, 'application/pdf'),
+      attached('orphan.pdf', orphan, 'application/pdf')
+    )
+    const report = await analysePhishing(mail, [], [])
+    const iocs = caseIocs(report, mail)
+    expect(iocs.some((i) => i.value.includes('hidden-lure'))).toBe(false)
+    expect(iocs.some((i) => i.value.includes('orphan-lure'))).toBe(false)
+    expect(iocs.find((i) => i.value === 'https://ocr.test/x')?.note).toBe(
+      'in invisible text on page 1 of scan.pdf (a page that draws a picture and no visible text this reader decoded: an OCR layer, or text hidden from the reader), as decoded here'
+    )
+    const md = formatPhishReport(report)
+    expect(md).toContain(
+      'Page 1 of `hidden.pdf`, drawn so a reader does not show it (invisible text mode, zero size, or a hidden annotation); the case takes no indicators from it:\n\n```no-indicators\nhttps://hidden-lure.test/x\n```'
+    )
+    expect(md).toContain(
+      'Page 1 of `scan.pdf`, drawn invisibly on a page that draws a picture and no visible text this reader decoded — the shape text recognition (OCR) leaves on a scanned page, and also a way to hide text from a reader:'
+    )
+    expect(md).toContain(
+      'A page object of `orphan.pdf` that the page tree read here does not list (object 6) — a reader following that tree does not show it; the case takes no indicators from it:\n\n```no-indicators\nhttps://orphan-lure.test/x\n```'
+    )
+    expect(md).toContain(
+      '  - PDF pictures drawn on page 1: `/FlateDecode` 1×1 (object 5), stored `/FlateDecode`: not shown here'
+    )
+  })
+
+  it('points a picture a page draws at the image extracted from the same stream', async () => {
+    const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff, 0xd9])
+    const bytes = onePage('q 100 0 0 100 0 0 cm /Im1 Do Q', {
+      fonts: `${HELVETICA} /XObject << /Im1 5 0 R >>`,
+      extra: [
+        { num: 5, body: '<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter /DCTDecode >>', stream: jpeg }
+      ]
+    })
+    const lines = structureLines((await analysePhishing(pdfMail('qr.pdf', bytes), [], [])).attachments[0])
+    const picture = lines.find((l) => l.startsWith('  - PDF pictures drawn on page 1: '))
+    const at = /shown below as the picture at byte (\d+)$/.exec(picture ?? '')?.[1]
+    expect(picture).toBe(
+      `  - PDF pictures drawn on page 1: \`/DCTDecode\` 1×1 (object 5), shown below as the picture at byte ${at}`
+    )
+    // Below it, as the line says.
+    const image = lines.findIndex((l) => l.startsWith(`  - embedded picture \`byte ${at} (/DCTDecode)\`: JPEG image`))
+    expect(image).toBeGreaterThan(lines.indexOf(picture ?? ''))
+  })
+
+  it('says a page drawn only in fonts it could not decode was not decoded, and fences none of it', async () => {
+    const bytes = onePage('BT /F1 12 Tf 72 700 Td <000100020003> Tj ET', {
+      fonts:
+        '<< /F1 << /Type /Font /Subtype /Type0 /BaseFont /Mystery /Encoding /Identity-H /DescendantFonts [5 0 R] >> >>',
+      extra: [
+        {
+          num: 5,
+          body: '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mystery /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>'
+        }
+      ]
+    })
+    const report = await analysePhishing(pdfMail('glyphs.pdf', bytes), [], [])
+    const md = formatPhishReport(report)
+    expect(md).toContain(
+      '### Attachment text — decoded here, never rendered or run\n\nPage 1 of `glyphs.pdf`: 3 characters drawn in fonts this reader could not decode.\n\n### Indicators'
+    )
+    expect(structureLines(report.attachments[0])).toContain(
+      '  - PDF page text: of 1 page(s) read whole, 0 drew text this reader could decode (the document declares 1)'
+    )
+  })
+
+  it('adds at most 100 indicators from one file’s text and 500 from one message’s, and counts the rest', async () => {
+    const urls = (tag: string): string => Array.from({ length: 150 }, (_, i) => `https://${tag}-${i}.test/p`).join(' ')
+    const one = pdfMail('links.pdf', onePage(`BT /F1 12 Tf 72 700 Td (${urls('one')}) Tj ET`))
+    const single = await analysePhishing(one, [], [])
+    expect(fromText(caseIocs(single, one))).toBe(100)
+    expect(single.attachments[0].pdf?.notes).toContain(
+      "50 further indicator(s) found in this PDF's page text, form fields or JavaScript are not added to the case from this file (one also found elsewhere in the message can be in it from there): this reader adds at most 100 per file and 500 per message."
+    )
+    const six = mailWith(
+      ...Array.from({ length: 6 }, (_, n) =>
+        attached(`links${n}.pdf`, onePage(`BT /F1 12 Tf 72 700 Td (${urls(`f${n}`)}) Tj ET`), 'application/pdf')
+      )
+    )
+    const report = await analysePhishing(six, [], [])
+    expect(fromText(caseIocs(report, six))).toBe(500)
+    expect(report.attachments[5].pdf?.notes.join(' ')).toContain('150 further indicator(s) found in this PDF')
+  })
+
+  it('reads three megabytes of script for addresses quickly, and still adds only 100', async () => {
+    // Each script is read whole for indicators (up to 1 MiB), not just the part quoted.
+    const script = (n: number): string =>
+      Array.from({ length: 24_000 }, (_, i) => `var u${i} = "https://s${n}-${i}.test/p"; `).join('')
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /OpenAction [5 0 R 6 0 R 7 0 R] >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      ...[5, 6, 7].map((num) => ({ num, body: `<< /S /JavaScript /JS ${num + 10} 0 R >>` })),
+      ...[15, 16, 17].map((num) => ({ num, body: '<< >>', stream: script(num), flate: true }))
+    ])
+    const mail = pdfMail('heavy.pdf', bytes)
+    const at = performance.now()
+    const report = await analysePhishing(mail, [], [])
+    // About 0.3 s alone. The ceiling catches a blow-up, not a slow or busy
+    // runner: at 2 s it failed under a loaded suite on slower cores.
+    expect(performance.now() - at).toBeLessThan(10_000)
+    expect(report.attachments[0].pdf?.parsed?.scripts.map((s) => s.source.length)).toEqual([
+      script(15).length,
+      script(16).length,
+      script(17).length
+    ])
+    expect(fromText(caseIocs(report, mail))).toBe(100)
+  })
+
+  it('keeps an encrypted file’s /URI strings off the case, and says they are stored encrypted', async () => {
+    const bytes = buildPdf(
+      [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+        { num: 3, body: '<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>' },
+        { num: 6, body: '<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://cipher-lure.test/x) >> >>' },
+        { num: 30, body: '<< /Filter /Standard /V 2 /R 3 >>' }
+      ],
+      { trailer: '/Encrypt 30 0 R' }
+    )
+    const mail = pdfMail('locked.pdf', bytes)
+    const report = await analysePhishing(mail, [], [])
+    const [a] = report.attachments
+    // The byte scan reads it; the bytes are ciphertext, whatever they look like.
+    expect(a.pdf?.uris).toEqual(['https://cipher-lure.test/x'])
+    expect(caseIocs(report, mail).some((i) => i.value.includes('cipher-lure'))).toBe(false)
+    expect(a.inside.some((l) => l.includes('cipher-lure'))).toBe(false)
+    const lines = structureLines(a)
+    expect(lines[0]).toBe('  - PDF 1.7, encrypted (its trailer names /Encrypt)')
+    expect(lines).toContain(
+      '  - PDF /URI string, stored encrypted — not what a reader shows: `hxxps://cipher-lure[.]test/x`'
+    )
+    expect(lines.some((l) => l.startsWith('  - PDF link'))).toBe(false)
+  })
+
+  it('types and hashes an embedded file read whole, and puts its hash in the case', async () => {
+    const exe = `MZ${'\x90'.repeat(100)}`
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 8, body: '<< /Type /Filespec /UF (invoice.pdf) /F (invoice.exe.) /EF << /F 9 0 R >> >>' },
+      { num: 9, body: '<< /Type /EmbeddedFile /Params << /Size 1234 >> >>', stream: exe, flate: true }
+    ])
+    const sha = await hashBytes(Uint8Array.from(exe, (c) => c.charCodeAt(0)))
+    const mail = pdfMail('lure.pdf', bytes)
+    const report = await analysePhishing(mail, [], [])
+    expect(caseIocs(report, mail)).toContainEqual({
+      type: 'hash',
+      value: sha,
+      note: 'invoice.pdf inside lure.pdf (hashed here)'
+    })
+    const [file] = report.attachments[0].pdf?.parsed?.embeddedFiles ?? []
+    // The report keeps what it is, not the file.
+    expect(Object.keys(file).sort()).toEqual(['mismatch', 'name', 'names', 'sha256', 'size', 'sniffed', 'where'])
+    expect(structureLines(report.attachments[0])).toContain(
+      `  - PDF embedded file \`invoice.pdf\` (also named \`invoice.exe.\`): 1234 bytes declared; named like an executable or script; named .pdf but the bytes begin as Windows executable (MZ); SHA-256 ${sha} (computed here); not opened here (object 8)`
+    )
+  })
+
+  it('reads no PDF data past the message budget, and says which budget', async () => {
+    // Two archives inflate the whole 64 MB between them before the PDF is read.
+    const zeros = await deflateRaw(new Uint8Array(8_000_000))
+    const archive = zip([1, 2, 3, 4].map((n) => ({ name: `blob${n}.bin`, data: zeros, method: 8, size: 8_000_000 })))
+    const lure = onePage(`BT /F1 12 Tf 72 700 Td (${LURE_TEXT}) Tj ET`)
+    const report = await analysePhishing(
+      mailWith(attached('a.zip', archive), attached('b.zip', archive), attached('lure.pdf', lure, 'application/pdf')),
+      [],
+      []
+    )
+    const { pdf: read } = report.attachments[2]
+    expect(read?.notes.join(' ')).toContain('budget for pictures, inner files and decompressed PDF data')
+    expect(read?.parsed?.pages.every((page) => !page.text && !page.hidden)).toBe(true)
+    // Alone, the same file is read.
+    const alone = await analysePhishing(pdfMail('lure.pdf', lure), [], [])
+    expect(alone.attachments[0].pdf?.parsed?.pages[0].text).toBe(LURE_TEXT)
+  })
+
+  it('copies at most 150,000 characters of attachment text into the report, and says how much it left out', async () => {
+    // Three files of three full pages each: 9 × 19,999 characters once each page's trailing space is trimmed.
+    const page = 'word '.repeat(4000)
+    const files = [1, 2, 3].map((n) => attached(`long${n}.pdf`, pagesOf(page, page, page), 'application/pdf'))
+    const md = formatPhishReport(await analysePhishing(mailWith(...files), [], []))
+    const section = md.slice(md.indexOf('### Attachment text'), md.indexOf('### Indicators'))
+    // The cut falls inside a word, so the mark follows what is kept of it.
+    const fenced = [...section.matchAll(/^(`{3,})\n([\s\S]*?)\n\1$/gm)].reduce(
+      (n, m) => n + m[2].replaceAll('[…]', '').length,
+      0
+    )
+    expect(fenced).toBe(150_000)
+    expect(section).toContain(' wo[…]\n')
+    // The card draws 4,000 characters of a page, so the rest is NOT "shown on
+    // the analysis card", as this line used to say: it says what is.
+    const rest =
+      "The rest of the attachment text (29991 characters) is not copied here. The analysis card quotes each script as this report would, but draws only the first 4,000 characters of each page's text and of its invisible text, so page text past both limits is shown nowhere; the indicators this reader took from it are still listed under Indicators."
+    expect(section).toContain(rest)
+    // Nothing after the line that says the rest is not copied.
+    expect(section.trimEnd().endsWith(rest)).toBe(true)
+  })
+
+  it('says invisible text drawn only in fonts it could not decode was not decoded, and fences none of it', async () => {
+    // F2 is Identity-H with no /ToUnicode: its three glyphs are drawn invisibly, under visible Helvetica text.
+    const bytes = onePage(
+      'BT /F1 12 Tf 72 700 Td (Visit https://plain2.test/x now) Tj 3 Tr /F2 12 Tf 0 -20 Td <000100020003> Tj ET',
+      {
+        fonts: `<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> /F2 << /Type /Font /Subtype /Type0 /BaseFont /Mystery /Encoding /Identity-H /DescendantFonts [5 0 R] >> >>`,
+        extra: [
+          {
+            num: 5,
+            body: '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mystery /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>'
+          }
+        ]
+      }
+    )
+    const md = formatPhishReport(await analysePhishing(pdfMail('z.pdf', bytes), [], []))
+    expect(md).not.toMatch(/^�+$/m)
+    expect(md).toContain(
+      'Page 1 of `z.pdf`, drawn so a reader does not show it (invisible text mode, zero size, or a hidden annotation); the case takes no indicators from it: 3 characters drawn in fonts this reader could not decode.'
+    )
+    // The three are in the invisible text, so the visible block does not claim them.
+    expect(md).toContain('Page 1 of `z.pdf`, as its fonts decode it:\n\n```\nVisit https://plain2.test/x now\n```')
+  })
+
+  it('names the file before the caveat in a case note', async () => {
+    // A font with neither /ToUnicode nor /Encoding is read through an assumed one.
+    const bytes = onePage('BT /F3 12 Tf 72 700 Td (Visit https://assumed-lure.test/x now) Tj ET', {
+      fonts: '<< /F3 << /Type /Font /Subtype /Type1 /BaseFont /CustomSans >> >>'
+    })
+    const mail = pdfMail('x.pdf', bytes)
+    const iocs = caseIocs(await analysePhishing(mail, [], []), mail)
+    expect(iocs.find((i) => i.value === 'https://assumed-lure.test/x')?.note).toBe(
+      'in the text of page 1 of x.pdf (partly read through an assumed encoding), as decoded here'
+    )
+    // An OCR-shaped page's invisible text says so of itself, and the visible text, which has none, does not.
+    const scan = onePage(
+      'q 612 0 0 792 0 0 cm /Im1 Do Q BT 3 Tr /F3 12 Tf 72 700 Td (Pay at https://ocr-assumed.test/x) Tj ET',
+      {
+        fonts: '<< /F3 << /Type /Font /Subtype /Type1 /BaseFont /CustomSans >> >> /XObject << /Im1 5 0 R >>',
+        extra: [
+          {
+            num: 5,
+            body: '<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 >>',
+            stream: '\xff',
+            flate: true
+          }
+        ]
+      }
+    )
+    const ocrMail = pdfMail('scan.pdf', scan)
+    const report = await analysePhishing(ocrMail, [], [])
+    expect(caseIocs(report, ocrMail).find((i) => i.value === 'https://ocr-assumed.test/x')?.note).toBe(
+      'in invisible text on page 1 of scan.pdf (a page that draws a picture and no visible text this reader decoded: an OCR layer, or text hidden from the reader; partly read through an assumed encoding), as decoded here'
+    )
+    expect(formatPhishReport(report)).toContain(
+      'Page 1 of `scan.pdf`, drawn invisibly on a page that draws a picture and no visible text this reader decoded — the shape text recognition (OCR) leaves on a scanned page, and also a way to hide text from a reader; partly read through an assumed encoding:'
+    )
+  })
+
+  it('takes no indicator from the word a cut falls in, which can name another host', async () => {
+    const lure = 'https://login.microsoftonline.com.evil-lure.test/owa'
+    // The page stops at 20,000 characters, 32 into the lure: `https://login.microsoftonline.co`.
+    const page = onePage(`BT /F1 10 Tf 72 700 Td (${'a'.repeat(19_942)} https://kept-lure.test/x ${lure}) Tj ET`)
+    // A field value stops at 1,000: `https://login.microsoftonlin`. A script at 1 MiB: `https://portal.office.co`.
+    const form = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /OpenAction 7 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 6, body: `<< /FT /Tx /T (to) /V (${'x'.repeat(971)} ${lure}) >>` },
+      { num: 7, body: '<< /S /JavaScript /JS 8 0 R >>' },
+      {
+        num: 8,
+        body: '<< >>',
+        stream: `${' '.repeat(2 ** 20 - 24)}https://portal.office.com.evil-lure.test/x`,
+        flate: true
+      }
+    ])
+    const mail = mailWith(
+      attached('statement.pdf', page, 'application/pdf'),
+      attached('form.pdf', form, 'application/pdf')
+    )
+    const report = await analysePhishing(mail, [], [])
+    const [text, fields] = report.attachments.map((a) => a.pdf?.parsed)
+    expect(text?.pages[0].text.endsWith(` https://login.microsoftonline.co${GAP}`)).toBe(true)
+    expect(fields?.fields[0].value.endsWith(` https://login.microsoftonlin${GAP}`)).toBe(true)
+    expect(fields?.scripts[0].source.endsWith(` https://portal.office.co${GAP}`)).toBe(true)
+    const iocs = caseIocs(report, mail)
+    expect(iocs.filter((i) => /microsoftonlin|portal\.office/.test(i.value))).toEqual([])
+    // A value that ends before the cut is still taken.
+    expect(iocs).toContainEqual({
+      type: 'url',
+      value: 'https://kept-lure.test/x',
+      note: 'in the text of page 1 of statement.pdf, as decoded here'
+    })
+    expect(report.attachments.map((a) => a.pdf?.notes.filter((n) => n.includes(' word(s) next to ')))).toEqual([
+      [gapNote(1)],
+      [gapNote(2)]
+    ])
+    // Quoted as read, with the mark where the cut is.
+    const md = formatPhishReport(report)
+    expect(md).toContain(' https://login.microsoftonline.co[…]\n')
+    expect(md).toContain(' https://login.microsoftonlin[…]`')
+    expect(md).not.toContain(GAP)
+  })
+
+  it('says a picture dropped by the message budget is not shown, not that it was not extracted', async () => {
+    // The archives leave 1,000 bytes: the page is read, its 5,000-byte picture is extracted and not kept.
+    const zeros = await deflateRaw(new Uint8Array(8_000_000))
+    const blob = (n: number, data = zeros, size = 8_000_000) => ({ name: `blob${n}.bin`, data, method: 8, size })
+    const a = zip([1, 2, 3, 4].map((n) => blob(n)))
+    const b = zip([blob(1), blob(2), blob(3), blob(4, await deflateRaw(new Uint8Array(7_999_000)), 7_999_000)])
+    const jpeg = new Uint8Array(5_000)
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0])
+    jpeg.set([0xff, 0xd9], 4_998)
+    const qr = onePage('q 100 0 0 100 0 0 cm /Im1 Do Q', {
+      fonts: `${HELVETICA} /XObject << /Im1 5 0 R >>`,
+      extra: [
+        { num: 5, body: '<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter /DCTDecode >>', stream: jpeg }
+      ]
+    })
+    const report = await analysePhishing(
+      mailWith(attached('a.zip', a), attached('b.zip', b), attached('qr.pdf', qr, 'application/pdf')),
+      [],
+      []
+    )
+    const lines = structureLines(report.attachments[2])
+    expect(lines).toContain(
+      '  - PDF pictures drawn on page 1: `/DCTDecode` 1×1 (object 5), stored `/DCTDecode`: not shown here'
+    )
+    expect(lines.join('\n')).toContain('1 image stream was extracted and not kept')
+  })
+
+  it('keeps an action with 2,000 /AA events to one short line', async () => {
+    // Every key is an event of its own, and they all run one script.
+    const key = (i: number): string =>
+      String.fromCharCode(65 + (i % 26), 65 + (((i / 26) % 26) | 0), (65 + i / 676) | 0, 65)
+    const bytes = buildPdf([
+      {
+        num: 1,
+        body: `<< /Type /Catalog /Pages 2 0 R /AA << ${Array.from({ length: 2000 }, (_, i) => `/${key(i)} 5 0 R`).join(' ')} >> >>`
+      },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 5, body: '<< /S /JavaScript /JS (app.alert\\(1\\)) >>' }
+    ])
+    const lines = structureLines((await analysePhishing(pdfMail('aa.pdf', bytes), [], [])).attachments[0])
+    const action = lines.filter((l) => l.startsWith('  - PDF action '))
+    expect(action).toHaveLength(1)
+    // Joined whole it was 54,038 characters.
+    expect(action[0].length).toBeLessThan(4_096)
+    expect(action[0]).toMatch(/ and 1992 more trigger\(s\) \(object 5\)$/)
+  })
+
+  it('says a name in an encrypted file was not read, not that there is none', async () => {
+    const bytes = buildPdf(
+      [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+        { num: 6, body: '<< /FT /Tx /T (password) /V (hunter2) >>' },
+        // The stream proves itself cleartext by its zlib checksum; the names are strings, so ciphertext.
+        { num: 8, body: '<< /Type /Filespec /UF (payload.exe) /EF << /F 9 0 R >> >>' },
+        { num: 9, body: '<< /Type /EmbeddedFile >>', stream: 'MZxxxx', flate: true },
+        { num: 30, body: '<< /Filter /Standard /V 2 /R 3 >>' }
+      ],
+      { trailer: '/Encrypt 30 0 R' }
+    )
+    const mail = pdfMail('locked.pdf', bytes)
+    const report = await analysePhishing(mail, [], [])
+    const unread = '(no name read: this file is encrypted, and a name stored encrypted is not read)'
+    const lines = structureLines(report.attachments[0])
+    expect(lines.find((l) => l.startsWith('  - PDF embedded file '))).toMatch(
+      `  - PDF embedded file ${unread}: size not declared; bytes begin as Windows executable (MZ); SHA-256 `
+    )
+    expect(lines).toContain(
+      `  - PDF form field ${unread} (\`/Tx\`): no value listed (this file is encrypted, and a value stored encrypted is not read)`
+    )
+    expect(caseIocs(report, mail).find((i) => i.type === 'hash' && i.note?.includes('inside locked.pdf'))?.note).toBe(
+      `${unread} inside locked.pdf (hashed here)`
+    )
+  })
+
+  it('keeps a whole visible link when only the invisible text on its page was cut', async () => {
+    // A word of 25,000 characters drawn invisibly is cut at 20,000; the visible line is read whole.
+    const bytes = onePage(
+      `BT /F1 12 Tf 72 700 Td (Pay your invoice at https://evil-lure.test/pay) Tj 3 Tr 0 -20 Td (${'z'.repeat(25_000)}) Tj ET`
+    )
+    const mail = pdfMail('inv.pdf', bytes)
+    const report = await analysePhishing(mail, [], [])
+    const page = report.attachments[0].pdf?.parsed?.pages[0]
+    expect([page?.text.includes(GAP), page?.hidden.endsWith(GAP)]).toEqual([false, true])
+    expect(caseIocs(report, mail)).toContainEqual({
+      type: 'url',
+      value: 'https://evil-lure.test/pay',
+      note: 'in the text of page 1 of inv.pdf, as decoded here'
+    })
+    expect(report.attachments[0].pdf?.notes.join(' ')).not.toContain(' word(s) next to ')
+  })
+
+  it('counts the U+FFFD a page holds, and names no cause the decoder did not count', async () => {
+    // F2's /ToUnicode maps A, B and C to U+FFFD: nothing goes undecoded, and the text is still three of them.
+    const fonts =
+      '<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 5 0 R >> >>'
+    const extra = [
+      {
+        num: 5,
+        body: '<< >>',
+        stream:
+          'begincmap 1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <41> <FFFD> <42> <FFFD> <43> <FFFD> endbfchar endcmap'
+      }
+    ]
+    const visible = onePage('BT /F2 12 Tf 72 700 Td (ABC) Tj ET', { fonts, extra })
+    const hidden = onePage(
+      'BT /F1 12 Tf 72 700 Td (Visit https://plain2.test/x now) Tj 3 Tr /F2 12 Tf 0 -20 Td (ABC) Tj ET',
+      {
+        fonts,
+        extra
+      }
+    )
+    const report = await analysePhishing(
+      mailWith(attached('v.pdf', visible, 'application/pdf'), attached('h.pdf', hidden, 'application/pdf')),
+      [],
+      []
+    )
+    expect(report.attachments.map((a) => a.pdf?.parsed?.pages[0])).toMatchObject([
+      { text: '���', undecoded: 0 },
+      { hidden: '���', hiddenUndecoded: 0 }
+    ])
+    const md = formatPhishReport(report)
+    expect(md).toContain('Page 1 of `v.pdf`: its text holds only 3 replacement characters (U+FFFD).')
+    expect(md).toContain(
+      'Page 1 of `h.pdf`, drawn so a reader does not show it (invisible text mode, zero size, or a hidden annotation); the case takes no indicators from it: its text holds only 3 replacement characters (U+FFFD).'
+    )
+    expect(md).not.toMatch(/\b0 characters drawn/)
+  })
+
+  it('takes the last link of a form field value of exactly 1,000 characters, which is whole', async () => {
+    const value = `${'x'.repeat(1000 - ' https://whole-field.test/x'.length)} https://whole-field.test/x`
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 6, body: `<< /FT /Tx /T (to) /V (${value}) >>` }
+    ])
+    const mail = pdfMail('form.pdf', bytes)
+    const report = await analysePhishing(mail, [], [])
+    expect(report.attachments[0].pdf?.parsed?.fields[0]).toEqual({ name: 'to', value, type: '/Tx', password: false })
+    expect(caseIocs(report, mail)).toContainEqual({
+      type: 'url',
+      value: 'https://whole-field.test/x',
+      note: 'in a form field of form.pdf, as decoded here'
+    })
+    expect(report.attachments[0].pdf?.notes.join(' ')).not.toContain(' word(s) next to ')
+  })
+
+  it('says a signature field’s /V was not listed, not that the field has no value', async () => {
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] >> >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 6, body: '<< /FT /Sig /T (Signature1) /V 9 0 R >>' },
+      { num: 7, body: '<< /FT /Tx /T (Empty) >>' },
+      { num: 9, body: '<< /Type /Sig /Filter /Adobe.PPKLite /Name (Mallory) >>' }
+    ])
+    const lines = structureLines((await analysePhishing(pdfMail('signed.pdf', bytes), [], [])).attachments[0])
+    expect(lines.filter((l) => l.startsWith('  - PDF form field '))).toEqual([
+      "  - PDF form field `Signature1` (`/Sig`): a /V value this reader does not list (a dictionary, stream or number, an array it stopped examining before it listed anything, or an object it could not read; a signature field's /V is its signature)",
+      '  - PDF form field `Empty` (`/Tx`): no value set (/V)'
+    ])
+  })
+
+  it('says an array /V it stopped examining before it listed anything was not listed, not unset', async () => {
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 6, body: `<< /FT /Ch /Ff 2097152 /T (pick) /V [${'() '.repeat(1001)}(https://arr-late.test/x)] >>` }
+    ])
+    const lines = structureLines((await analysePhishing(pdfMail('pick.pdf', bytes), [], [])).attachments[0])
+    expect(lines).toContain(
+      "  - PDF form field `pick` (`/Ch`): a /V value this reader does not list (a dictionary, stream or number, an array it stopped examining before it listed anything, or an object it could not read; a signature field's /V is its signature)"
+    )
+  })
+
+  it('puts the links of a file that encrypts only its attachments on the case, as links', async () => {
+    // Acrobat's "encrypt only file attachments": /StrF /Identity leaves every string as written.
+    const bytes = buildPdf(
+      [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+        { num: 3, body: '<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>' },
+        {
+          num: 6,
+          body: '<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://payslip-lure.test/login) >> >>'
+        },
+        {
+          num: 30,
+          body: '<< /Filter /Standard /V 4 /R 4 /CF << /StdCF << /CFM /AESV2 /AuthEvent /EFOpen >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>'
+        }
+      ],
+      { trailer: '/Encrypt 30 0 R' }
+    )
+    const mail = pdfMail('payslip.pdf', bytes)
+    const report = await analysePhishing(mail, [], [])
+    expect(caseIocs(report, mail)).toContainEqual({
+      type: 'url',
+      value: 'https://payslip-lure.test/login',
+      note: 'inside payslip.pdf'
+    })
+    const lines = structureLines(report.attachments[0])
+    expect(lines).toContain('  - PDF link (/URI): `hxxps://payslip-lure[.]test/login`')
+    expect(lines.join('\n')).not.toContain('stored encrypted')
+  })
+
+  it('reads a script many actions share for indicators once', async () => {
+    const script = 'var u = "https://shared-js.test/a"; '.repeat(500)
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        num: 5 + i,
+        body: `<< /S /JavaScript /JS 99 0 R${i < 9 ? ` /Next ${6 + i} 0 R` : ''} >>`
+      })),
+      { num: 99, body: `(${script})` }
+    ])
+    const mail = pdfMail('shared.pdf', bytes)
+    iocScan.watch = script
+    iocScan.count = 0
+    try {
+      const report = await analysePhishing(mail, [], [])
+      expect(report.attachments[0].pdf?.parsed?.scripts.map((s) => s.source)).toEqual(Array(10).fill(script))
+      expect(iocScan.count).toBe(1)
+      expect(caseIocs(report, mail).filter((i) => i.value === 'https://shared-js.test/a')).toHaveLength(1)
+    } finally {
+      iocScan.watch = ''
+    }
+  })
+
+  it('stops reading a PDF’s text for indicators at the message’s time limit, and says what it left unread', async () => {
+    // Packed and compressed, so the byte scan cannot find what the text read leaves.
+    const bytes = buildPdf([
+      objStm(10, [
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /OpenAction 7 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+        { num: 3, body: `<< /Type /Page /Parent 2 0 R /Resources << /Font ${HELVETICA} >> /Contents 4 0 R >>` },
+        { num: 6, body: '<< /FT /Tx /T (to) /V (https://field-late.test/b) >>' },
+        { num: 7, body: '<< /S /JavaScript /JS (app.launchURL\\("https://script-late.test/c"\\);) >>' }
+      ]),
+      { num: 4, body: '<< >>', stream: 'BT /F1 12 Tf 72 700 Td (https://page-late.test/a) Tj ET', flate: true }
+    ])
+    const mail = pdfMail('late.pdf', bytes)
+    // The clock jumps past the deadline while the page is scanned, so nothing waits on a real one.
+    const real = performance.now.bind(performance)
+    let ahead = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => real() + ahead)
+    iocScan.onScan = (text) => {
+      if (text.includes('page-late')) ahead = 3_600_000
+    }
+    try {
+      const report = await analysePhishing(mail, [], [])
+      expect(report.attachments[0].pdf?.parsed?.scripts).toHaveLength(1)
+      const values = caseIocs(report, mail).map((i) => i.value)
+      expect(values).toContain('https://page-late.test/a')
+      expect(values.filter((v) => /field-late|script-late/.test(v))).toEqual([])
+      expect(report.attachments[0].pdf?.notes).toContain(
+        "Indicators were not taken from 1 form field value(s) and 1 script(s) in this PDF because this message's time limit for reading its PDFs (15 seconds) was reached; any they hold are unread, not absent."
+      )
+    } finally {
+      clock.mockRestore()
+      iocScan.onScan = null
+    }
+  })
+
+  it('says a stream the message budget cut short was read in part, not that it was not read', async () => {
+    // The archives leave 1,000 bytes of the message's budget: the page's one stream is read that far.
+    const zeros = await deflateRaw(new Uint8Array(8_000_000))
+    const blob = (n: number, data = zeros, size = 8_000_000) => ({ name: `blob${n}.bin`, data, method: 8, size })
+    const a = zip([1, 2, 3, 4].map((n) => blob(n)))
+    const b = zip([blob(1), blob(2), blob(3), blob(4, await deflateRaw(new Uint8Array(7_999_000)), 7_999_000)])
+    const runs = Array.from({ length: 300 }, (_, i) => `(line ${i} https://lure-${i}.test/p) Tj 0 -14 Td`).join(' ')
+    const lure = onePage(`BT /F1 12 Tf 72 720 Td ${runs} ET`)
+    const report = await analysePhishing(
+      mailWith(attached('a.zip', a), attached('b.zip', b), attached('lure.pdf', lure, 'application/pdf')),
+      [],
+      []
+    )
+    const read = report.attachments[2]
+    expect(read.pdf?.parsed?.pages[0].text).toContain('https://lure-0.test/p')
+    const notes = structureLines(read).filter((l) => l.startsWith('  - PDF reader: '))
+    expect(notes.filter((l) => l.includes('were cut short when a decompression budget ran out'))).toHaveLength(1)
+    expect(notes.join('\n')).not.toMatch(/were not decompressed|further stream\(s\) it needed were not read/)
+  })
+})
+
+describe('a PDF where the reader marked a gap', () => {
+  const CONTENT_CAP = 4 * 2 ** 20
+  const head = 'BT /F1 12 Tf 72 700 Td (Sign in at ) Tj '
+  const a = '(https://login.microsoftonline.co) Tj '
+  const b = '(m.evil-split.test/owa) Tj ET\n'
+  /** A one-page file drawing the content streams `contents` names, in Helvetica. */
+  const page = (contents: string, extra: Obj[]): Uint8Array =>
+    buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+      {
+        num: 3,
+        body: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font ${HELVETICA} >> /Contents ${contents} >>`
+      },
+      ...extra
+    ])
+  /** The case, the report and the gap note of a mail carrying one PDF. */
+  async function read(bytes: Uint8Array) {
+    const mail = pdfMail('statement.pdf', bytes)
+    const report = await analysePhishing(mail, [], [])
+    const pdf = report.attachments[0].pdf
+    const iocs = caseIocs(report, mail)
+    return {
+      iocs,
+      values: iocs.map((i) => i.value),
+      md: formatPhishReport(report),
+      text: pdf?.parsed?.pages[0]?.text,
+      notes: pdf?.notes.filter((n) => n.includes(' word(s) next to ')) ?? []
+    }
+  }
+
+  it('withholds a whole lure beside the end of a cut decode, and still quotes it with […]', async () => {
+    // More than the 4 MiB a content stream decodes to follows the lure.
+    const o = await read(
+      onePage(
+        `BT /F1 12 Tf 72 700 Td (Your invoice is ready) Tj 0 -20 Td (Pay at https://pad-lure.test/pay) Tj ET\n${' '.repeat(5 * 2 ** 20)}`
+      )
+    )
+    expect(o.text).toBe(`Your invoice is ready\nPay at https://pad-lure.test/pay${GAP}`)
+    expect(o.values.filter((v) => v.includes('pad-lure'))).toEqual([])
+    expect(o.md).toContain('```\nYour invoice is ready\nPay at https://pad-lure.test/pay[…]\n```')
+    expect(o.notes).toEqual([gapNote(1)])
+    expect(o.md).not.toContain(GAP)
+  })
+
+  it('takes the lure from a stream whose /Length is wrong or missing, its end found at endstream', async () => {
+    const content =
+      'BT /F1 12 Tf 72 700 Td (Your invoice is ready) Tj 0 -20 Td (Pay at https://length-lure.test/pay) Tj ET'
+    for (const length of [`/Length ${content.length - 7}`, '', '/Length 9 0 R']) {
+      const o = await read(
+        page('4 0 R', [{ num: 4, body: '', raw: `4 0 obj\n<< ${length} >>\nstream\n${content}\nendstream\nendobj\n` }])
+      )
+      expect(o.text).toBe('Your invoice is ready\nPay at https://length-lure.test/pay')
+      expect(o.values).toContain('https://length-lure.test/pay')
+      expect(o.notes).toEqual([])
+    }
+  })
+
+  it('takes no word from either side of a gap, and quotes both sides with […]', async () => {
+    const cut = (tail: string): string => head + ' '.repeat(CONTENT_CAP - head.length - a.length - 6) + a + tail
+    const cases: [string, Uint8Array, string, number][] = [
+      // The decode stops 6 bytes into the second run: at `(m.evi`.
+      ['decode cut', onePage(cut(b)), 'Sign in at https://login.microsoftonline.co[…]', 1],
+      [
+        'decode cut, then a piece drawn straight on',
+        page('[4 0 R 5 0 R]', [
+          { num: 4, body: '<< >>', stream: cut('(m.evil-split.com/owa) Tj '), flate: true },
+          { num: 5, body: '<< >>', stream: '(l-split.com/owa) Tj ET', flate: true }
+        ]),
+        'Sign in at https://login.microsoftonline.co[…]l-split.com/owa',
+        2
+      ],
+      [
+        'arrays nested too deep',
+        onePage(`${head}${a}${'['.repeat(70)}${']'.repeat(70)} ${b}`),
+        'Sign in at https://login.microsoftonline.co[…]',
+        1
+      ],
+      [
+        'a piece this reader cannot decode, then one it can',
+        page('[4 0 R 5 0 R 6 0 R]', [
+          { num: 4, body: '<< >>', stream: head + a, flate: true },
+          { num: 5, body: '<< /Filter /LZWDecode >>', stream: 'x'.repeat(40) },
+          { num: 6, body: '<< >>', stream: 'BT /F1 12 Tf 150 700 Td (soft.com/owa) Tj ET', flate: true }
+        ]),
+        // The piece between is marked on both sides of the space the next one
+        // starts after: the words on both sides each touch a mark.
+        'Sign in at https://login.microsoftonline.co[…] […]soft.com/owa',
+        2
+      ]
+    ]
+    for (const [name, bytes, quoted, words] of cases) {
+      const o = await read(bytes)
+      expect([name, o.values.filter((v) => /microsoftonline|split|soft\.com/.test(v))]).toEqual([name, []])
+      expect([name, o.md.includes(`\n${quoted}\n`), o.notes]).toEqual([name, true, [gapNote(words)]])
+    }
+  })
+
+  it('reads a URL whole across a form that draws nothing', async () => {
+    const widths = `/FirstChar 32 /LastChar 126 /Widths [${'600 '.repeat(95)}]`
+    const first = 'Sign in at https://login.microsoftonline.co'
+    // The second run starts where the first ends, so a reader shows one address.
+    const content = `BT /F1 12 Tf 72 700 Td (${first}) Tj ET /E Do BT /F1 12 Tf 1 0 0 1 ${72 + first.length * 7.2} 700 Tm (m.evil-split.com/owa) Tj ET`
+    const o = await read(
+      onePage(content, {
+        fonts: `<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding ${widths} >> >> /XObject << /E 5 0 R >>`,
+        extra: [{ num: 5, body: '<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] >>', stream: '', flate: true }]
+      })
+    )
+    expect(o.values).toContain('https://login.microsoftonline.com.evil-split.com/owa')
+    expect(o.notes).toEqual([])
+  })
+
+  it('takes a whole URL where a field or script is cut between words, and none where one is cut inside it', async () => {
+    const url = 'https://boundary-lure.test/pay'
+    const scripts: Obj[] = []
+    // Four scripts of just under 1 MiB, and a fifth the 4 MiB script share stops just after its URL.
+    const each = 2 ** 20 - 1000
+    for (let k = 0; k < 5; k++) {
+      const js = k < 4 ? String(k).repeat(each) : `${'z'.repeat(4 * 2 ** 20 - 4 * each - url.length - 1)} ${url} more()`
+      scripts.push(
+        { num: 10 + k, body: `<< /S /JavaScript /JS ${30 + k} 0 R ${k < 4 ? `/Next ${11 + k} 0 R` : ''} >>` },
+        { num: 30 + k, body: `(${js})` }
+      )
+    }
+    const fields = (value: string): Uint8Array =>
+      buildPdf([
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /OpenAction 10 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+        { num: 6, body: `<< /FT /Tx /T (to) /V (${value}) >>` },
+        ...scripts
+      ])
+    // The field's 1,000-character cap falls just after the URL: the case takes it from there.
+    const between = await read(fields(`${'x'.repeat(1000 - url.length - 1)} ${url} and more words`))
+    const lure = (o: typeof between) => o.iocs.filter((i) => i.value.includes('boundary-lure'))
+    expect(lure(between)).toEqual([
+      { type: 'url', value: url, note: 'in a form field of statement.pdf, as decoded here' }
+    ])
+    expect(between.notes).toEqual([])
+    // Two characters earlier, the cap splits it: the case takes it from the script alone.
+    const inside = await read(fields(`${'x'.repeat(1000 - url.length + 1)} ${url} and more words`))
+    expect(lure(inside)).toEqual([{ type: 'url', value: url, note: 'in JavaScript inside statement.pdf' }])
+    expect(inside.md).toContain(`${url.slice(0, -2)}[…]\``)
+    expect(inside.notes).toEqual([gapNote(1)])
+  })
+
+  it('shows a U+E000 the file writes as U+FFFD, and leaves the word beside it in the indicators', async () => {
+    const utf16 = (text: string): string =>
+      `FEFF${[...text].map((c) => c.charCodeAt(0).toString(16).padStart(4, '0')).join('')}`
+    // F1's /ToUnicode makes `~` U+E000.
+    const o = await read(
+      buildPdf([
+        { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /OpenAction 7 0 R >>' },
+        { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+        {
+          num: 3,
+          body: '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 5 0 R >> >> >> /Contents 4 0 R >>'
+        },
+        {
+          num: 4,
+          body: '<< >>',
+          stream: 'BT /F1 12 Tf 72 700 Td (Pay at https://forge-page.test/x~ now) Tj ET',
+          flate: true
+        },
+        {
+          num: 5,
+          body: '<< >>',
+          stream:
+            'begincmap 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <7E> <E000> endbfchar endcmap'
+        },
+        { num: 6, body: `<< /FT /Tx /T (to) /V <${utf16('https://forge-field.test/x')}> >>` },
+        { num: 7, body: `<< /S /JavaScript /JS <${utf16('app.launchURL("https://forge-js.test/x");')}> >>` }
+      ])
+    )
+    for (const url of ['https://forge-page.test/x', 'https://forge-field.test/x', 'https://forge-js.test/x']) {
+      expect(o.values).toContain(url)
+      expect(o.md).toContain(`${url}�`)
+    }
+    expect(o.notes).toEqual([])
+    expect(o.md).not.toMatch(/|\[…\]/)
+  })
+
+  it('reads raw deflate whose /Length counts the end-of-line, on either engine', async () => {
+    const raw = zlib('BT /F1 12 Tf 72 700 Td (Pay at https://raw-lure.test/pay) Tj ET').subarray(2, -4)
+    const data = String.fromCharCode(...raw)
+    for (const eol of ['\n', '\r\n']) {
+      const bytes = page('4 0 R', [
+        {
+          num: 4,
+          body: '',
+          raw: `4 0 obj\n<< /Length ${raw.length + eol.length} /Filter /FlateDecode >>\nstream\n${data}${eol}endstream\nendobj\n`
+        }
+      ])
+      for (const chromium of [false, true]) {
+        const { value: o } = await inflating(() => read(bytes), chromium)
+        expect([eol, chromium, o.values.includes('https://raw-lure.test/pay')]).toEqual([eol, chromium, true])
+      }
+    }
+  })
+})
+
+describe('a case note read for indicators as the analysis read it', () => {
+  it('marks a script quoted at 10,000 characters where the cut splits a word, so no host is made of it', async () => {
+    const url = 'https://login.microsoftonline.com.evil-host.test/owa'
+    const pre = 'var a = 1; '
+      .repeat(1000)
+      .slice(0, 10_000 - 'var u = "'.length - 'https://login.microsoftonline.co'.length)
+    const bytes = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 5, body: '<< /S /JavaScript /JS 6 0 R >>' },
+      { num: 6, body: '<< >>', stream: `${pre}var u = "${url}"; app.launchURL(u);`, flate: true }
+    ])
+    const md = formatPhishReport(await analysePhishing(pdfMail('statement.pdf', bytes), [], []))
+    expect(md).toContain('var u = "https://login.microsoftonline.co[…]\n```')
+    const { text, left } = noteScanText(md)
+    const values = extractIocsFromText(text, []).map((i) => i.value)
+    expect(values.filter((v) => /microsoftonline\.co(?!m)/.test(v))).toEqual([])
+    expect(left).toBe(1)
+  })
+
+  it('takes nothing from invisible text, page objects outside the tree, or the code in a script', async () => {
+    const hidden = onePage('BT 3 Tr /F1 12 Tf 72 700 Td (https://hidden-lure.test/y) Tj ET')
+    const orphan = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' },
+      { num: 3, body: `<< /Type /Page /Parent 2 0 R /Resources << /Font ${HELVETICA} >> /Contents 4 0 R >>` },
+      { num: 4, body: '<< >>', stream: 'BT /F1 12 Tf 72 700 Td (Tree page) Tj ET', flate: true },
+      { num: 6, body: `<< /Type /Page /Resources << /Font ${HELVETICA} >> /Contents 7 0 R >>` },
+      {
+        num: 7,
+        body: '<< >>',
+        stream: 'BT /F1 12 Tf 72 700 Td (Visit https://orphan-lure.test/x now) Tj ET',
+        flate: true
+      }
+    ])
+    const script = buildPdf([
+      { num: 1, body: '<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>' },
+      { num: 2, body: '<< /Type /Pages /Kids [] /Count 0 >>' },
+      { num: 5, body: '<< /S /JavaScript /JS 6 0 R >>' },
+      { num: 6, body: '<< >>', stream: 'var d = this.info; app.launchURL("https://js-only.test/x");', flate: true }
+    ])
+    const mail = mailWith(
+      attached('hidden.pdf', hidden, 'application/pdf'),
+      attached('orphan.pdf', orphan, 'application/pdf'),
+      attached('form.pdf', script, 'application/pdf')
+    )
+    const md = formatPhishReport(await analysePhishing(mail, [], []))
+    const values = extractIocsFromText(noteScanText(md).text, []).map((i) => i.value)
+    expect(values.filter((v) => /hidden-lure|orphan-lure|this\.info/.test(v))).toEqual([])
+    // A script's addresses are still read, as the analysis reads them.
+    expect(values).toContain('https://js-only.test/x')
+  })
+})
+
+describe('the raw text scan of a ZIP', () => {
+  it('ends a stored entry’s last URL at the next record, not inside its signature', async () => {
+    const bytes = zip([{ name: 'readme.txt', data: ascii('see http://zip-readme.test/a') }])
+    const report = await analysePhishing(mailWith(attached('docs.zip', bytes, 'application/zip')), [], [])
+    expect(report.attachments[0].inside).toContain('url: hxxp://zip-readme[.]test/a')
+    expect(report.attachments[0].inside.join('\n')).not.toContain('aPK')
   })
 })

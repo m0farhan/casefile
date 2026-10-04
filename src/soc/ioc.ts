@@ -144,8 +144,12 @@ export function iocKey(ioc: Pick<Ioc, 'type' | 'value'>): string {
   return `${ioc.type}:${ioc.type === 'url' ? ioc.value : ioc.value.toLowerCase()}`
 }
 
-/** Punctuation that closes the sentence around an indicator, ASCII or typographic. */
-const PROSE_TAIL = `),.;:!?'"]’”»›`
+/**
+ * Punctuation that closes the sentence around an indicator, ASCII or
+ * typographic, and the backtick that closes a markdown code span (never a
+ * legal unencoded URL character).
+ */
+const PROSE_TAIL = '),.;:!?\'"]’”»›`'
 
 /**
  * An indicator found in prose, without the punctuation the sentence put after
@@ -617,7 +621,11 @@ export function assetRule(value: string, owned: string[]): AssetMatch | null {
 
 /** Listed entries the boundary cannot match — named in settings, never silently ignored. */
 export function unmatchableAssetRules(owned: string[]): string[] {
-  return owned.filter((raw) => raw.trim() && !parseAssetRule(raw))
+  // A '#' line is a comment the setting invites, not a rule that failed.
+  return owned.filter((raw) => {
+    const text = raw.trim()
+    return text && !text.startsWith('#') && !parseAssetRule(raw)
+  })
 }
 
 /**

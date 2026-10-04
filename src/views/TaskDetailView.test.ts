@@ -10,6 +10,7 @@ import { ProjectStore } from '../store/ProjectStore'
 import { findTaskById } from '../store/TaskIndex'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { applySubtaskChecked } from '../modals/SubtasksPanel'
+import { today } from '../dates'
 
 // The aliased obsidian stub carries no view/modal base classes; this module's
 // import chain (ModalFactory, TaskModal, …) only needs them to exist for
@@ -145,6 +146,8 @@ interface Panel {
   flushPendingSave(): Promise<void>
   persist(): Promise<void>
   onStatusChanged(task: Task): Promise<void>
+  persistTitle(input: { value: string }): Promise<void>
+  contentEl: { isConnected: boolean }
 }
 
 async function setup(fields: Partial<Task> = {}, subtaskTitles: string[] = []) {
@@ -158,6 +161,7 @@ async function setup(fields: Partial<Task> = {}, subtaskTitles: string[] = []) {
   const panel = new TaskDetailView({} as WorkspaceLeaf, plugin) as unknown as Panel
   panel.app = app as unknown as App
   panel.render = () => {}
+  panel.contentEl = { isConnected: true }
   panel.projectPath = project.filePath
   panel.taskId = task.id
   await panel.loadTask()
@@ -290,5 +294,62 @@ describe('TaskDetailView saving', () => {
     expect(live(s1.id).status).toBe('done')
     expect(live(s1.id).activity.some((e) => e.field === 'status')).toBe(true)
     expect(live(s2.id).title).toBe('S2 renamed')
+  })
+
+  it('a Done pick shows 100 and the completion date at once, so its save redraws nothing', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', globalThis)
+    const { panel, live } = await setup({ status: 'todo', progress: 25 })
+    const drawn: [number, string][] = []
+    panel.render = () => drawn.push([panel.task.progress, panel.task.completed])
+    panel.task.status = 'done'
+    await panel.onStatusChanged(panel.task)
+    expect(drawn).toEqual([[100, today().toString()]])
+    // The save stamps nothing the pick did not already show: a redraw would
+    // close an editor under the caret of whatever is typed next.
+    await vi.advanceTimersByTimeAsync(900)
+    expect(live()).toMatchObject({ progress: 100, completed: today().toString() })
+    expect(drawn).toHaveLength(1)
+    // Reopened before a save: the date goes again, as the store would clear it.
+    panel.task.status = 'in-progress'
+    await panel.onStatusChanged(panel.task)
+    expect(drawn.at(-1)).toEqual([100, ''])
+  })
+
+  it('a slider dragged back after a Done pick is what saves', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', globalThis)
+    const { panel, live } = await setup({ status: 'todo', progress: 25 })
+    panel.task.status = 'done'
+    await panel.onStatusChanged(panel.task)
+    expect(panel.task.progress).toBe(100)
+    panel.task.progress = 25
+    await panel.flushPendingSave()
+    expect(live().status).toBe('done')
+    expect(live().progress).toBe(25)
+  })
+
+  it('a Done pick undone before its save goes out saves the old progress', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', globalThis)
+    const { panel, live } = await setup({ status: 'todo', progress: 25 })
+    panel.task.status = 'done'
+    await panel.onStatusChanged(panel.task)
+    panel.task.status = 'in-progress'
+    await panel.onStatusChanged(panel.task)
+    await vi.advanceTimersByTimeAsync(900)
+    expect(live().status).toBe('in-progress')
+    expect(live().progress).toBe(25)
+  })
+
+  it('a title no file name can hold is put back, so later edits still save', async () => {
+    const { panel, live } = await setup()
+    const input = { value: '...' }
+    panel.task.title = '...'
+    await panel.persistTitle(input)
+    expect(input.value).toBe('Case')
+    panel.task.description = 'evidence'
+    await panel.flushPendingSave()
+    expect(live().description).toBe('evidence')
   })
 })

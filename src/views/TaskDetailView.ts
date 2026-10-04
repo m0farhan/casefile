@@ -4,7 +4,7 @@ import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
 import { renderDescriptionEditor, type DescriptionEditorHandle } from '../modals/DescriptionEditor'
 import { renderCommentsSection, type CommentsSectionHandle } from '../soc/CommentsSection'
-import { renderTaskFormFields } from '../modals/TaskFormFields'
+import { fillProgressOnDone, renderTaskFormFields } from '../modals/TaskFormFields'
 import { renderLifecyclePanel, isoToLocalInput } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
@@ -13,12 +13,15 @@ import { renderSubtasksPanel } from '../modals/SubtasksPanel'
 import { renderLinksPanel } from '../modals/LinksPanel'
 import { renderAttachmentsSection } from '../modals/AttachmentsSection'
 import { findTaskById } from '../store/TaskIndex'
+import { isNameableTitle } from '../store/ProjectStore'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { renderTimeTrackingPanel } from '../modals/TimeTrackingPanel'
 import { renderKeyChip, renderIssueTypeIcon } from '../ui/composites/issueMeta'
 import { renderStatusBadge } from '../ui/StatusBadge'
 import { CollapseToggle } from '../ui/primitives/CollapseToggle'
+import { isTerminalStatus } from '../utils'
+import { today } from '../dates'
 
 export const CASEFILE_TASK_DETAIL_VIEW_TYPE = 'casefile-task-detail'
 
@@ -124,6 +127,8 @@ export class TaskDetailView extends ItemView {
   private persistedTitle = ''
   /** Last status that passed the verdict guard; persist() always sends this, never a pick still waiting on the prompt. */
   private lastStatus = ''
+  /** What a Done pick's progress fill replaced, until the save goes out (fillProgressOnDone). */
+  private filledFrom: number | undefined
   private descEditor: DescriptionEditorHandle | null = null
   private commentsSection: CommentsSectionHandle | null = null
   private saveTimer: number | null = null
@@ -197,6 +202,7 @@ export class TaskDetailView extends ItemView {
     this.removedSubtaskIds = []
     this.persistedTitle = this.task.title
     this.lastStatus = this.task.status
+    this.filledFrom = undefined
     // Per-task UI state: a draft or expanded timeline for task A must not leak into task B.
     this.commentDraft = ''
     this.commentHadFocus = false
@@ -216,6 +222,22 @@ export class TaskDetailView extends ItemView {
     if (patch === null) {
       task.status = prev // user cancelled the close — revert the clone
     } else {
+      // Filled only once the pick stands, so a cancelled prompt has nothing to put back.
+      const { statuses } = this.plugin.store.configFor(this.project)
+      const savedStatus = this.snapshot?.status ?? prev
+      this.filledFrom = fillProgressOnDone(task, savedStatus, statuses, this.filledFrom)
+      // The completion date as the store will stamp it (stampCompletion), set
+      // here so the panel shows it now and the save has nothing to redraw: a
+      // redraw while the analyst types closes the editor under the caret.
+      if (this.snapshot) {
+        const closed = isTerminalStatus(task.status, statuses)
+        task.completed =
+          closed === isTerminalStatus(savedStatus, statuses)
+            ? this.snapshot.completed
+            : closed
+              ? this.snapshot.completed || today().toString()
+              : ''
+      }
       this.lastStatus = task.status
       if (patch.verdict) task.verdict = patch.verdict
       this.scheduleSave()
@@ -254,6 +276,9 @@ export class TaskDetailView extends ItemView {
     const task = this.task
     const saved = () => ({ ...task, title: this.persistedTitle, status: this.lastStatus })
     const patch = diffTaskPatch(this.snapshot, saved())
+    // Done's fill is already on the slider (onStatusChanged), so a status
+    // change sends the slider as it stands: dragged back after the pick, it stays.
+    if (patch.status !== undefined) patch.progress = task.progress
     // A copy: a removal made while this save writes is not part of it.
     const removed = [...this.removedSubtaskIds]
     if (!Object.keys(patch).length && !removed.length) return
@@ -264,6 +289,8 @@ export class TaskDetailView extends ItemView {
     // write, it held any edit made meanwhile (a second comment deleted), which
     // then never differed from it, so was never written.
     const sent = JSON.parse(JSON.stringify(saved())) as Task
+    // The fill goes out with this save; reopening from here keeps it, as the store does.
+    this.filledFrom = undefined
     try {
       // The store gets its own copy. Handed the panel's arrays, the live task
       // shared them, and the next edit here changed the live task before the
@@ -278,11 +305,16 @@ export class TaskDetailView extends ItemView {
       // against stale values.
       const live = this.project.taskIndex.get(this.task.id)?.task
       if (live) {
+        const shown = { progress: this.task.progress, completed: this.task.completed }
         for (const t of [this.task, sent]) {
           t.activity = JSON.parse(JSON.stringify(live.activity)) as Task['activity']
           t.respondedAt = live.respondedAt
           t.resolvedAt = live.resolvedAt
           t.completed = live.completed
+          // The store sets 100 on reaching Done. A slider move made here while
+          // this save wrote is newer, so the clone keeps it (sent is first
+          // compared, then synced, in that order).
+          if (t === sent || t.progress === sent.progress) t.progress = live.progress
         }
         // A subtask added here gets its key and note from the store, on the
         // store's copy. Copied onto the panel's own subtask objects in place,
@@ -295,6 +327,11 @@ export class TaskDetailView extends ItemView {
             sub.filePath = stored.filePath
           }
         }
+        // The store stamped what the panel shows and the pick did not already
+        // (a date that rolled over at midnight): draw it. Only then, since a
+        // redraw drops the focus of whatever is being typed.
+        const stamped = this.task.progress !== shown.progress || this.task.completed !== shown.completed
+        if (stamped && this.contentEl.isConnected) this.render()
       }
       // Snapshot follows the save: the next diff is relative to what was sent.
       this.snapshot = sent
@@ -312,7 +349,11 @@ export class TaskDetailView extends ItemView {
   private async persistTitle(titleInput: HTMLTextAreaElement): Promise<void> {
     if (!this.project || !this.task) return
     const next = this.task.title.trim()
-    if (!next || next === this.persistedTitle) {
+    // A title of only dots names no file: the store would refuse it, and every
+    // save after it, so it is put back like an empty one.
+    const nameless = next !== '' && !isNameableTitle(next)
+    if (nameless) new Notice('Title not saved: it needs a character a file name can hold.')
+    if (!next || nameless || next === this.persistedTitle) {
       this.task.title = this.persistedTitle
       titleInput.value = this.persistedTitle
       return
@@ -446,11 +487,17 @@ export class TaskDetailView extends ItemView {
     })
 
     body.createEl('hr', { cls: 'pm-te-divider' })
+    // The panel shows only saved cases, so files always have a folder to go in.
+    const attach = {
+      reserve: (name: string) => this.plugin.store.reserveAttachmentName(name),
+      write: (name: string, data: ArrayBuffer) => this.plugin.store.writeTaskAttachment(project, task, name, data)
+    }
     this.descEditor = renderDescriptionEditor(body, {
       app: this.app,
       plugin: this.plugin,
       project,
       task,
+      attach,
       // The CodeMirror editor dispatches transactions instead of firing the
       // 'input' events the body-level delegation below relies on.
       onChange: () => this.scheduleSave()
@@ -481,8 +528,7 @@ export class TaskDetailView extends ItemView {
       project,
       task,
       attach: {
-        reserve: (name) => this.plugin.store.reserveAttachmentName(name),
-        write: (name, data) => this.plugin.store.writeTaskAttachment(project, task, name, data),
+        ...attach,
         onLinked: () => {
           this.scheduleSave()
           this.render()

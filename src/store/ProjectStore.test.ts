@@ -13,7 +13,14 @@ import {
   type StatusConfig,
   type Task
 } from '../types'
-import { inferIssueKeyPrefix, NestedBoardError, ProjectStore } from './ProjectStore'
+import {
+  inferIssueKeyPrefix,
+  isNameableTitle,
+  NestedBoardError,
+  ProjectStore,
+  STATUS_STAMPED_FIELDS,
+  undoOfStatusChange
+} from './ProjectStore'
 import { parseFrontmatter, splitCommentsSection } from './YamlParser'
 import { buildTaskIndex } from './TaskIndex'
 import { findTask, flattenTasks } from './TaskTreeOps'
@@ -331,6 +338,96 @@ describe('ProjectStore completion date', () => {
 
     await store.updateTask(project, task.id, { status: 'in-progress' })
     expect(task.completed).toBe('')
+  })
+
+  it('fills progress to 100 when a task reaches Done, unless the same edit set progress', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Progress', 'Projects')
+    const task = await addNamed(store, project, 'Contain host')
+    await store.updateTask(project, task.id, { progress: 25 })
+
+    await store.updateTask(project, task.id, { status: 'done' })
+    expect(task.progress).toBe(100)
+    // Leaving Done keeps what it reached.
+    await store.updateTask(project, task.id, { status: 'in-progress' })
+    expect(task.progress).toBe(100)
+
+    const other = await addNamed(store, project, 'Partly done')
+    await store.updateTask(project, other.id, { status: 'done', progress: 40 })
+    expect(other.progress).toBe(40)
+
+    // Undo of a reopen puts back the progress it closed at, equal to the live value.
+    const reopened = await addNamed(store, project, 'Closed at 30')
+    await store.updateTask(project, reopened.id, { status: 'done', progress: 30 })
+    await store.updateTask(project, reopened.id, { status: 'in-progress' })
+    await store.updateTask(project, reopened.id, { status: 'done', completed: reopened.completed, progress: 30 })
+    expect(reopened.progress).toBe(30)
+
+    // A backdated close in the same edit still fills.
+    const backdated = await addNamed(store, project, 'Closed yesterday')
+    await store.updateTask(project, backdated.id, { progress: 25 })
+    await store.updateTask(project, backdated.id, { status: 'done', completed: '2026-01-02' })
+    expect(backdated.progress).toBe(100)
+    expect(backdated.completed).toBe('2026-01-02')
+
+    // Made a milestone in the same edit: no progress.
+    const milestone = await addNamed(store, project, 'Go live')
+    await store.updateTask(project, milestone.id, { type: 'milestone', status: 'done' })
+    expect(milestone.progress).toBe(0)
+  })
+
+  it('an undo of a status change restores only what that change moved', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Undo', 'Projects')
+    const statuses = store.configFor(project).statuses
+    const capture = (t: Task, patch: Partial<Task>) =>
+      Object.fromEntries(
+        [...Object.keys(patch), ...STATUS_STAMPED_FIELDS].map((k) => [k, t[k as keyof Task]])
+      ) as Partial<Task>
+
+    // An open-to-open move never touched progress: a slider edit after it survives the undo.
+    const moved = await addNamed(store, project, 'Moved')
+    await store.updateTask(project, moved.id, { progress: 30 })
+    const move = { status: 'in-progress' }
+    const prev = capture(moved, move)
+    await store.updateTask(project, moved.id, move)
+    undoOfStatusChange(prev, moved, statuses)
+    await store.updateTask(project, moved.id, { progress: 60 })
+    await store.updateTask(project, moved.id, prev)
+    expect(moved).toMatchObject({ status: 'todo', progress: 60 })
+
+    // Reopening a case closed at 30, then undo: back to Done at 30, not filled to 100.
+    const closed = await addNamed(store, project, 'Closed at 30')
+    await store.updateTask(project, closed.id, { status: 'done', progress: 30 })
+    const reopen = { status: 'in-progress' }
+    const before = capture(closed, reopen)
+    await store.updateTask(project, closed.id, reopen)
+    undoOfStatusChange(before, closed, statuses)
+    await store.updateTask(project, closed.id, before)
+    expect(closed).toMatchObject({ status: 'done', progress: 30 })
+  })
+
+  it('fills progress to 100 for a case created in Done, keeping a value the creator set', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Created closed', 'Projects')
+    const closed = makeTask({ title: 'FP closed on arrival', status: 'done' })
+    await store.insertTask(project, closed)
+    expect(closed.progress).toBe(100)
+    expect(closed.completed).toMatch(ISO_DATE)
+
+    const partial = makeTask({ title: 'Closed partway', status: 'done', progress: 40 })
+    await store.insertTask(project, partial)
+    expect(partial.progress).toBe(40)
+
+    const milestone = makeTask({ title: 'Milestone', status: 'done', type: 'milestone' })
+    await store.insertTask(project, milestone)
+    expect(milestone.progress).toBe(0)
+  })
+
+  it('isNameableTitle refuses titles that make no file name', () => {
+    expect(isNameableTitle('Check logs')).toBe(true)
+    expect(isNameableTitle('...')).toBe(false)
+    expect(isNameableTitle('')).toBe(false)
   })
 
   it('does not restamp when status changes between two complete statuses or stays put', async () => {
@@ -2580,6 +2677,22 @@ describe('ProjectStore duplicate of a closed task', () => {
     expect(copy.status).toBe('todo')
     expect(copy.completed).toBe('')
     expect(copy.verdict).toBe('')
+  })
+
+  // The close filled progress to 100; a fresh To do copy at 100% read as finished.
+  it('restarts a closed case at 0% progress, subtasks too; an open copy keeps its progress', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('Dupfill', 'Projects')
+    const task = await addNamed(store, project, 'Contained')
+    const sub = await addNamed(store, project, 'Isolate host', task.id)
+    const open = await addNamed(store, project, 'Still going')
+    for (const t of [task, sub, open]) await store.updateTask(project, t.id, { progress: 25 })
+    for (const t of [task, sub]) await store.updateTask(project, t.id, { status: 'done' })
+
+    const copy = expectDefined(await store.duplicateTask(project, task.id, true))
+    expect([copy.status, copy.progress]).toEqual(['todo', 0])
+    expect(copy.subtasks.map((s) => s.progress)).toEqual([0])
+    expect(expectDefined(await store.duplicateTask(project, open.id, false)).progress).toBe(25)
   })
 })
 

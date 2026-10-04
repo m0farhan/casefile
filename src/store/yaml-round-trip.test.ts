@@ -135,6 +135,24 @@ describe('task round-trip', () => {
     expect(task.description).toBe('User-written note.')
   })
 
+  it('keeps quoted lines shaped like the generated ones inside a closed code fence', () => {
+    // A phishing case's "Plain text" block holds the sender's body verbatim.
+    const description = [
+      'Plain text:',
+      '',
+      '````',
+      'Parent: [[Payroll|Payroll update]]',
+      '## Subtasks',
+      '- [ ] [[Sign form|Sign the form]]',
+      '````'
+    ].join('\n')
+    const child = makeTask({ id: 'child', title: 'Child', filePath: 'Projects/Tasks/Test/Child.md' })
+    const parent = makeTask({ id: 'p', title: 'Parent', filePath: 'Projects/Tasks/Test/Parent.md' })
+    const original = makeTask({ id: 'case', description, subtasks: [child] })
+    const { task } = roundTripTask(original, makeProject('Test', 'Projects/Test.md'), parent)
+    expect(task.description).toBe(description)
+  })
+
   it('defaults missing fields to safe values', () => {
     const frontmatter: Record<string, unknown> = { id: 't-x' }
     const { task } = hydrateTaskFromFile(frontmatter, '', 'path.md')

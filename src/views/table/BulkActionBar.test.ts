@@ -98,6 +98,15 @@ describe('runBulkPatch undo', () => {
     expect(reopened.completed).toBe('')
   })
 
+  it('undoing a bulk close puts back the progress the close filled to 100', async () => {
+    const { ctx, project, ids } = await setup([{ title: 'Beacon', progress: 25 }])
+    await runBulkPatch(ctx, { status: 'done' })
+    expect(live(project, ids[0]).progress).toBe(100)
+
+    await h.undos[0]()
+    expect(live(project, ids[0]).progress).toBe(25)
+  })
+
   it('undoing a bulk reopen puts back the original completion date, not today', async () => {
     const { ctx, project, ids } = await setup([{ title: 'Old', status: 'done', completed: '2026-01-01' }])
     await runBulkPatch(ctx, { status: 'todo' })

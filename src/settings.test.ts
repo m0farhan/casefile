@@ -476,3 +476,33 @@ describe('alert kinds', () => {
     expect(updateTask).not.toHaveBeenCalled()
   })
 })
+
+describe('board display settings and the asset boundary', () => {
+  const setting = (name: string): Record<string, unknown> => {
+    const found = built.find((b) => b.name === name)?.comp
+    if (!found) throw new Error(`no ${name} setting`)
+    return found
+  }
+
+  it('the tag colors, subtasks and week label settings redraw open boards', async () => {
+    const { tab } = makeTab({ ...DEFAULT_SETTINGS })
+    tab.display()
+    const refresh = (tab as unknown as { plugin: { refreshProjectViews: () => void } }).plugin.refreshProjectViews
+    await (setting('Show tag colors').changed as (v: boolean) => Promise<void>)(false)
+    await (setting('Show subtasks on board').changed as (v: boolean) => Promise<void>)(true)
+    await (setting('Gantt week label').changed as (v: string) => Promise<void>)('both')
+    expect(refresh).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps # comment lines in the owned domains and brands, as typed', async () => {
+    const settings: PMSettings = { ...DEFAULT_SETTINGS }
+    const { tab } = makeTab(settings)
+    tab.display()
+    await (setting('Owned domains and ranges').changed as (v: string) => Promise<void>)(
+      '# HQ datacentre (ticket NET-114)\n10.20.0.0/16\n\ncorp.example'
+    )
+    expect(settings.ownedAssets).toEqual(['# HQ datacentre (ticket NET-114)', '10.20.0.0/16', 'corp.example'])
+    await (setting('Brands to watch for').changed as (v: string) => Promise<void>)('# finance\npaypal')
+    expect(settings.phishBrands).toEqual(['# finance', 'paypal'])
+  })
+})

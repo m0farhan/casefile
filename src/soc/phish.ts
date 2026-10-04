@@ -11,7 +11,8 @@ import {
   visibleName
 } from './ioc'
 import { decodePercentEscapes } from './toolbox'
-import { type PdfFacts, readPdf } from './pdf'
+import { GAP, type PdfFacts, type PdfPage, type PdfParsed, readPdf, readPdfObjects } from './pdf'
+import type { Work } from './pdfObjects'
 import {
   EXECUTABLE_NAME,
   type OfficeFacts,
@@ -57,7 +58,7 @@ export interface LinkFinding {
   apexDomain: string
   /** Stated facts about the host — never a score. */
   flags: string[]
-  /** Text the link was shown as, when that text is itself a URL that disagrees. */
+  /** Text the link was shown as, when that text is itself a URL or a host (see shownHost). */
   shownAs: string
   /**
    * The attached message whose text carries it, named as Attachment.origin
@@ -271,11 +272,14 @@ const NAMED_ENTITIES: Record<string, string> = {
  * knows `&amp;` sees a different URL from the one the victim visits — and an
  * href written entirely in `&#x2F;` and `&#64;` was dropped as "not a URL"
  * altogether, which reported a phishing mail as containing no links at all.
+ *
+ * A browser decodes a numeric reference without its `;` too, `https:&#47&#47`,
+ * and reads every digit of it, so `&#00000047;` is a `/` and not cut short.
  */
 export function decodeEntities(text: string): string {
-  return text.replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z]{2,10});/gi, (whole, body: string) => {
-    if (body[0] === '#') {
-      const code = body[1] === 'x' || body[1] === 'X' ? Number.parseInt(body.slice(2), 16) : Number(body.slice(1))
+  return text.replace(/&(?:(#\d+|#x[0-9a-f]+);?|([a-z]{2,10});)/gi, (whole, num?: string, name?: string) => {
+    if (num) {
+      const code = num[1] === 'x' || num[1] === 'X' ? Number.parseInt(num.slice(2), 16) : Number(num.slice(1))
       if (!Number.isFinite(code) || code < 1 || code > 0x10ffff) return whole
       try {
         return String.fromCodePoint(code)
@@ -283,7 +287,7 @@ export function decodeEntities(text: string): string {
         return whole
       }
     }
-    return NAMED_ENTITIES[body.toLowerCase()] ?? whole
+    return NAMED_ENTITIES[(name ?? '').toLowerCase()] ?? whole
   })
 }
 
@@ -295,18 +299,40 @@ export function decodeEntities(text: string): string {
  * comment about. Scanning is linear and obviously bounded. An unterminated
  * element swallows the rest of the document, which is the safe direction —
  * everything after an unclosed `<script` really is inside it.
+ *
+ * Except the head, whose `</head>` is optional: a browser ends it at `<body`
+ * as well, and a head with neither is a mail that is all body, so nothing is
+ * dropped. Each search is remembered, because positions only move forward and
+ * a head that ends at `<body` does not consume up to its `</head`: searched
+ * again for every one of many heads, the scan was quadratic.
  */
 function dropElement(html: string, tag: string): string {
   const lower = html.toLowerCase()
+  const found = new Map<string, number>()
+  const next = (name: string, from: number): number => {
+    const at = found.get(name)
+    if (at !== undefined && (at < 0 || at >= from)) return at
+    const fresh = findTagStart(html, lower, name, from)
+    found.set(name, fresh)
+    return fresh
+  }
   let out = ''
   let i = 0
   for (;;) {
-    const start = findTagStart(html, lower, tag, i)
+    const start = next(tag, i)
     if (start < 0) return out + html.slice(i)
     out += html.slice(i, start)
-    const closeAt = findTagStart(html, lower, `/${tag}`, start + 1)
-    if (closeAt < 0) return out
-    i = endOfTag(html, closeAt)
+    const closeAt = next(`/${tag}`, start + 1)
+    const body = tag === 'head' ? next('body', start + 1) : -1
+    if (body >= 0 && (closeAt < 0 || body < closeAt)) {
+      i = body
+      continue
+    }
+    if (closeAt < 0) return tag === 'head' ? out + html.slice(start) : out
+    // A close tag with no `>`, `</script` at the very end: the rest is inside it.
+    const end = endOfTag(html, closeAt)
+    if (end < 0) return out
+    i = end
   }
 }
 
@@ -316,9 +342,19 @@ function nameEnds(ch: string): boolean {
 }
 
 /**
+ * Whether the `<` at `lt` begins markup at all. A browser reads `<` before
+ * anything but a letter, `/`, `!` or `?` as text: `Spend < $100 and don't`
+ * read as a tag ran to the next `>` past the apostrophe's quote, and the
+ * script after it was shown as words the victim read.
+ */
+function opensTag(html: string, lt: number): boolean {
+  return /[a-z/!?]/i.test(html[lt + 1] ?? '')
+}
+
+/**
  * Index just past the tag opening at `lt`, with quoted attribute values
  * skipped — `<img alt="a > b">` ends at the LAST `>`, not the one inside the
- * quotes. Returns html.length for a tag that never closes.
+ * quotes. Returns -1 for a tag that never closes, which every caller must check.
  */
 function endOfTag(html: string, lt: number): number {
   let quote = ''
@@ -355,6 +391,11 @@ function stripTags(html: string, between = ''): string {
   while (i < html.length) {
     const lt = html.indexOf('<', i)
     if (lt < 0) return out + html.slice(i)
+    if (!opensTag(html, lt)) {
+      out += html.slice(i, lt + 1)
+      i = lt + 1
+      continue
+    }
     const end = endOfTag(html, lt)
     if (end < 0) return out + html.slice(i)
     out += html.slice(i, lt) + between
@@ -382,6 +423,10 @@ function findTagStart(html: string, lower: string, tag: string, from: number): n
     const lt = html.indexOf('<', i)
     if (lt < 0) return -1
     if (lower.startsWith(tag, lt + 1) && nameEnds(lower[lt + 1 + tag.length] ?? '')) return lt
+    if (!opensTag(html, lt)) {
+      i = lt + 1
+      continue
+    }
     const end = endOfTag(html, lt)
     if (end < 0) return -1
     i = end
@@ -396,7 +441,13 @@ function findTagStart(html: string, lower: string, tag: string, from: number): n
  * closes early and the rest of it leaks into the text as if the victim had
  * read it. Outlook generates `<!--[if mso]>…<![endif]-->` on almost every
  * message it sends, so this is the common case, not an edge one.
+ *
+ * A browser also ends a comment at `<!-->`, `<!--->` and `--!>`; read only
+ * to `-->`, each swallowed the rest of the text. One regular expression finds
+ * either end: two indexOf calls would each rescan to the end of the input for
+ * every comment whenever one of the two ends never appears.
  */
+const COMMENT_END = /--!?>/g
 function dropComments(html: string): string {
   let out = ''
   let i = 0
@@ -404,9 +455,15 @@ function dropComments(html: string): string {
     const start = html.indexOf('<!--', i)
     if (start < 0) return out + html.slice(i)
     out += html.slice(i, start)
-    const end = html.indexOf('-->', start + 4)
-    if (end < 0) return out
-    i = end + 3
+    const j = start + 4
+    if (html[j] === '>') i = j + 1
+    else if (html.startsWith('->', j)) i = j + 2
+    else {
+      COMMENT_END.lastIndex = j
+      const m = COMMENT_END.exec(html)
+      if (!m) return out
+      i = m.index + m[0].length
+    }
   }
 }
 
@@ -414,9 +471,11 @@ function dropComments(html: string): string {
  * Elements whose end means a line ended, so the text reads as it was laid out.
  * A tag body stops at the next `<` for the same reason ANCHOR_RE's does. A tag
  * these miss still loses its markup in stripTags; only its line break is lost.
+ * The space after a `/` is its own run: `<\s*\/?\s*` split one long run of
+ * spaces between its two halves every way it could, which is quadratic.
  */
 const BLOCK_TAGS =
-  /<\s*\/?\s*(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|article|header|footer|td|th|pre)\b[^<>]{0,1000}>/gi
+  /<\s*(?:\/\s*)?(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|article|header|footer|td|th|pre)\b[^<>]{0,1000}>/gi
 const LINE_BREAKS = /<\s*(?:br|hr)\b[^<>]{0,1000}>/gi
 
 /**
@@ -533,12 +592,18 @@ function suffixLabels(parts: string[]): number {
   return twoLabel ? 2 : 1
 }
 
+/** A dotted-quad host. The URL parser writes every IPv4 form (127.1, 0x7f.0.0.1) as one. */
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
+
 /**
  * The derived domain: `login.paypa1.co.uk` → `paypa1.co.uk`. Derived from the
- * labels alone, never checked against the public suffix list.
+ * labels alone, never checked against the public suffix list. An IP address
+ * is its own: its last two octets are not a domain.
  */
 export function apexDomain(host: string): string {
-  const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
+  const bare = host.toLowerCase().replace(/\.$/, '')
+  if (IPV4.test(bare)) return bare
+  const parts = bare.split('.').filter(Boolean)
   if (parts.length < 2) return parts.join('.')
   return parts.slice(-(suffixLabels(parts) + 1)).join('.')
 }
@@ -570,10 +635,12 @@ export function hostFacts(host: string, brands: string[], rawHost = ''): string[
   if (subject.split('.').some((label) => /^xn--/i.test(label))) {
     facts.push('punycode host — the name shown in a client may not be the name here')
   }
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(subject)) facts.push('link points at a bare IP address, not a name')
+  if (IPV4.test(subject)) facts.push('link points at a bare IP address, not a name')
   const labels = [brandLabel(subject), rawHost ? brandLabel(rawHost) : ''].filter(Boolean)
   const said = new Set<string>()
   for (const entry of brands) {
+    // A `#` line is the analyst's own comment, never a name to match.
+    if (entry.trim().startsWith('#')) continue
     // An entry may be a bare name (`paypal`) or a known-good domain
     // (`paypal.test`). Only a domain entry lets this tell the real site from
     // the same name on another TLD — with bare names alone there is nothing
@@ -673,7 +740,7 @@ export function extractLinks(
     for (const candidate of (m[1] ?? m[2] ?? '').split(',')) add(candidate.trim().split(/\s+/)[0] ?? '')
   }
 
-  // Anchor text that is itself a URL is compared against where the link goes.
+  // Anchor text that is itself a URL, or a host, is compared against where the link goes.
   // Keyed on the NORMALISED href so an entity-encoded or unquoted attribute
   // still lines up with the row it belongs to.
   const shown = new Map<string, string>()
@@ -686,7 +753,7 @@ export function extractLinks(
         .replace(/<[^<>]{0,500}>/g, '')
         .trim()
     )
-    if (href && /^https?:\/\//i.test(label)) shown.set(href, label)
+    if (href && shownHost(label)) shown.set(href, label)
   }
   // The text of an anchor is what the victim is SHOWN, not anywhere they can
   // go, so the decoy is dropped from the destination list. Only when NOTHING
@@ -738,18 +805,49 @@ export function extractLinks(
       )
     }
     const label = shown.get(raw) ?? ''
-    let labelHost = ''
-    try {
-      labelHost = label ? new URL(label).hostname.toLowerCase() : ''
-    } catch {
-      labelHost = ''
-    }
-    if (labelHost && labelHost !== host) {
+    const labelHost = shownHost(label)
+    if (labelHost && !sameSite(labelHost, host)) {
       flags.push(`shown as a link to ${labelHost}, points at ${host || 'an unreadable host'}`)
     }
     out.push({ raw, target, wrappedBy, host, apexDomain: apexDomain(host), flags, shownAs: label })
   }
   return { links: out, dropped: all.length - kept.length }
+}
+
+/**
+ * A link shown as its own site is no decoy: the same host, or one inside the
+ * other (brand.com over www.brand.com or click.brand.com). Not by derived
+ * domain, which joins strangers on a shared host: contoso.sharepoint.com over
+ * evil.sharepoint.com is a decoy.
+ */
+function sameSite(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((h) =>
+    h
+      .toLowerCase()
+      .replace(/\.$/, '')
+      .replace(/^www\./, '')
+  )
+  return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`)
+}
+
+/**
+ * The host a link's text names, when that text is a web address, or a host
+ * written without a scheme (`www.paypal.com`, `paypal.com/signin`, the
+ * commonest decoy) that the case's own scan would list as a domain, so a file
+ * name such as `invoice.pdf` is not taken for one. '' for any other text.
+ */
+function shownHost(label: string): string {
+  if (/^https?:\/\//i.test(label)) {
+    try {
+      return new URL(label).hostname.toLowerCase()
+    } catch {
+      return ''
+    }
+  }
+  const host = /^[^\s/?#:@\\]+(?=[/?#:]|$)/.exec(label)?.[0] ?? ''
+  return host && extractIocsFromText(host, []).some((i) => i.type === 'domain' && i.value === host)
+    ? host.toLowerCase()
+    : ''
 }
 
 const MACRO_CAPABLE = /\.(docm|dotm|xlsm|xltm|xlam|pptm|potm|ppam|xls|doc|ppt)$/i
@@ -858,6 +956,13 @@ export interface AttachmentReport {
   bytes: Uint8Array
   /** What a PDF's own bytes say it does and carries — present only when the bytes ARE a PDF. */
   pdf?: PdfStructure
+  /**
+   * Indicators read out of a PDF's decoded page text, form field values and
+   * JavaScript, with where in it each was read. Apart from `inside`, which is
+   * a scan of the raw bytes: these went through the file's own fonts and
+   * filters, and their case notes say so.
+   */
+  pdfTextIocs?: PdfTextIoc[]
   /** What a ZIP container lists and links to — present only when the bytes ARE a ZIP. */
   office?: OfficeStructure
   /** What a legacy OLE compound file's directory lists — present only when the bytes ARE one. */
@@ -890,7 +995,15 @@ export interface EmbeddedImage {
   sha256: string
 }
 
-export type PdfStructure = Omit<PdfFacts, 'images'> & { images: EmbeddedImage[] }
+/**
+ * A file embedded in a PDF, as one inside an archive is kept: typed from its
+ * first bytes, hashed only when decoded whole, never opened, and its bytes let
+ * go. Every name it gives itself is kept, because it can name itself one
+ * thing to one reader and another to the next.
+ */
+export type PdfEmbeddedReport = InnerFileReport & { where: string; size: number | null; names: string[] }
+export type PdfParsedReport = Omit<PdfParsed, 'embeddedFiles'> & { embeddedFiles: PdfEmbeddedReport[] }
+export type PdfStructure = Omit<PdfFacts, 'images' | 'parsed'> & { images: EmbeddedImage[]; parsed?: PdfParsedReport }
 export type OfficeStructure = Omit<OfficeFacts, 'images' | 'files'> & {
   images: EmbeddedImage[]
   files: InnerFileReport[]
@@ -1060,11 +1173,36 @@ export function contentMismatch(filename: string, contentType: string, sniffed: 
 const STRINGS_CAP = 1_000_000
 
 /**
- * What one message's attachments may inflate between them, for pictures and
- * the files inside archives. Each container has its own 32 MB ceiling, and a
- * mail under 1 MB carrying twenty of them held 640 MB.
+ * What one message's attachments may inflate between them, for pictures, the
+ * files inside archives and decompressed PDF data. Each container has its own
+ * 32 MB ceiling, and a mail under 1 MB carrying twenty of them held 640 MB.
  */
 const MESSAGE_MEDIA_BUDGET = 64_000_000
+
+/**
+ * What one message's PDFs may spend between them on reading their objects:
+ * steps of the object reader, and wall time. Each file also stops at its own
+ * share (64 Mi steps, 5 seconds), so twenty PDFs cannot each spend a file's
+ * worth while the UI thread waits.
+ */
+const MESSAGE_PDF_WORK = 256 * 2 ** 20
+const MESSAGE_PDF_MS = 15_000
+
+/**
+ * Indicators read out of PDF page text, form fields and JavaScript that one
+ * file, and one message, may add to the case. Page text is sender-drawn and
+ * can carry thousands of addresses; past these the rest are counted, not added.
+ */
+const FILE_TEXT_IOCS = 100
+const MESSAGE_TEXT_IOCS = 500
+
+/** One message's budgets, drawn down part by part in the order the parts are read. */
+interface MessageBudget {
+  /** Bytes of pictures, inner files and decompressed PDF data. */
+  left: number
+  pdf: Work
+  textIocs: number
+}
 
 /**
  * The header block of a raw message: everything before the first blank line.
@@ -1103,7 +1241,11 @@ export async function analysePhishing(raw: string, owned: string[], brands: stri
   // which one ran the budget dry was down to timing, so no note could say
   // truthfully which attachments had used it. In order, "read before this
   // one" is simply what happened.
-  const media = { left: MESSAGE_MEDIA_BUDGET }
+  const media: MessageBudget = {
+    left: MESSAGE_MEDIA_BUDGET,
+    pdf: { left: MESSAGE_PDF_WORK, until: performance.now() + MESSAGE_PDF_MS },
+    textIocs: MESSAGE_TEXT_IOCS
+  }
   const everyPart: AttachmentReport[] = []
   for (const a of eml.attachments) everyPart.push(await readAttachment(a, owned, media))
   // Split by POSITION, not by filename. everyPart is in the order of
@@ -1192,11 +1334,27 @@ export function caseIocs(report: PhishReport, raw: string): Ioc[] {
     if (!prev) byKey.set(key, ioc)
     else if (!prev.note && ioc.note) prev.note = ioc.note
   }
-  const scan = (text: string, htmlText: string): Ioc[] =>
-    extractIocsFromText(`${text}\n${htmlText.replace(URL_RE, ' ')}`, [])
+  // A host shown as a link's text and not where it goes, written without a
+  // scheme so URL_RE cannot cut it (`www.paypal.com` over a link to
+  // evil.test), stays on the case: it may be the brand impersonated or a
+  // lookalike of it, which only the analyst can tell. Its note says what it is.
+  const scan = (text: string, htmlText: string, origin?: string): Ioc[] => {
+    const decoys = new Map<string, string>()
+    for (const l of report.links) {
+      const shown = l.origin === origin ? shownHost(l.shownAs) : ''
+      if (shown && !sameSite(shown, l.host)) decoys.set(shown, l.host)
+    }
+    return extractIocsFromText(`${text}\n${htmlText.replace(URL_RE, ' ')}`, []).map((i) => {
+      const to = i.type === 'domain' ? decoys.get(i.value.toLowerCase()) : undefined
+      return to ? { ...i, note: `shown as a link's text; the link points at ${to}` } : i
+    })
+  }
   for (const ioc of scan(`${headerBlockOf(raw)}\n${report.text}`, report.htmlText)) add(ioc)
   for (const f of report.forwarded) {
-    for (const ioc of scan(f.text, f.htmlText)) add({ ...ioc, note: `in the body of ${visibleName(f.origin)}` })
+    for (const ioc of scan(f.text, f.htmlText, f.origin)) {
+      const where = `in the body of ${visibleName(f.origin)}`
+      add({ ...ioc, note: ioc.note ? `${ioc.note}, ${where}` : where })
+    }
   }
   for (const link of report.links) {
     if (!link.target) continue
@@ -1253,18 +1411,101 @@ function partIocs(part: AttachmentReport): Ioc[] {
       out.push({ type: 'hash', value: file.sha256, note: `${visibleName(file.name)} inside ${name} (${hashed})` })
     }
   }
+  // Read through the file's own fonts and filters, which the file chooses, so
+  // the note says the value is as decoded here; JavaScript is quoted source,
+  // so it says only where.
+  for (const { ioc, from, how = '' } of part.pdfTextIocs ?? []) {
+    out.push({
+      ...ioc,
+      note: from === 'JavaScript' ? `in JavaScript inside ${name}` : `in ${from} of ${name}${how}, as decoded here`
+    })
+  }
+  const encrypted = part.pdf?.parsed?.stringsEncrypted ?? false
+  for (const file of part.pdf?.parsed?.embeddedFiles ?? []) {
+    if (file.sha256) {
+      const label = visibleName(file.name || noName(encrypted, '(unnamed embedded file)'))
+      out.push({ type: 'hash', value: file.sha256, note: `${label} inside ${name} (${hashed})` })
+    }
+  }
   return out
+}
+
+/**
+ * Text with every control, format and separator character named, line by line
+ * and column by column, so the line breaks and tabs that lay it out survive.
+ * For decoded page text and script: a right-to-left override in it would
+ * otherwise reorder the very lines that quote it. Each GAP is shown too.
+ */
+export function visibleText(t: string): string {
+  return showGaps(t)
+    .split('\n')
+    .map((l) => l.split('\t').map(visibleName).join('\t'))
+    .join('\n')
 }
 
 /**
  * A fenced block whose backtick run is longer than anything inside it, so the
  * content cannot close its own fence and escape into the note that renders it.
+ * `info` tags a block the case takes no indicators from, or only some, for
+ * noteScanText.
  */
-function fenced(text: string): string {
+function fenced(text: string, info: FenceInfo = ''): string {
   let longest = 0
   for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
   const fence = '`'.repeat(Math.max(3, longest + 1))
-  return `${fence}\n${text.replace(/\r\n?/g, '\n')}\n${fence}`
+  return `${fence}${info}\n${text.replace(/\r\n?/g, '\n')}\n${fence}`
+}
+
+/** A block the case takes no indicators from, or one quoting script, read for addresses only. */
+type FenceInfo = '' | 'no-indicators' | 'script'
+
+/**
+ * A case note as 'Extract indicators from this note' reads it: what the
+ * analysis would take from it, and no more. A `no-indicators` block is left
+ * out, a `script` block gives only its addresses (SCRIPT_IOC_TYPES), and
+ * every word beside a GAP_SHOWN is dropped as gapFree drops it; `left` counts
+ * those words. Read line by line as markdown reads fences, so a tag written
+ * inside another block opens nothing, and a block ends only at a line that is
+ * its own fence, exactly: the content's runs are all shorter. A block left
+ * open runs to the end of the note, as it renders.
+ */
+export function noteScanText(prose: string): { text: string; left: number } {
+  const kept: string[] = []
+  let left = 0
+  let fence = ''
+  let info = ''
+  let body: string[] = []
+  const close = (): void => {
+    if (info !== 'script') return
+    const g = gapFree(body.join('\n'), GAP_SHOWN)
+    left += g.left
+    for (const ioc of extractIocsFromText(g.text, [])) if (SCRIPT_IOC_TYPES.has(ioc.type)) kept.push(ioc.value)
+  }
+  for (const line of prose.split('\n')) {
+    if (!fence) {
+      const open = /^(`{3,})([^`]*)$/.exec(line)
+      fence = open?.[1] ?? ''
+      info = open?.[2].trim() ?? ''
+      if (info !== 'no-indicators' && info !== 'script') {
+        info = ''
+        kept.push(line)
+      }
+      continue
+    }
+    if (line.trimEnd() !== fence) {
+      if (info) body.push(line)
+      else kept.push(line)
+      continue
+    }
+    if (info) close()
+    else kept.push(line)
+    fence = ''
+    info = ''
+    body = []
+  }
+  close()
+  const g = gapFree(kept.join('\n'), GAP_SHOWN)
+  return { text: g.text, left: left + g.left }
 }
 
 /** Notes repeat once per malformed part; a 4MB mail produced 120,000 identical lines. */
@@ -1293,7 +1534,10 @@ function dedupe(lines: string[]): string[] {
 export const REBUILT_FACT =
   "this part's bytes were rebuilt here from its text as read (line breaks as LF), so its size and hashes may not match the file as sent"
 
-async function readAttachment(a: Attachment, owned: string[], media: { left: number }): Promise<AttachmentReport> {
+/** What follows `PK` in each ZIP record signature, ZIP64's included. */
+const ZIP_RECORDS = new Set(['\x01\x02', '\x03\x04', '\x05\x06', '\x06\x06', '\x06\x07', '\x07\x08'])
+
+async function readAttachment(a: Attachment, owned: string[], media: MessageBudget): Promise<AttachmentReport> {
   const facts = attachmentFacts(a)
   const origin = a.origin ? { origin: a.origin } : {}
   if (a.undecodable) {
@@ -1320,6 +1564,26 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
   // An empty file has no first bytes to compare with its name.
   const mismatch = a.bytes.length ? contentMismatch(a.filename, a.contentType, sniffed) : ''
   const { pdf, office, ole, failed } = await readStructure(a.bytes, sniffed, media)
+  const textIocs = pdf?.parsed ? pdfTextIocs(pdf.parsed, media) : { kept: [], dropped: 0, gapWords: 0, unread: '' }
+  // "From this file": the same value found elsewhere in the message is in the
+  // case from there, and this note is about what this file added.
+  if (pdf && textIocs.dropped) {
+    pdf.notes.push(
+      `${textIocs.dropped} further indicator(s) found in this PDF's page text, form fields or JavaScript are not added to the case from this file (one also found elsewhere in the message can be in it from there): this reader adds at most ${FILE_TEXT_IOCS} per file and ${MESSAGE_TEXT_IOCS} per message.`
+    )
+  }
+  if (pdf && textIocs.unread) {
+    pdf.notes.push(
+      `Indicators were not taken from ${textIocs.unread} in this PDF because this message's time limit for reading its PDFs (${MESSAGE_PDF_MS / 1000} seconds) was reached; any they hold are unread, not absent.`
+    )
+  }
+  // A link or action target cut short is a value cut, and counted with the rest.
+  const gapWords = textIocs.gapWords + structureValues(pdf, office).left
+  if (pdf && gapWords) {
+    pdf.notes.push(
+      `${gapWords} word(s) next to a place where this reader skipped or could not read part of the drawing (or cut a value or script) were left out of the indicators, since what is left of a word there can name another address; where the text is quoted, ${GAP_SHOWN} marks the place.`
+    )
+  }
   // The name said the contents could not be seen, and the ZIP reader has just listed them.
   const named = office?.entries.length
     ? facts.flatMap((f) => (f === ARCHIVE_FACT ? [] : f === DISK_IMAGE_FACT ? [DISK_IMAGE_AS_ZIP_FACT] : [f]))
@@ -1338,15 +1602,22 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
   // icon path of 33 characters read as `…/view.hta!%SystemRoot%`.
   const shortcut = sniffed === 'Windows shortcut (LNK)' ? lnkStrings(a.bytes) : null
   const scan = scanText(shortcut ? shortcut.blanked : a.bytes)
-  const structural = new Set(structureIocValues(pdf, office).map((ioc) => ioc.value.toLowerCase()))
+  // The encrypted /URI strings too: kept off the case, they are still on the
+  // card, labelled, and need not be listed a second time as found inside.
+  const structural = new Set(structureIocValues(pdf, office, true).map((ioc) => ioc.value.toLowerCase()))
   // A /URI literal string with an escape in it reads, raw, as the front of
   // its URL and a tail after the escape: `(https://ev\151l.com/a)` gave
   // `hxxps://ev` and `151l[.]com`, values the file does not hold. The reader
   // has decoded it and it is on the card, so it is blanked here. Unescaped
   // strings scan exactly as they decode, and the filter below drops those.
+  // A ZIP's record signatures are blanked the same way: a stored entry's text
+  // runs straight into the next header, and `…/a` read as `…/aPK`. Tested on
+  // the bytes, not on the reader, which is absent when the directory failed.
   const utf8 = pdf
     ? scan.utf8.replace(/\/URI\s*\((?:[^()\\]|\\[\s\S])*\)/g, (m) => (m.includes('\\') ? ' ' : m))
-    : scan.utf8
+    : /ZIP/.test(sniffed)
+      ? scan.utf8.replace(/PK/g, (m, at: number) => (ZIP_RECORDS.has(scan.utf8.slice(at + 2, at + 4)) ? '  ' : m))
+      : scan.utf8
   const found = extractIocsFromText(`${utf8}\n${scan.utf16}${shortcut ? `\n${shortcut.text}` : ''}`, []).filter(
     (ioc) => !structural.has(ioc.value.toLowerCase())
   )
@@ -1404,9 +1675,300 @@ async function readAttachment(a: Attachment, owned: string[], media: { left: num
     inside,
     bytes: a.bytes,
     ...(pdf ? { pdf } : {}),
+    ...(textIocs.kept.length ? { pdfTextIocs: textIocs.kept } : {}),
     ...(office ? { office } : {}),
     ...(ole ? { ole } : {})
   }
+}
+
+/**
+ * The indicator types JavaScript is read for. Most of what a script names is
+ * code, not a place: `var d = this.info;` scanned as prose lists `this.info`
+ * as a domain. An address it builds as it runs is not in its text at all.
+ */
+const SCRIPT_IOC_TYPES = new Set(['url', 'email', 'ip'])
+
+/**
+ * Where in a PDF an indicator was read: `from` names the place and `how` any
+ * caveat on how it was read, so a case note can put the file's name straight
+ * after the page, before the caveat.
+ */
+export interface PdfTextIoc {
+  ioc: Ioc
+  from: string
+  how?: string
+}
+
+/**
+ * A PDF source's text with every word that touches a GAP left out, and how
+ * many were. The reader puts a GAP where it stopped, skipped or cut, so the
+ * run of non-whitespace on either side of one may be only part of a word:
+ * `https://login.microsoftonline.com.evil.test` cut after `.co` reads as a
+ * host the file does not name, and what follows a skipped piece can be the
+ * tail of an address. No indicator spans whitespace, so the words left read
+ * as written. Scanned by hand, not by a regular expression: one that finds
+ * the run around a GAP backtracks over every position of a 1 MiB script with
+ * no whitespace in it.
+ *
+ * `mark` is GAP_SHOWN for text this module has already written out, a case
+ * note quoting the words beside each gap.
+ */
+export function gapFree(text: string, mark = GAP): { text: string; left: number } {
+  let kept = ''
+  let left = 0
+  let from = 0
+  for (let at = text.indexOf(mark); at !== -1; at = text.indexOf(mark, from)) {
+    let start = at
+    while (start > from && !/\s/.test(text[start - 1])) start--
+    let end = at + mark.length
+    while (end < text.length && !/\s/.test(text[end])) end++
+    left += text.slice(start, end).split(mark).filter(Boolean).length
+    kept += text.slice(from, start)
+    from = end
+  }
+  return { text: kept + text.slice(from), left }
+}
+
+/** How a GAP the PDF reader marked is shown, wherever its text leaves this module. */
+export const GAP_SHOWN = '[…]'
+
+/** A text the PDF reader gave, with each GAP in it shown as GAP_SHOWN: never as a raw U+E000. */
+export function showGaps(text: string): string {
+  return text.replaceAll(GAP, GAP_SHOWN)
+}
+
+/** How many characters a text the PDF reader gave holds: a GAP is its mark, not one of them. */
+export function charCount(text: string): number {
+  return text.length - (text.split(GAP).length - 1)
+}
+
+/**
+ * The front of a text the PDF reader gave that holds `n` of its characters as
+ * charCount counts them, with any GAP straight after the last: a text of `n`
+ * characters and a GAP is whole, and is quoted with its mark.
+ */
+export function firstChars(text: string, n: number): string {
+  let end = 0
+  for (let kept = 0; end < text.length && (kept < n || (end > 0 && text[end] === GAP)); end++) {
+    if (text[end] !== GAP) kept++
+  }
+  return text.slice(0, end)
+}
+
+/**
+ * Indicators in what a PDF shows and runs: the visible text of the pages the
+ * page tree lists, the invisible text on a page that draws a picture and no
+ * visible text (an OCR layer, or text hidden from a reader — both are said),
+ * form field values, and JavaScript. Each value once, at the first place it
+ * was read. Text drawn invisibly anywhere else, and pages outside the tree,
+ * are on the card and in the report but never added to the case: a reader
+ * does not show them, and a file can carry any number of them.
+ *
+ * At most FILE_TEXT_IOCS per file and what is left of the message's
+ * MESSAGE_TEXT_IOCS, which this draws down; the rest are counted. `gapWords`
+ * counts the words gapFree left out. `unread` names what the message's PDF
+ * deadline left unscanned, '' when every source was read.
+ */
+function pdfTextIocs(
+  p: PdfParsedReport,
+  media: MessageBudget
+): { kept: PdfTextIoc[]; dropped: number; gapWords: number; unread: string } {
+  type Kind = 'page text' | 'form field value' | 'script'
+  const sources: { text: string; from: string; how?: string; kind: Kind }[] = []
+  const assumed = 'partly read through an assumed encoding'
+  for (const page of p.pages) {
+    if (page.number === null) continue
+    sources.push({
+      text: page.text,
+      from: `the text of page ${page.number}`,
+      how: page.assumed ? ` (${assumed})` : '',
+      kind: 'page text'
+    })
+    if (ocrShaped(page)) {
+      sources.push({
+        text: page.hidden,
+        from: `invisible text on page ${page.number}`,
+        how: ` (a page that draws a picture and no visible text this reader decoded: an OCR layer, or text hidden from the reader${page.hiddenAssumed ? `; ${assumed}` : ''})`,
+        kind: 'page text'
+      })
+    }
+  }
+  for (const field of p.fields) {
+    sources.push({ text: field.value, from: 'a form field', kind: 'form field value' })
+  }
+  for (const s of p.scripts) sources.push({ text: s.source, from: 'JavaScript', kind: 'script' })
+  const seen = new Set<string>()
+  // Ten actions can run one 1 MiB /JS string: it is read once, not ten times.
+  // A later copy of a text adds nothing, since scripts, read for fewer types,
+  // come last.
+  const scanned = new Set<string>()
+  const found: PdfTextIoc[] = []
+  let gapWords = 0
+  let unread = ''
+  for (const [i, { text: all, from, how, kind }] of sources.entries()) {
+    // The message's PDF deadline holds here too: the object read stops at it,
+    // and a file's scripts scanned after it ran on for seconds. Checked
+    // between sources, so one scan is the most this runs past it. Every
+    // source left is counted, a copy of one read or an empty one alike: what
+    // the file wrote does not decide that nothing was missed.
+    if (performance.now() > (media.pdf.until ?? Infinity)) {
+      const counts = new Map<Kind, number>()
+      for (const s of sources.slice(i)) counts.set(s.kind, (counts.get(s.kind) ?? 0) + 1)
+      const parts = [...counts].map(([k, n]) => `${n} ${k}(s)`)
+      unread = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]
+      break
+    }
+    if (!all || scanned.has(all)) continue
+    scanned.add(all)
+    const { text, left } = gapFree(all)
+    gapWords += left
+    for (const ioc of extractIocsFromText(text, [])) {
+      const key = iocKey(ioc)
+      if ((kind === 'script' && !SCRIPT_IOC_TYPES.has(ioc.type)) || seen.has(key)) continue
+      seen.add(key)
+      found.push({ ioc, from, ...(how ? { how } : {}) })
+    }
+  }
+  const kept = found.slice(0, Math.max(0, Math.min(FILE_TEXT_IOCS, media.textIocs)))
+  media.textIocs -= kept.length
+  return { kept, dropped: found.length - kept.length, gapWords, unread }
+}
+
+/**
+ * A character a reader shows as a letter: not whitespace, not U+FFFD, which
+ * stands for one not decoded, and not a GAP (U+E000), the reader's own mark.
+ */
+export function decodable(text: string): boolean {
+  return /[^\s\uFFFD\uE000]/.test(text)
+}
+
+/**
+ * A page that draws a picture and no visible text this reader decoded. That
+ * is the shape text recognition leaves on a scan it makes searchable, and also
+ * how text is hidden from a reader; both are said wherever it is shown,
+ * because nothing here can tell them apart. Only that much: where the picture
+ * sits, and whether the text is drawn over it, is not checked.
+ */
+export function ocrShaped(page: PdfPage): boolean {
+  return page.pictures.length > 0 && !decodable(page.text)
+}
+
+/**
+ * What a page's invisible text is, after the page's own name, for the card and
+ * the report alike. "From it": a value it holds can still be in the case from
+ * somewhere else in the message.
+ */
+export function hiddenTextLabel(page: PdfPage): string {
+  return page.number !== null && ocrShaped(page)
+    ? 'drawn invisibly on a page that draws a picture and no visible text this reader decoded — the shape text recognition (OCR) leaves on a scanned page, and also a way to hide text from a reader'
+    : 'drawn so a reader does not show it (invisible text mode, zero size, or a hidden annotation); the case takes no indicators from it'
+}
+
+/** The invisible text's own counts, after hiddenTextLabel, for the card and the report alike. */
+export function hiddenCounts(page: PdfPage): string {
+  return (
+    (page.hiddenUndecoded ? `; ${page.hiddenUndecoded} of its characters were not decoded and are shown as �` : '') +
+    (page.hiddenAssumed ? '; partly read through an assumed encoding' : '')
+  )
+}
+
+/**
+ * What a buffer of nothing but U+FFFD says in place of its text, after its
+ * label, for the card and the report alike. Counted in the buffer itself: a
+ * /ToUnicode map can name U+FFFD outright, which the decoder does not count,
+ * and the decoder's count runs past what a cut kept. The cause is named only
+ * when the decoder counted at least as many.
+ *
+ * ponytail: a cut that keeps a mapped U+FFFD and drops an undecoded one is
+ * still named undecoded; counting each cause apart in pdfText would make it
+ * exact.
+ */
+export function undecodedOnly(text: string, undecoded: number): string {
+  const n = text.split('\uFFFD').length - 1
+  const count = n.toLocaleString('en-US')
+  return undecoded >= n
+    ? `${count} characters drawn in fonts this reader could not decode`
+    : `its text holds only ${count} replacement characters (U+FFFD)`
+}
+
+/**
+ * The page-text sentence the card and the report share. Counted over the
+ * pages the tree lists and that were read whole: a page whose drawing could
+ * not all be read is no evidence that it holds no text. `quoted` is added
+ * only when some page drew text.
+ */
+export function pageTextSummary(p: Pick<PdfParsed, 'pages' | 'pageCount'>, quoted = ''): string {
+  const tree = p.pages.filter((page) => page.number !== null)
+  const whole = tree.filter((page) => page.unread === 0)
+  const withText = whole.filter((page) => decodable(page.text) || decodable(page.hidden)).length
+  const unread = tree.length - whole.length
+  const orphans = p.pages.length - tree.length
+  return (
+    `of ${whole.length} page(s) read whole, ${withText} drew text this reader could decode` +
+    (unread ? `; ${unread} page(s) could not be read whole` : '') +
+    (p.pageCount !== null ? ` (the document declares ${p.pageCount})` : '') +
+    (orphans ? `; ${orphans} page object(s) outside the page tree were read too` : '') +
+    (withText ? quoted : '')
+  )
+}
+
+/**
+ * The pictures a page draws, each with where it is stored and whether it is
+ * the one extracted below at that byte. One that is not says only that, not
+ * why: a filter this reader does not extract and a picture extracted and then
+ * dropped by the message's budget look the same here, and the reader's notes
+ * say which. `esc` is the caller's sink for the filter name, which the file
+ * writes.
+ */
+export function pagePictures(page: PdfPage, images: EmbeddedImage[], esc: (value: string) => string): string {
+  return page.pictures
+    .map((pic) => {
+      const size = pic.width && pic.height ? ` ${pic.width}×${pic.height}` : ''
+      // The reader names an extracted image by its stream's data offset, as the page reader does.
+      const image = pic.offset === null ? undefined : images.find((i) => i.where.startsWith(`byte ${pic.offset} (`))
+      const kept = image
+        ? `, shown below as the ${isPicture(image.sniffed) ? 'picture' : 'stream'} at byte ${pic.offset}`
+        : `, stored ${esc(pic.filter)}: not shown here`
+      return `${esc(pic.filter)}${size} (${pic.where})${kept}`
+    })
+    .join('; ')
+}
+
+/**
+ * What each name an embedded file gives itself says, once each. Trailing dots
+ * and spaces are dropped first, as Windows drops them when it saves the file:
+ * `invoice.exe.` lands on disk as `invoice.exe`.
+ */
+export function embeddedNameNotes(names: string[]): string {
+  const notes = names.map((n) => entryNote(n.replace(/[. ]+$/, ''))).filter((n) => n !== null)
+  return [...new Set(notes)].join('; ')
+}
+
+/**
+ * What a form field with no value listed says. `encrypted` is whether the
+ * file's strings are: a value read from ciphertext is left out, so "no value
+ * set" there would be a claim about the file this reader cannot make. Nor
+ * about a field whose /V is there and not listed (`unread`): a signed
+ * signature field would read as unsigned, and a choice list whose elements
+ * examined list nothing as one with nothing chosen.
+ */
+export function noFieldValue(encrypted: boolean, unread = false): string {
+  if (unread) {
+    return "a /V value this reader does not list (a dictionary, stream or number, an array it stopped examining before it listed anything, or an object it could not read; a signature field's /V is its signature)"
+  }
+  return encrypted
+    ? 'no value listed (this file is encrypted, and a value stored encrypted is not read)'
+    : 'no value set (/V)'
+}
+
+/**
+ * What an embedded file or form field with no name read says, for the same
+ * reason: in an encrypted file a name read from ciphertext is left out, so
+ * `none` ("unnamed") would claim the file names nothing. Worded to stay true
+ * of an entry that really has no name, since encryption is file-wide here.
+ */
+export function noName(encrypted: boolean, none: string): string {
+  return encrypted ? '(no name read: this file is encrypted, and a name stored encrypted is not read)' : none
 }
 
 /** Past this many, a list says how many more there are instead of printing them. */
@@ -1487,14 +2049,78 @@ export function structureLines(a: AttachmentReport): string[] {
       lines.push(`  - ${list.length - STRUCTURE_LIST_CAP} further ${noun} are not listed`)
     }
   }
-  const shown = (value: string): string => quoteUntrusted(visibleName(value))
+  // showGaps for the values the PDF reader can mark: a form field value cut
+  // inside a word, and a /URI, link or action target cut short.
+  const shown = (value: string): string => quoteUntrusted(visibleName(showGaps(value)))
   if (a.pdf) {
     const { pdf } = a
-    lines.push(`  - PDF ${pdf.version || 'version not recorded'}${pdf.encrypted ? ', /Encrypt present' : ''}`)
+    const p = pdf.parsed
+    lines.push(`  - PDF ${pdf.version || 'version not recorded'}${encryptionWords(pdf, ', ')}`)
     if (pdf.markers.length) {
       lines.push(`  - PDF names found: ${pdf.markers.map((m) => `${m.name} ×${m.count}`).join(', ')}`)
     }
-    capped(pdf.uris, (uri) => `  - PDF link (/URI): ${shown(defangIoc(uri, 'url'))}`, 'PDF links')
+    // In a file whose strings are encrypted the byte scan read these from
+    // ciphertext: what a reader shows is something else, so they are said to
+    // be stored encrypted.
+    const uri = p?.stringsEncrypted ? '/URI string, stored encrypted — not what a reader shows' : 'link (/URI)'
+    capped(pdf.uris, (u) => `  - PDF ${uri}: ${shown(defangIoc(u, 'url'))}`, 'PDF links')
+    if (p) {
+      const fmt = (ms: { name: string; count: number }[]): string => ms.map((m) => `${m.name} ×${m.count}`).join(', ')
+      if (p.hiddenMarkers.length) lines.push(`  - PDF names inside compressed object streams: ${fmt(p.hiddenMarkers)}`)
+      if (p.escapedMarkers.length) {
+        lines.push(`  - PDF names written with #-escapes, decoded here: ${fmt(p.escapedMarkers)}`)
+      }
+      capped(
+        p.links,
+        (l) =>
+          `  - PDF link (/URI), ${l.where}${l.page ? `, on page ${l.page}` : ''}: ${shown(defangIoc(l.uri, 'url'))}`,
+        'PDF links read from its objects'
+      )
+      capped(
+        p.actions,
+        (x) =>
+          `  - PDF action ${shown(x.type)} ${x.trigger}${x.target ? `: ${shown(defangIoc(x.target, 'url'))}` : ''} (${x.where})`,
+        'PDF actions'
+      )
+      // Up to that section's cap: past it the report says how much it left out.
+      const quoted = `quoted under Attachment text below, up to that section's ${REPORT_TEXT_CAP.toLocaleString('en-US')}-character limit`
+      for (const s of p.scripts) {
+        lines.push(
+          `  - PDF JavaScript, ${s.where}: ${charCount(s.source)} characters of source${s.whole ? '' : ', not all of it read'}, ${quoted}, never run; bare domain names in it are not listed as indicators, and an address it builds as it runs is not known here`
+        )
+      }
+      capped(
+        p.embeddedFiles,
+        (f) => {
+          const also = f.names.length > 1 ? ` (also named ${f.names.slice(1).map(shown).join(', ')})` : ''
+          const named = embeddedNameNotes(f.names)
+          const size = f.size !== null ? `${f.size} bytes declared` : 'size not declared'
+          return `  - PDF embedded file ${f.name ? shown(f.name) : noName(p.stringsEncrypted, '(unnamed)')}${also}: ${size}; ${named ? `${named}; ` : ''}${innerFileFacts(f)}; not opened here (${f.where})`
+        },
+        'PDF embedded files'
+      )
+      capped(
+        p.fields,
+        (f) =>
+          `  - PDF form field ${f.name ? shown(f.name) : noName(p.stringsEncrypted, '(no name set, /T)')}${f.type ? ` (${shown(f.type)}${f.password ? ', password' : ''})` : ''}: ${f.value ? shown(f.value) : noFieldValue(p.stringsEncrypted, f.unread)}`,
+        'PDF form fields'
+      )
+      if (p.xfa) {
+        lines.push(
+          '  - PDF /XFA form present; its XML is not read here, so any script or link in it is unread, not absent'
+        )
+      }
+      for (const i of p.info) lines.push(`  - PDF information, as the file declares it: ${i.key} ${shown(i.value)}`)
+      if (p.pages.length) {
+        lines.push(`  - PDF page text: ${pageTextSummary(p, ` — ${quoted}`)}`)
+      }
+      capped(
+        p.pages.filter((page) => page.pictures.length),
+        (page) =>
+          `  - PDF pictures drawn on ${page.number !== null ? `page ${page.number}` : `the page object outside the page tree (${page.where})`}: ${pagePictures(page, pdf.images, shown)}`,
+        'pages with pictures'
+      )
+    }
     capped(pdf.images, imageLine, 'PDF images')
     for (const note of pdf.notes) lines.push(`  - PDF reader: ${quoteUntrusted(note)}`)
   }
@@ -1541,6 +2167,16 @@ function imageLine(image: EmbeddedImage): string {
   return `  - ${noun} ${quoteUntrusted(visibleName(image.where))}: ${image.sniffed || 'type not recognised'}, ${image.bytes.length} bytes, SHA-256 ${image.sha256} (computed here)`
 }
 
+/**
+ * What the header line says about encryption. Once the object read has run,
+ * from the trailer it followed; before, only that the name is in the bytes,
+ * which a comment or a string can carry as well.
+ */
+export function encryptionWords(pdf: PdfStructure, sep: string): string {
+  if (pdf.parsed) return pdf.parsed.encrypted ? `${sep}encrypted (its trailer names /Encrypt)` : ''
+  return pdf.encrypted ? `${sep}/Encrypt present` : ''
+}
+
 /** The last segment of a relationship Type URI — `attachedTemplate`, `oleObject`, `hyperlink` — which is the part that says what it is for. */
 export function relationshipType(type: string): string {
   return type.split('/').filter(Boolean).pop() || 'not recorded'
@@ -1557,7 +2193,7 @@ export function relationshipType(type: string): string {
 async function readStructure(
   bytes: Uint8Array,
   sniffed: string,
-  media: { left: number }
+  media: MessageBudget
 ): Promise<{ pdf?: PdfStructure; office?: OfficeStructure; ole?: CfbFacts; failed?: string }> {
   const identify = (list: { where: string; bytes: Uint8Array }[]): Promise<EmbeddedImage[]> =>
     Promise.all(list.map(async (i) => ({ ...i, sniffed: sniffType(i.bytes), sha256: await hashBytes(i.bytes) })))
@@ -1589,14 +2225,37 @@ async function readStructure(
         kept.push(image)
       }
       const cut = facts.images.length - kept.length
+      // After the pictures are charged, so every message read before this
+      // existed spends its budget in the same order and keeps the same
+      // pictures. Its decompressed data draws on what they left, and its
+      // steps and time on the message's PDF budget. It rewrites the notes.
+      await readPdfObjects(bytes, facts, media, media.pdf)
       const notes = cut
         ? [
             ...facts.notes,
-            `${cut} image stream${cut === 1 ? ' was' : 's were'} extracted and not kept: this message's budget for pictures and inner files was used up by what was read before ${cut === 1 ? 'it, so it is' : 'them, so they are'} not hashed or drawn — unread, not absent.`
+            `${cut} image stream${cut === 1 ? ' was' : 's were'} extracted and not kept: this message's budget for pictures, inner files and decompressed PDF data was used up by what was read before ${cut === 1 ? 'it, so it is' : 'them, so they are'} not hashed or drawn — unread, not absent.`
           ]
         : facts.notes
       const images = await identify(kept.map((i) => ({ where: `byte ${i.offset} (${i.filter})`, bytes: i.bytes })))
-      return { pdf: { ...facts, notes, images } }
+      // Typed and hashed as a file inside an archive is, then let go.
+      const parsed = facts.parsed && {
+        ...facts.parsed,
+        embeddedFiles: await Promise.all(
+          facts.parsed.embeddedFiles.map(async (f): Promise<PdfEmbeddedReport> => {
+            const kind = sniffType(f.head)
+            return {
+              name: f.name,
+              names: f.names,
+              size: f.size,
+              where: f.where,
+              sniffed: kind,
+              mismatch: f.head.length ? contentMismatch(f.name, '', kind) : '',
+              sha256: f.bytes ? await hashBytes(f.bytes) : ''
+            }
+          })
+        )
+      }
+      return { pdf: { ...facts, notes, images, parsed } }
     }
     if (/ZIP/.test(sniffed)) {
       const facts = await readZipDocument(bytes, media)
@@ -1638,7 +2297,9 @@ async function readStructure(
  * Indicators the structure readers found, typed and not yet formatted. They
  * matter most where the plain text scan is blind: a relationship target in an
  * Office file lives in a COMPRESSED part, and a PDF link written in escapes or
- * hex cannot be found by searching the bytes as text. They are also the lure
+ * hex, or packed in an object stream, cannot be found by searching the bytes
+ * as text — nor can an action's target, a Launch command or a SubmitForm
+ * address, which the object read lists beside its links. They are also the lure
  * itself, so they join the message's indicator list and the case, and not
  * only the attachment's card.
  *
@@ -1658,8 +2319,12 @@ async function readStructure(
  * are left to the card, which shows every target as written; add them here if
  * one turns up in a real template.
  */
-function structureIocValues(pdf: PdfStructure | undefined, office: OfficeStructure | undefined): Ioc[] {
-  const extra = [...(pdf?.uris ?? []), ...(office?.externalTargets.map((t) => t.target) ?? [])]
+function structureIocValues(
+  pdf: PdfStructure | undefined,
+  office: OfficeStructure | undefined,
+  withCiphertext = false
+): Ioc[] {
+  const extra = structureValues(pdf, office, withCiphertext).values
   const out = extra.length ? extractIocsFromText(extra.join('\n'), []) : []
   for (const target of extra) {
     const m = /^(?:\\\\([^\\/@:]+)|file:\/\/(?:[\\/]{2,})?([^\\/@:]+)(?=[\\/:]|$))/i.exec(target)
@@ -1667,6 +2332,36 @@ function structureIocValues(pdf: PdfStructure | undefined, office: OfficeStructu
     if (host && /^[\w-]+(?:\.[\w-]+)+$/.test(host)) out.push({ type: detectIocType(host), value: host })
   }
   return out
+}
+
+/**
+ * The values structureIocValues reads, each once, with every word that touches
+ * a GAP left out, and how many were. The PDF reader ends a /URI, link or
+ * action target it cut short in a GAP, and what is left of an address cut
+ * short can name another: `…secure.paypal.com.verify-acct.net` cut after `.co`.
+ */
+function structureValues(
+  pdf: PdfStructure | undefined,
+  office: OfficeStructure | undefined,
+  withCiphertext = false
+): { values: string[]; left: number } {
+  const p = pdf?.parsed
+  // The byte scan's /URI strings in a file whose strings are encrypted are
+  // ciphertext, not where a click goes, so the case never gets them. Only the
+  // caller that keeps them from being listed twice asks for them.
+  const raw = new Set([
+    ...(p?.stringsEncrypted && !withCiphertext ? [] : (pdf?.uris ?? [])),
+    ...(p?.links.map((l) => l.uri) ?? []),
+    ...(p?.actions.flatMap((x) => (x.target ? [x.target] : [])) ?? []),
+    ...(office?.externalTargets.map((t) => t.target) ?? [])
+  ])
+  let left = 0
+  const values = [...raw].map((value) => {
+    const kept = gapFree(value)
+    left += kept.left
+    return kept.text
+  })
+  return { values, left }
 }
 
 /**
@@ -1833,6 +2528,115 @@ export function showsDerivedDomain(link: LinkFinding): boolean {
 }
 
 /**
+ * Characters of attachment text one report, and so one case, copies. Past it
+ * the report says how much it left out and what the card still shows, which
+ * is not all of it: each script as quoted, but only PAGE_TEXT_SHOWN of a page.
+ */
+export const REPORT_TEXT_CAP = 150_000
+
+/** Characters of one script quoted, in the report and on the card. */
+export const SCRIPT_QUOTED = 10_000
+
+/** Characters of a page's text, and of its invisible text, the card draws. */
+export const PAGE_TEXT_SHOWN = 4_000
+
+/**
+ * The front of a text cut at `n` characters, as firstChars counts them, half
+ * a surrogate pair dropped, and a GAP after it when the cut splits a word: what
+ * is left of a word there can name another host (`…microsoftonline.co`), and
+ * the mark is what makes gapFree drop it and the note show the cut.
+ */
+function quoteFirst(text: string, n: number): string {
+  const kept = firstChars(text, n).replace(/[\uD800-\uDBFF]$/, '')
+  const word = (ch: string | undefined): boolean => ch !== undefined && !/\s/.test(ch)
+  return kept && kept.length < text.length && !kept.endsWith(GAP) && word(kept.at(-1)) && word(text[kept.length])
+    ? kept + GAP
+    : kept
+}
+
+/**
+ * The text read out of each PDF attachment — page by page, then its scripts —
+ * as labelled, fenced blocks, each ending on a blank line. Every block is
+ * escaped as names are, then fenced, so a page that draws a fence, `![[x]]`
+ * or a right-to-left override stays inside its own block as visible text.
+ *
+ * ponytail: the cap counts characters before the escapes, which can stand up
+ * to 10 characters for each one escaped, so a page of nothing but format
+ * characters copies up to that many times more. Count after escaping if a
+ * real report ever needs the bound exact.
+ */
+function attachmentText(report: PhishReport): string[] {
+  const blocks: { label: string; text?: string; info?: FenceInfo }[] = []
+  for (const a of report.attachments) {
+    const p = a.pdf?.parsed
+    if (!p) continue
+    const file = `${quoteUntrusted(visibleName(a.filename))}${a.origin ? ` inside ${quoteUntrusted(visibleName(a.origin))}` : ''}`
+    for (const page of p.pages) {
+      const tree = page.number !== null
+      const name = tree
+        ? `Page ${page.number} of ${file}`
+        : `A page object of ${file} that the page tree read here does not list (${page.where})`
+      if (decodable(page.text)) {
+        const how =
+          (tree ? ', as its fonts decode it' : '') +
+          (page.undecoded ? ` (${page.undecoded} characters not decoded, shown as �)` : '') +
+          (page.assumed ? ' (partly read through an assumed encoding)' : '') +
+          (tree ? '' : ' — a reader following that tree does not show it; the case takes no indicators from it')
+        blocks.push({ label: `${name}${how}:`, text: page.text, info: tree ? '' : 'no-indicators' })
+      } else if (page.text) {
+        // Only U+FFFD: a fence of them would look like text that was read.
+        blocks.push({ label: `${name}: ${undecodedOnly(page.text, page.undecoded)}.` })
+      }
+      // The same for the invisible text, with its own counts.
+      if (decodable(page.hidden)) {
+        blocks.push({
+          label: `${name}, ${hiddenTextLabel(page)}${hiddenCounts(page)}:`,
+          text: page.hidden,
+          info: tree && ocrShaped(page) ? '' : 'no-indicators'
+        })
+      } else if (page.hidden) {
+        blocks.push({
+          label: `${name}, ${hiddenTextLabel(page)}: ${undecodedOnly(page.hidden, page.hiddenUndecoded)}.`
+        })
+      }
+    }
+    // Counted and cut as charCount and firstChars count, so a GAP is never
+    // what tips a text over a limit or what the cut drops.
+    for (const s of p.scripts) {
+      const part = charCount(s.source) > SCRIPT_QUOTED ? ` (the first 10,000 of ${charCount(s.source)} characters)` : ''
+      blocks.push({
+        label: `JavaScript in ${file}, ${s.where}, not run${part}:`,
+        text: quoteFirst(s.source, SCRIPT_QUOTED),
+        info: 'script'
+      })
+    }
+  }
+  const lines: string[] = []
+  let left = REPORT_TEXT_CAP
+  for (const [i, { label, text, info }] of blocks.entries()) {
+    if (text !== undefined && charCount(text) > left) {
+      // The block that crosses the cap is cut there.
+      const kept = quoteFirst(text, left)
+      if (kept) lines.push(label, '', fenced(visibleText(kept), info), '')
+      const rest = blocks.slice(i).reduce((n, b) => n + charCount(b.text ?? ''), -left)
+      // Only what the card does show: it draws each page only in part, so
+      // page text past both limits is on neither, and says so.
+      lines.push(
+        `The rest of the attachment text (${rest} characters) is not copied here. The analysis card quotes each script as this report would, but draws only the first ${PAGE_TEXT_SHOWN.toLocaleString('en-US')} characters of each page's text and of its invisible text, so page text past both limits is shown nowhere; the indicators this reader took from it are still listed under Indicators.`,
+        ''
+      )
+      break
+    }
+    lines.push(label, '')
+    if (text !== undefined) {
+      lines.push(fenced(visibleText(text), info), '')
+      left -= charCount(text)
+    }
+  }
+  return lines
+}
+
+/**
  * The whole analysis as markdown, for the clipboard or a case description.
  *
  * Every sender-controlled value goes through quoteUntrusted, because this text
@@ -1919,6 +2723,13 @@ export function formatPhishReport(report: PhishReport): string {
   lines.push('', '### Message body', '', ...body(report))
   for (const f of report.forwarded) {
     lines.push(`Text of the attached message ${quoteUntrusted(visibleName(f.origin))}:`, '', ...body(f))
+  }
+  // After the message's own text and before the indicators, so the lure the
+  // victim read sits next to the values taken from it.
+  const quoted = attachmentText(report)
+  if (quoted.length) {
+    lines.pop()
+    lines.push('', '### Attachment text — decoded here, never rendered or run', '', ...quoted)
   }
   // Every block above ends on a blank line; the next heading brings its own.
   lines.pop()

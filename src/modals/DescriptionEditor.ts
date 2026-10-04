@@ -14,11 +14,11 @@ import {
 import { Component, MarkdownRenderer, Menu, Notice, type App } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
-import { copyText, defangCopyMenu } from '../ui/defangMenu'
+import { copyDefanged, defangCopyMenu } from '../ui/defangMenu'
 import { IconButton } from '../ui/primitives/IconButton'
 import { defangText, refangSelection } from '../soc/toolbox'
 import { safeAsync } from '../utils'
-import { attachmentFileName, attachmentLink } from './AttachmentsSection'
+import { attachmentFileName, attachmentLink, type AttachTarget } from './AttachmentsSection'
 import { toggleRenderedCheckbox } from './checkboxToggle'
 import { toggleInlineMarker } from './inlineFormat'
 import { blockGaps, classifyLine, computeInlineMarks, fenceMap, listDepths } from './livePreviewMarks'
@@ -39,6 +39,12 @@ export interface DescriptionEditorContext {
   onNavigateAway?: (() => void) | (() => Promise<boolean>)
   /** Called on every doc change (the detail panel schedules its autosave here). */
   onChange?: () => void
+  /**
+   * Where a pasted or dropped file is copied: the host's own attach target,
+   * as the Evidence section gets. Without one (a new case, which has no note
+   * and so no folder yet) files are refused, never filed under a guess.
+   */
+  attach?: AttachTarget
 }
 
 export interface DescriptionEditorHandle {
@@ -262,15 +268,17 @@ export function renderDescriptionEditor(
   const noteSuggest = new NoteLinkSuggest(app)
   noteSuggest.attach(descSection)
 
+  const refuseFiles = () => new Notice('Create the case first, then attach files.')
+
   // The Evidence section's attach rule (AttachmentsSection.attachFiles): a
   // name unique in the vault, only pictures embedded (a dropped note rendered
   // in the preview, remote images and all), and the link in before any byte is
   // copied, so no save made while a large file copies can miss it.
   /** Set by destroy(): copies settling later must not redraw a dead preview. */
   let destroyed = false
-  const insertAttachments = async (items: { blob: Blob; name: string }[]): Promise<void> => {
+  const insertAttachments = async (attach: AttachTarget, items: { blob: Blob; name: string }[]): Promise<void> => {
     const planned = items.map(({ blob, name }) => {
-      const saved = plugin.store.reserveAttachmentName(attachmentFileName(name))
+      const saved = attach.reserve(attachmentFileName(name))
       const snippet = attachmentLink(saved)
       const { from, to } = view.state.selection.main
       view.dispatch({
@@ -281,7 +289,7 @@ export function renderDescriptionEditor(
     })
     for (const { blob, name, saved } of planned) {
       try {
-        await plugin.store.writeTaskAttachment(project, task, saved, await blob.arrayBuffer())
+        await attach.write(saved, await blob.arrayBuffer())
       } catch (err) {
         console.error('Failed to save attachment', err)
         new Notice(`Could not copy ${name}. Its link [[${saved}]] points at nothing; remove it.`)
@@ -332,7 +340,7 @@ export function renderDescriptionEditor(
       item
         .setTitle('Copy defanged')
         .setIcon('copy')
-        .onClick(() => copyText(defangText(text), 'Copied, defanged'))
+        .onClick(() => copyDefanged(text))
     )
     menu.showAtMouseEvent(e)
     return true
@@ -399,8 +407,12 @@ export function renderDescriptionEditor(
             }
           }
           if (attachments.length === 0) return false
+          if (!ctx.attach) {
+            refuseFiles()
+            return false // pasted as text: whatever else the clipboard holds still lands
+          }
           e.preventDefault()
-          void insertAttachments(attachments)
+          void insertAttachments(ctx.attach, attachments)
           return true
         },
         // File drops are the section listener's job (it also covers drops on
@@ -547,12 +559,17 @@ export function renderDescriptionEditor(
   descSection.addEventListener('drop', (e) => {
     const files = e.dataTransfer?.files
     if (!files || files.length === 0) return
+    // Taken either way, so the app does not open the dropped file itself.
     e.preventDefault()
+    if (!ctx.attach) {
+      refuseFiles()
+      return
+    }
     if (editorWrap.classList.contains('pm-hidden')) {
       showEdit(task.description.length)
     }
     const attachments = Array.from(files).map((f) => ({ blob: f, name: f.name }))
-    void insertAttachments(attachments)
+    void insertAttachments(ctx.attach, attachments)
   })
 
   // Walk the rendered text and the markdown source in step, skipping the source

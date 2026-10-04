@@ -159,27 +159,41 @@ describe('description preview', () => {
   })
 })
 
+const file = (name: string) => ({ name, arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)) })
+
 describe('a file dropped on the description', () => {
+  it('is refused on a new case, which has no note to file it under yet, and nothing is written', async () => {
+    const store = { reserveAttachmentName: vi.fn<() => string>(), writeTaskAttachment: vi.fn<() => Promise<void>>() }
+    const root = FakeEl.root()
+    const withStore = { ...plugin, store: { ...plugin.store, ...store } } as unknown as PMPlugin
+    renderDescriptionEditor(root as unknown as HTMLElement, { app, plugin: withStore, project, task: makeTask() })
+    const drop = fakeEvent('drop', { dataTransfer: { files: [file('shot.png')] } })
+    root.find('.pm-modal-desc-section').dispatchEvent(drop)
+    await flush()
+    // Taken, so the app does not open the file itself; just not copied anywhere.
+    expect(drop.defaultPrevented).toBe(true)
+    expect(store.reserveAttachmentName).not.toHaveBeenCalled()
+    expect(store.writeTaskAttachment).not.toHaveBeenCalled()
+  })
+
   it('follows the Evidence attach rule: only pictures embed, every name resolves, links go in before the copy', async () => {
     inserts.length = 0
     const reserved: string[] = []
     const written: string[] = []
     let release = () => {}
     const gate = new Promise<void>((resolve) => (release = resolve))
-    const store = {
-      reserveAttachmentName: (name: string) => {
+    const attach = {
+      reserve: (name: string) => {
         reserved.push(name)
         return name
       },
-      writeTaskAttachment: async (_p: unknown, _t: unknown, name: string) => {
+      write: async (name: string) => {
         await gate
         written.push(name)
       }
     }
-    const dropPlugin = { ...plugin, store } as unknown as PMPlugin
     const root = FakeEl.root()
-    renderDescriptionEditor(root as unknown as HTMLElement, { app, plugin: dropPlugin, project, task: makeTask() })
-    const file = (name: string) => ({ name, arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)) })
+    renderDescriptionEditor(root as unknown as HTMLElement, { app, plugin, project, task: makeTask(), attach })
     const files = [file('phish.md'), file('shot.png'), file('invoice #2.pdf'), file('e3b0c44298fc1c14')]
     root.find('.pm-modal-desc-section').dispatchEvent(fakeEvent('drop', { dataTransfer: { files } }))
     await vi.waitFor(() => expect(inserts).toHaveLength(4))

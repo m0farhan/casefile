@@ -64,6 +64,11 @@ export function renderCustomFieldInput(
         const o = sel.createEl('option', { value: opt, text: opt })
         if (opt === currentVal) o.selected = true
       }
+      // A recorded value no longer in the option list (renamed or removed in
+      // board settings) reads as itself, never as unset (Severity precedent).
+      if (typeof currentVal === 'string' && currentVal !== '' && !(cf.options ?? []).includes(currentVal)) {
+        sel.createEl('option', { value: currentVal, text: `${currentVal} (not an option)` }).selected = true
+      }
       sel.addEventListener('change', () => {
         task.customFields[cf.id] = sel.value
       })

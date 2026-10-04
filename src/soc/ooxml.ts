@@ -417,7 +417,10 @@ function walkCentralDirectory(bytes: Uint8Array, view: DataView, end: EndRecord,
     const readable = Math.min(nameLength, MAX_NAME_BYTES)
     if (readable < nameLength) truncatedName = true
     const entry: CentralRecord = {
-      name: utf8.decode(bytes.subarray(nameAt, nameAt + readable)) + (readable < nameLength ? '…' : ''),
+      // U+E000 → U+FFFD as in xmlText: a name cannot forge the PDF reader's gap mark.
+      name:
+        utf8.decode(bytes.subarray(nameAt, nameAt + readable)).replaceAll('\uE000', '\uFFFD') +
+        (readable < nameLength ? '…' : ''),
       size: view.getUint32(at + 24, true),
       compressedSize: view.getUint32(at + 20, true),
       method: methodWord(view.getUint16(at + 10, true)),
@@ -554,30 +557,146 @@ function locateData(bytes: Uint8Array, view: DataView, entry: CentralRecord): { 
 }
 
 /**
+ * How much input one write hands the decompressor.
+ *
+ * Chromium (151 to 154 measured, the engine family Obsidian desktop embeds)
+ * throws "Junk found after end of compressed data" as soon as it sees bytes
+ * past the end of the deflate stream, and the error throws away the output it
+ * had queued and nobody had read yet. As ONE write, 131,072 of 8,388,608 bytes
+ * came out. In awaited 1 KiB pieces, backpressure has each piece's output read
+ * before the next piece goes in, so only the piece holding the stream's end
+ * can lose any (24 ms per 8 MiB of input) — and it does, once that piece
+ * expands past about 128 KiB: a zero tail lost 227,917 of 4,194,304 bytes.
+ * inflate() replays that one piece a byte at a time when its write failed.
+ * ZIP entries read to "the rest of the file" always end in junk, and so does a
+ * PDF stream read with its checksum.
+ */
+const WRITE_CHUNK = 1024
+
+/**
+ * How many of the input's last bytes the first pass writes one at a time.
+ * Junk that starts among them fails a write that made no output, so nothing
+ * was lost and nothing is replayed. It is sized for a PDF /Length that counts
+ * the EOL, which puts at most six bytes (the checksum and a CRLF) after the
+ * deflate body. Every byte is a write of its own: 300 pages of two such
+ * content streams read in 66 ms in Chromium 151 with this, and in 348 ms
+ * with 64.
+ */
+const ONE_BYTE_TAIL = 8
+
+/**
  * Inflate under a hard output cap, stopping the stream at the cap instead of
  * buffering first. `failed` is the difference between "this part declares
  * nothing" and "this part could not be read", which the caller cannot tell
  * from empty output alone.
+ *
+ * A pass that a WRITE_CHUNK write failed, short of the cap, runs once more
+ * with that piece written a byte at a time: the stream's last byte then lands
+ * in a write that does not fail, and the junk after it fails a write that made
+ * no output. The longer output is kept, with that pass's flags. WHERE the
+ * write failed is the only thing that decides it; a failure in the one-byte
+ * tail (see ONE_BYTE_TAIL) lost nothing. Deciding by the declared size or the
+ * stream's own checksum handed the decision to the file: one that wrote the
+ * size or checksum of what Chromium predictably keeps skipped the replay, lost
+ * its tail with no note, and had the prefix hashed as the file. `replay` only
+ * refuses a pass the caller cannot pay for. `retried` says one ran, and
+ * `lossy` that one was needed and refused, so what came out may be short of
+ * what the stream holds whatever the file says about it. `junkAt` is the byte
+ * a failed one-byte write carried (see inflatePass), -1 when none failed.
+ *
+ * ponytail: callers count calls, so one call can cost two passes, the second
+ * over no more input than the first and with one piece split into at most
+ * 1,024 writes. pdfObjects charges the second to its budgets; the ZIP paths
+ * here count it as the same open, so 24 media opens are at most 48 passes.
+ * Charge it there too if that bound ever binds.
  */
-async function inflate(
+export async function inflate(
   data: Uint8Array,
-  cap: number
-): Promise<{ bytes: Uint8Array; truncated: boolean; failed: boolean }> {
+  cap: number,
+  replay: () => boolean
+): Promise<{
+  bytes: Uint8Array
+  truncated: boolean
+  failed: boolean
+  retried: boolean
+  lossy: boolean
+  junkAt: number
+}> {
+  // Copied into its own buffer: a view onto the caller's array is typed as
+  // possibly shared, which a stream will not take. Every caller caps the slice
+  // first (MAX_RELS_INPUT here, the decode cap in pdfObjects), so the copy is
+  // bounded too, and both passes share it.
+  const input = new Uint8Array(data)
+  const first = await inflatePass(input, cap, -1)
+  const needed = first.failed && !first.truncated && first.rejectedAt >= 0
+  if (!needed || !replay()) {
+    const { bytes, truncated, failed, junkAt } = first
+    return { bytes, truncated, failed, retried: false, lossy: needed, junkAt }
+  }
+  const second = await inflatePass(input, cap, first.rejectedAt)
+  const best = second.bytes.length > first.bytes.length ? second : first
+  // The replay wrote the failed piece a byte at a time, so only it can say which byte was refused.
+  return {
+    bytes: best.bytes,
+    truncated: best.truncated,
+    failed: best.failed,
+    retried: true,
+    lossy: false,
+    junkAt: second.junkAt
+  }
+}
+
+/**
+ * One pass of inflate(). The first (`slow` -1) writes the last ONE_BYTE_TAIL
+ * bytes a byte at a time; a replay writes the WRITE_CHUNK piece starting at
+ * `slow` that way and closes the input after it.
+ */
+async function inflatePass(
+  input: Uint8Array<ArrayBuffer>,
+  cap: number,
+  slow: number
+): Promise<{ bytes: Uint8Array; truncated: boolean; failed: boolean; rejectedAt: number; junkAt: number }> {
   const stream = new DecompressionStream('deflate-raw')
   const writer = stream.writable.getWriter()
-  // Not awaited: a decompressor applies backpressure, so writing the whole
-  // input before reading a byte of output deadlocks on anything non-trivial.
-  void (async () => {
+  /**
+   * Where the WRITE_CHUNK piece starts whose write failed; -1 when none did. A
+   * failure at close is a short stream, not junk, and one in the one-byte tail
+   * lost nothing.
+   */
+  let rejectedAt = -1
+  /**
+   * The byte whose one-byte write failed; -1 when none did. Chromium fails the
+   * write carrying the first byte past the stream's end, so the stream may end
+   * right before it — the decoder's guess, which only a clean close of the
+   * input cut there confirms (pdfObjects runs that). Node fails only the close.
+   */
+  let junkAt = -1
+  const tail = slow < 0 ? Math.max(0, input.length - ONE_BYTE_TAIL) : input.length
+  // Not awaited here: a decompressor applies backpressure, so writing the
+  // whole input before reading a byte of output deadlocks on anything
+  // non-trivial.
+  const writing = (async () => {
+    let at = 0
+    /** The byte a one-byte write is carrying; -1 outside those writes. */
+    let b = -1
     try {
-      // Copied into its own buffer: a view onto the caller's array is typed as
-      // possibly shared, which a stream will not take. The slice is already
-      // capped by MAX_RELS_INPUT, so the copy is bounded too.
-      await writer.write(new Uint8Array(data))
+      for (; at < tail; at += WRITE_CHUNK) {
+        if (at !== slow) {
+          await writer.write(input.subarray(at, Math.min(at + WRITE_CHUNK, tail)))
+          continue
+        }
+        for (b = at; b < Math.min(input.length, at + WRITE_CHUNK); b++) await writer.write(input.subarray(b, b + 1))
+        break
+      }
+      for (b = tail; b < input.length; b++) await writer.write(input.subarray(b, b + 1))
+      b = -1
       await writer.close()
     } catch {
       // Cancelling the reader at the cap rejects the pending write. The read
       // side already knows what happened and reports it; this must not become
-      // an unhandled rejection.
+      // an unhandled rejection. Where a write failed is kept for the replay.
+      if (at < tail) rejectedAt = at
+      junkAt = b
     }
   })()
 
@@ -609,13 +728,16 @@ async function inflate(
     // to prevent.
     failed = true
   }
+  // An errored stream has rejected the pending write or close, so this settles
+  // at once; only the failed write's position is wanted from it.
+  if (failed) await writing
   const out = new Uint8Array(total)
   let cursor = 0
   for (const chunk of chunks) {
     out.set(chunk, cursor)
     cursor += chunk.length
   }
-  return { bytes: out, truncated, failed }
+  return { bytes: out, truncated, failed, rejectedAt, junkAt }
 }
 
 /**
@@ -850,18 +972,25 @@ function nonMarkupClose(xml: string, lt: number): number | null {
  * different string than the one Word requests. A custom `&foo;` is left
  * exactly as written: resolving one means reading a DOCTYPE, and reading a
  * DOCTYPE is how billion-laughs gets in.
+ *
+ * A U+E000 the file writes, raw or as a reference, comes out as U+FFFD. U+E000
+ * is the PDF reader's gap mark, and a value carrying one would be dropped from
+ * the case and printed as a cut the reader never made (pdfObjects' stripGap
+ * does the same; inlined, since pdfObjects imports this module).
  */
 function xmlText(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi, (whole, name: string) => {
-    const key = name.toLowerCase()
-    if (key === 'amp') return '&'
-    if (key === 'lt') return '<'
-    if (key === 'gt') return '>'
-    if (key === 'quot') return '"'
-    if (key === 'apos') return "'"
-    const code = key.startsWith('#x') ? Number.parseInt(key.slice(2), 16) : Number.parseInt(key.slice(1), 10)
-    return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole
-  })
+  return value
+    .replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi, (whole, name: string) => {
+      const key = name.toLowerCase()
+      if (key === 'amp') return '&'
+      if (key === 'lt') return '<'
+      if (key === 'gt') return '>'
+      if (key === 'quot') return '"'
+      if (key === 'apos') return "'"
+      const code = key.startsWith('#x') ? Number.parseInt(key.slice(2), 16) : Number.parseInt(key.slice(1), 10)
+      return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole
+    })
+    .replaceAll('\uE000', '\uFFFD')
 }
 
 /**
@@ -1029,7 +1158,7 @@ async function readRelationships(
       budget -= length
     } else if (entry.methodCode === 8) {
       const input = Math.min(located.length, MAX_RELS_INPUT)
-      const out = await inflate(bytes.subarray(located.start, located.start + input), cap)
+      const out = await inflate(bytes.subarray(located.start, located.start + input), cap, () => true)
       if (out.truncated) {
         facts.notes.push(
           `${entry.name} expanded past ${cap} bytes; reading stopped there and anything declared beyond that point was not read.`
@@ -1311,7 +1440,7 @@ async function readMedia(
         const pictures = rest.filter((r) => MEDIA.test(r.name)).length
         const left: Tally = { pictures, files: rest.length - pictures }
         const why = shared
-          ? `this message's budget for pictures and inner files was used up by what was read before ${rest.length === 1 ? 'it' : 'them'}`
+          ? `this message's budget for pictures, inner files and decompressed PDF data was used up by what was read before ${rest.length === 1 ? 'it' : 'them'}`
           : `this reader stops once it has read ${MAX_MEDIA_TOTAL / 1_000_000} MB of pictures and inner files out of one file`
         facts.notes.push(`${tally(left)} ${were} not opened: ${why}, ${unread(left)}`)
       }
@@ -1346,7 +1475,8 @@ async function readMedia(
           }
         : await inflate(
             bytes.subarray(located.start, located.start + Math.min(located.length, MAX_MEDIA_BYTES + 65_536)),
-            cap
+            cap,
+            () => true
           )
     // The empty file as Python's zipfile and Java write it: a two-byte deflate
     // stream that inflates to nothing. Hashed, it put the empty-file SHA-256 into
@@ -1412,7 +1542,7 @@ async function readMedia(
   const cut = overBudget.pictures + overBudget.files
   if (cut) {
     const limit = shared
-      ? "this message's budget for pictures and inner files"
+      ? "this message's budget for pictures, inner files and decompressed PDF data"
       : `the ${MAX_MEDIA_TOTAL / 1_000_000} MB of pictures and inner files this reader will read out of one file`
     facts.notes.push(
       `${tally(overBudget)} ${cut === 1 ? 'was' : 'were'} not read whole: ${cut === 1 ? 'it' : 'each'} was larger than what remained of ${limit}, ${unread(overBudget)}`

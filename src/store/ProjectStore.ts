@@ -141,11 +141,38 @@ export function inferIssueKeyPrefix(tasks: Task[]): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
 }
 
-/** Refuse a title that makes no file name at all: '' or '...' would write `Tasks/.md`. */
+/** False for a title that makes no file name at all: '' or '...' would write `Tasks/.md`. */
+export function isNameableTitle(title: string): boolean {
+  return !taskFilePath(title, '').endsWith('/.md')
+}
+
 function assertNameable(title: string): void {
-  if (taskFilePath(title, '').endsWith('/.md')) {
+  if (!isNameableTitle(title)) {
     throw new Error('A case title needs at least one character that can go in a file name.')
   }
+}
+
+/**
+ * Fields the store sets beside a status change (stampCompletion and the SLA
+ * stamps). An undo of a status change captures these too, or it would leave
+ * the store's stamps in place.
+ */
+export const STATUS_STAMPED_FIELDS = ['completed', 'progress', 'respondedAt', 'resolvedAt'] as const
+
+/**
+ * Trims an undo snapshot of a status change, taken before the write, to what
+ * the write changed: a stamped field it left as it was is dropped, so the undo
+ * never overwrites a later edit with a value it did not move. Progress stays
+ * when the undo closes the case again, so the store's Done fill cannot replace
+ * the progress the case closed at.
+ */
+export function undoOfStatusChange(prev: Partial<Task>, after: Task, statuses: StatusConfig[]): Partial<Task> {
+  const closes = prev.status !== undefined && isTerminalStatus(prev.status, statuses)
+  for (const k of STATUS_STAMPED_FIELDS) {
+    if (k === 'progress' && closes) continue
+    if (k in prev && prev[k] === after[k]) Reflect.deleteProperty(prev, k)
+  }
+  return prev
 }
 
 /** Thrown when saving a task would collide with an existing file in the vault. */
@@ -1336,8 +1363,11 @@ export class ProjectStore implements TaskSource {
     // must not place the same case twice.
     if (project.taskIndex.has(task.id)) return
     this.assertTitleSavable(project, task, parentId)
-    if (!task.completed && isTerminalStatus(task.status, this.statusesFor(project))) {
-      task.completed = today().toString()
+    if (isTerminalStatus(task.status, this.statusesFor(project))) {
+      if (!task.completed) task.completed = today().toString()
+      // Same rule as stampCompletion: a case created in Done is all of it.
+      // 0 is makeTask's default, so any other value the creator set is kept.
+      if (task.type !== 'milestone' && !task.progress) task.progress = 100
     }
     this.hydratedBodies.add(task)
     addTaskToTree(project.tasks, task, parentId)
@@ -1597,10 +1627,24 @@ export class ProjectStore implements TaskSource {
    */
   private stampCompletion(project: Project, task: Task, patch: Partial<Task>): void {
     if (patch.status === undefined) return
-    if (patch.completed !== undefined && patch.completed !== task.completed) return
     const statuses = this.statusesFor(project)
     const wasComplete = isTerminalStatus(task.status, statuses)
     const nowComplete = isTerminalStatus(patch.status, statuses)
+    // Done is all of it: the card's bar, the table and the reports read
+    // progress, and a finished case stuck at 25% reads as unfinished. Whatever
+    // date the edit closes on; not when the edit carries a progress of its own
+    // (a slider, an undo putting the old value back), and not for a milestone,
+    // including one made so in this edit. Leaving Done keeps what it reached.
+    if (
+      nowComplete &&
+      !wasComplete &&
+      patch.progress === undefined &&
+      (patch.type ?? task.type) !== 'milestone' &&
+      (task.progress ?? 0) < 100
+    ) {
+      patch.progress = 100
+    }
+    if (patch.completed !== undefined && patch.completed !== task.completed) return
     if (nowComplete && !wasComplete) patch.completed = today().toString()
     else if (!nowComplete && wasComplete) patch.completed = ''
   }

@@ -5,6 +5,7 @@ import { makeTask } from '../types'
 import { flattenTasks, totalLoggedHours } from '../store/TaskTreeOps'
 import { findEpicAncestor, findParentId, findTaskById } from '../store/TaskIndex'
 import { matchesFilter } from '../store/TaskFilter'
+import { STATUS_STAMPED_FIELDS, undoOfStatusChange } from '../store/ProjectStore'
 import type { QueryCtx } from '../store/QueryParser'
 import { dueUrgency, getDefaultPriorityId, isTerminalStatus, safeAsync } from '../utils'
 import { openTaskModal } from '../ui/ModalFactory'
@@ -192,8 +193,17 @@ export class KanbanView implements SubView {
           }),
           onCardClick: (task) => this.openTask(task),
           onCardProgressChange: safeAsync(async (task: Task, value: number) => {
+            // The refresh rebuilds the board and drops the focused slider, so
+            // a second arrow key did nothing: hand focus to the rebuilt one.
+            const refocus = this.container.ownerDocument.activeElement?.matches('.pm-kanban-progress') ?? false
             await this.plugin.store.updateTask(this.project, task.id, { progress: value })
             await this.onRefresh()
+            if (!refocus) return
+            const cards = [...this.container.querySelectorAll<HTMLElement>('.pm-kanban-card[data-task-id]')]
+            cards
+              .find((el) => el.dataset.taskId === task.id)
+              ?.querySelector<HTMLElement>('.pm-kanban-progress')
+              ?.focus({ preventScroll: true })
           }),
           onCardContextMenu: (task, e) => this.openContextMenu(task, e),
           onCardDragStart: (task) => {
@@ -509,12 +519,12 @@ export class KanbanView implements SubView {
         const patch: Partial<Task> = { status: newStatus, ...extra }
         // Captured before the write, for the undo below: every field the drop
         // changes, including the verdict the guard added and the stamps the
-        // store sets beside a status change (completion date, incident
-        // response and resolution times) — an undone close must not leave the
-        // SLA clock stopped. ponytail: the order position is not restored —
-        // the drop path tracks no prior position, and a reorder is a
-        // same-column drop that shows no notice anyway.
-        const keys = [...Object.keys(patch), 'completed', 'respondedAt', 'resolvedAt'] as (keyof Task)[]
+        // store sets beside a status change (completion date, the Done fill of
+        // progress, incident response and resolution times) — an undone close
+        // must not leave the SLA clock stopped or the bar full. ponytail: the
+        // order position is not restored — the drop path tracks no prior
+        // position, and a reorder is a same-column drop that shows no notice anyway.
+        const keys = [...Object.keys(patch), ...STATUS_STAMPED_FIELDS] as (keyof Task)[]
         const prev: Partial<Task> = Object.fromEntries(keys.map((k) => [k, task[k]]))
         const wasArchived = task.archived
         // Drop out of Archive: unarchive first (the guard already passed), then
@@ -524,6 +534,8 @@ export class KanbanView implements SubView {
           new Notice('Task unarchived')
         }
         await this.plugin.store.updateTask(this.project, taskId, patch)
+        const after = findTaskById(this.project, taskId)
+        if (after) undoOfStatusChange(prev, after, this.config.statuses)
         const label = this.config.statuses.find((s) => s.id === newStatus)?.label ?? newStatus
         showUndoNotice(`Moved to ${label}`, async () => {
           // Same store path as the drop itself. Moving OUT of a terminal status
@@ -549,10 +561,17 @@ export class KanbanView implements SubView {
         const label = LANE_GROUPS.find((g) => g.id === groupBy)?.label ?? groupBy
         new Notice(`Lanes follow the task's ${label.toLowerCase()} — edit the task to move it`)
       } else if (before) {
-        if (findParentId(this.project, taskId) === findParentId(this.project, before.targetId)) {
+        const parentId = findParentId(this.project, taskId)
+        if (parentId === findParentId(this.project, before.targetId)) {
           await this.plugin.store.reorderTask(this.project, taskId, before.targetId, before.position)
         } else {
-          new Notice("That slot sits inside another card's subtasks")
+          // Name the side that is nested: a dragged subtask beside top-level
+          // cards is not sitting "inside another card's subtasks".
+          new Notice(
+            parentId
+              ? "A subtask stays under its parent card, so it can't be ordered among other cards"
+              : "That slot sits inside another card's subtasks"
+          )
         }
       }
       await this.refreshWithFlip(taskId)

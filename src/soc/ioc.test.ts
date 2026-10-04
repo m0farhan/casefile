@@ -339,6 +339,14 @@ describe('extractIocsFromText', () => {
       .map((i) => i.value)
     expect(urls).toEqual(['https://x.net/a', 'https://y.org/b', 'https://z.io/c'])
   })
+
+  it('reads an indicator written in backticks without the closing backtick', () => {
+    // Markdown alerts and every phishing-made case put values in code spans.
+    const urls = extractIocsFromText('Beacon to `https://x.test/a` and `hxxps://evil[.]test/gate.php`', [])
+      .filter((i) => i.type === 'url')
+      .map((i) => i.value)
+    expect(urls).toEqual(['https://x.test/a', 'https://evil.test/gate.php'])
+  })
 })
 
 describe('extractIocsFromText — hostile text cannot freeze the scan', () => {
@@ -531,6 +539,7 @@ describe('stripProseTail', () => {
     expect(stripProseTail('evil.test);')).toBe('evil.test')
     expect(stripProseTail('https://x.test/a')).toBe('https://x.test/a')
     expect(stripProseTail('.,;')).toBe('')
+    expect(stripProseTail('https://x.test/a`.')).toBe('https://x.test/a')
   })
 
   it('takes linear time on a long punctuation run', () => {
@@ -649,7 +658,12 @@ describe('assetRule — the boundary that decides what is never sent', () => {
         'corp.example',
         '10.0.0.0/33'
       ])
-    ).toEqual(['2001:db8::/32', '#internal', 'corp.example/8', '198.51.100.0-198.51.100.255', '10.0.0.0/33'])
+    ).toEqual(['2001:db8::/32', 'corp.example/8', '198.51.100.0-198.51.100.255', '10.0.0.0/33'])
+  })
+
+  it('does not name a # comment line as an entry it cannot match', () => {
+    // The setting invites comments; one is a note to the analyst, not a rule.
+    expect(unmatchableAssetRules(['# HQ datacentre (ticket NET-114)', '  #spare', '10.20.0.0/16'])).toEqual([])
   })
 })
 

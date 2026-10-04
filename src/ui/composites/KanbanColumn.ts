@@ -126,20 +126,18 @@ export class KanbanColumn {
 
     acceptDrops(cardsEl)
     cardsEl.addEventListener('dragover', (e) => {
+      const dragging = ownedDrag(cardsEl)
+      if (!dragging) return
       e.preventDefault()
       cardsEl.addClass('pm-kanban-drop-target')
+      // Pulls the dragged card in from its origin column, so the ghost slot
+      // previews placement across columns, not just within the one the drag
+      // started in.
       const afterEl = getDragAfterElement(cardsEl, e.clientY)
-      // Document-wide lookup: pulls the dragged card in from its origin column,
-      // so the ghost slot previews placement across columns, not just within
-      // the one the drag started in. Same-view check keeps a drag over another
-      // pane's board (whose drop handler would refuse it) from stealing the card.
-      const dragging = cardsEl.ownerDocument.querySelector('.pm-kanban-card--dragging')
-      if (dragging && dragging.closest('.pm-kanban-view') === cardsEl.closest('.pm-kanban-view')) {
-        if (afterEl) {
-          cardsEl.insertBefore(dragging, afterEl)
-        } else {
-          cardsEl.appendChild(dragging)
-        }
+      if (afterEl) {
+        cardsEl.insertBefore(dragging, afterEl)
+      } else {
+        cardsEl.appendChild(dragging)
       }
     })
 
@@ -258,6 +256,7 @@ export class KanbanColumn {
     // Dropping on the collapsed strip appends to the column (no visible cards to order against)
     acceptDrops(col)
     col.addEventListener('dragover', (e) => {
+      if (!ownedDrag(col)) return
       e.preventDefault()
       col.addClass('pm-kanban-drop-target')
     })
@@ -306,7 +305,20 @@ function renderCount(parent: HTMLElement, visible: number, wipLimit: number | un
  * the card in under the pointer, so the very next move is such an entry.
  */
 function acceptDrops(zone: HTMLElement): void {
-  zone.addEventListener('dragenter', (e) => e.preventDefault())
+  zone.addEventListener('dragenter', (e) => {
+    if (ownedDrag(zone)) e.preventDefault()
+  })
+}
+
+/**
+ * The card being dragged, when it belongs to this zone's own board; null
+ * otherwise. A card from another pane's board or a popout, or a file or text
+ * drag, is refused up front (no ring, a no-drop cursor) rather than accepted
+ * and then dropped silently: KanbanView.handleDrop ignores those.
+ */
+function ownedDrag(zone: HTMLElement): Element | null {
+  const dragging = zone.ownerDocument.querySelector('.pm-kanban-card--dragging')
+  return dragging && dragging.closest('.pm-kanban-view') === zone.closest('.pm-kanban-view') ? dragging : null
 }
 
 /**

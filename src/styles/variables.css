@@ -144,6 +144,10 @@
   /* The slider track: body derives it from the light/dark palette, so under a
      light theme it painted a near-white bar on the plugin's dark surface. */
   --slider-track-background: var(--background-modifier-border-hover);
+  /* Body derives both from the theme: a grey focus ring on a slider's knob,
+     and the theme's own faint ink for every placeholder. */
+  --slider-thumb-shadow-focus: var(--gs-focus-ring);
+  --input-placeholder-color: var(--text-faint);
   --icon-color: var(--text-muted);
   --icon-color-hover: var(--text-muted);
   --icon-color-active: var(--text-accent);

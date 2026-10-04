@@ -34,4 +34,13 @@ describe('renderCustomFieldInput', () => {
     expect(task.customFields.cf2).toEqual(['b'])
     expect(onChange).toHaveBeenCalledOnce()
   })
+
+  it('a recorded select value no longer among the options shows as itself, not as unset', () => {
+    const cf: CustomFieldDef = { id: 'cf3', name: 'Tier', type: 'select', options: ['Tier 1', 'T2'] }
+    const task = makeTask({ customFields: { cf3: 'T1' } })
+    const sel = (renderCustomFieldInput(cf, task, project, plugin) as unknown as FakeEl).find('select')
+    const shown = sel.children.filter((o) => o.selected)
+    expect(shown.map((o) => [o.value, o.textContent])).toEqual([['T1', 'T1 (not an option)']])
+    expect(task.customFields.cf3).toBe('T1')
+  })
 })

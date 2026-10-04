@@ -45,6 +45,61 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.43.0] - 2026-10-04
+
+### Added
+
+- **PDF attachments are read in the phishing analyser.** A PDF attached to a mail, or to a message attached to it, gets its own section in the analysis and the report:
+  - its links, what it does when opened or when a page or field is touched (open actions, page and field actions, launch, submit-form, JavaScript), its embedded files (named and sized, never opened), its form fields and the information it declares about itself
+  - the text on each page, decoded from the file's own fonts and never rendered: compressed object streams, font maps and encodings, and text drawn through forms are all read. Text drawn invisible and page objects outside the page tree are shown apart from what the reader of the PDF sees
+  - URLs, email addresses and IPs from the visible page text and the links go on the case. Script source, invisible text and stray pages are shown but put nothing on the case
+  - wherever the reader cannot be sure it read everything (a damaged or cut stream, a font with no map, a size or time limit reached), the report says why and shows `[…]` at that spot, and a word touching that mark never becomes an indicator, so a cut-off link cannot put a made-up host on the case. Encrypted, damaged or very large files are read as far as is safe; the rest is reported as unread, not absent
+
+### Changed
+
+- **Done means 100%.** Moving a case to Done fills its progress to 100% on the board, in the table, and in the case form and side panel, where the slider moves as soon as you pick Done. A progress set in the same edit wins. A case created straight in Done starts at 100%. Undo puts the old progress back, a duplicate of a closed case starts at 0%, and milestones have no progress
+- **The card's progress bar** is a thin line along the card's bottom edge. Under the pointer or keyboard focus it thickens and shows a knob that stays clear of the card's corners; on touch screens it is always in that form
+- The phishing analysis says "of 2 page(s) read whole, 2 drew text this reader could decode" rather than a sentence that read as a typo
+
+### Fixed
+
+Found by a full audit of the plugin; each fix has a test that fails without it.
+
+**Phishing analyser**
+
+- A mail whose HTML ended inside a closing tag (`</script` with no `>`) froze Obsidian for good. A long run of spaces after a `<` could stall the analysis for tens of seconds
+- HTML mail with no `</head>`, with an empty comment (`<!-->`), or with a bare `<` in its text (`Spend < $100`) lost its visible text, or showed script source as if it were text
+- Character references written without a semicolon (`&#47`) were not decoded, so a link's real host never reached the case
+- A link to a bare IP address was given a "derived domain" of its last two numbers
+- Link text written as a host without `https://` (`www.paypal.com`) that points to another site now gets the "shown as a link to …, points at …" fact, and on the case that host carries a note saying it is a link's display text and where the link really goes. A link shown as its own site (`brand.com` over `www.brand.com`) is no longer called a decoy
+- In a ZIP attachment, the next file's header was glued onto the last link of a stored file (`…/aPK`)
+- An Office file could hide one of its link targets from the case by writing the character the reader uses to mark missing text
+- **Extract indicators from this note**, on a case created from a phish, took values from text the report says the case takes none from: invisible PDF text, page objects outside the page tree, and quoted script source. It skips them now, leaves out any word cut short at the report's own length limits, and says how many it left out
+- Indicators written in backticks (markdown alerts, the phishing report) kept the backtick at their end
+- Office and ZIP attachments: Obsidian's decompressor silently dropped the end of a compressed part followed by extra bytes. Parts are now read so that nothing is dropped, and a loss that cannot be ruled out is reported as unread
+- PDF page text: in several unusual layouts (a string over 1 MiB, an inline picture whose stated length runs past its end, very deep drawing-state nesting, a form that continues a word, a page that lists no drawable objects, a damaged content piece, a font with an oversized character map, compressed objects that cannot be opened on older iPhones and iPads) text could go unread without a mark, or be filed as invisible. It is now read, or marked with the true reason
+
+**Cases and boards**
+
+- Undo after moving a case to Done put the status back but left progress at 100%. Undo of a move now puts back only what that move changed, so an edit made after it stays. Duplicating a closed case gave a new To Do case at 100%
+- In the side panel, a subtask titled like one already there, or a title made only of dots, made every later autosave fail
+- Shift+Enter in the case form saved without the value still being typed into a custom field, the estimate or a time-log row
+- A file pasted or dropped into a new case's description was written outside that case's folder. Like Attach, paste and drop now wait until the case is created. A file attached and then thrown away with Cancel → Discard goes to the trash instead of staying in the case folder unlinked
+- A custom select field whose value is no longer one of its options read as unset; it shows the value, marked "not an option"
+- Progress or an estimate written as text in a note's properties (`60%`, `"1.5"`) was reset on the next save
+- Lines quoted inside a code block in a description (`Parent: [[…]]`, `## Subtasks`) were removed as if the plugin had written them
+- A case created from the phishing tab did not appear on a board that was already open
+- On touch screens, a tap on a card's tags could land on its progress bar and change the progress instead of opening the case
+- A card dragged over another pane's board looked droppable and then did nothing; it is refused up front
+- Milestone cards had a progress bar. Progress that is not a multiple of 25 drew at the nearest step. Arrow keys on a card's progress bar lost focus after one step
+- Dropping a subtask among top-level cards said the slot sat inside another card's subtasks; it now says a subtask stays under its parent
+- Gantt link dots could not be seen on touch screens. Keyboard focus on a progress slider showed the theme's grey ring instead of the plugin's
+- A blank team member was offered as an assignee
+- Three display settings (tag colours, subtasks on the board, the Gantt week label) did not redraw boards already open
+- Comment lines starting with `#` in the Owned domains and Brands settings were thrown away
+- The shift handover now says which target a breached incident missed: response or resolution
+- Copy defanged and Defang selection left indicators live inside backticks, smart quotes, braces, emphasis, HTML attributes and markdown links. Version numbers and OIDs (`Firefox/115.0.2.1`) are left alone. When there is nothing to defang, the notice says so instead of "Copied, defanged"
+
 ## [2.42.2] - 2026-09-30
 
 ### Fixed

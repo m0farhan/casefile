@@ -10,6 +10,12 @@ export function copyText(text: string, what = 'Copied'): void {
   })()
 }
 
+/** Copy text defanged, and say so only when something was defanged. */
+export function copyDefanged(text: string): void {
+  const out = defangText(text)
+  copyText(out, out === text ? 'Copied (nothing to defang)' : 'Copied, defanged')
+}
+
 /**
  * Right-click on text selected inside el: Copy, and Copy defanged for pasting
  * into a ticket, chat or email without handing anyone a live indicator. With
@@ -32,7 +38,7 @@ export function defangCopyMenu(el: HTMLElement): void {
       item
         .setTitle('Copy defanged')
         .setIcon('shield')
-        .onClick(() => copyText(defangText(text), 'Copied, defanged'))
+        .onClick(() => copyDefanged(text))
     )
     menu.showAtMouseEvent(e)
   })

@@ -1,11 +1,11 @@
-import type { App } from 'obsidian'
+import { type App, TFile } from 'obsidian'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeFakeApp } from '../../test/fakeVault'
 import type PMPlugin from '../main'
 import { ProjectStore } from '../store/ProjectStore'
 import { findTaskById } from '../store/TaskIndex'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
-import { DEFAULT_SETTINGS, makeTask, type Task } from '../types'
+import { DEFAULT_SETTINGS, makeTask, type PMSettings, type Task } from '../types'
 import { confirmDialog } from '../ui/ModalFactory'
 import { BOARD_REFUSAL, TaskModal, TITLE_REFUSAL } from './TaskModal'
 
@@ -87,13 +87,15 @@ interface Harness {
   closeThen(go: () => void): void
   close(): void
   onClose(): void
+  syncProgress(): void
+  writeAttachment(name: string, data: ArrayBuffer): Promise<{ path: string }>
 }
 
-async function setup(fields: Partial<Task> = {}) {
+async function setup(fields: Partial<Task> = {}, settings: PMSettings = DEFAULT_SETTINGS) {
   const { app, vault } = makeFakeApp()
-  const store = new ProjectStore(app as unknown as App, () => DEFAULT_SETTINGS)
+  const store = new ProjectStore(app as unknown as App, () => settings)
   const project = await store.createProject('Board', 'Projects')
-  const plugin = { store, settings: DEFAULT_SETTINGS, refreshProjectViews: () => {} } as unknown as PMPlugin
+  const plugin = { store, settings, refreshProjectViews: () => {} } as unknown as PMPlugin
   const add = async (title: string, more: Partial<Task> = {}): Promise<Task> => {
     const t = makeTask({ title, ...more })
     await store.insertTask(project, t, null)
@@ -193,6 +195,64 @@ describe('TaskModal saving', () => {
     await vi.waitFor(() => expect(live(task.id).description).toBe('EVIDENCE: attacker IP seen'))
     expect(live(task.id).title).toBe('Case')
     expect(notices).toEqual(['Title kept — a note named "Beta" already exists.'])
+  })
+
+  it('a Done pick fills progress, and a verdict prompt cancelled on close puts it back with the status', async () => {
+    const { open, live, task } = await setup({ issueType: 'incident', progress: 25 })
+    vi.mocked(guardVerdictOnClose).mockResolvedValueOnce(null)
+    const m = open(task)
+    m.task.status = 'done' // what the Status control or the header lozenge does
+    m.syncProgress()
+    expect(m.task.progress).toBe(100)
+    m.task.description = 'other edit'
+    m.onClose()
+    await vi.waitFor(() => expect(live(task.id).description).toBe('other edit'))
+    expect(live(task.id).status).toBe('todo')
+    expect(live(task.id).progress).toBe(25)
+  })
+
+  it('closing with a title no file name can hold keeps the old title and saves the rest', async () => {
+    const { open, live, task } = await setup()
+    const m = open(task)
+    m.task.title = '...'
+    m.task.description = 'EVIDENCE'
+    m.onClose()
+    await vi.waitFor(() => expect(live(task.id).description).toBe('EVIDENCE'))
+    expect(live(task.id).title).toBe('Case')
+  })
+
+  it('a file copied in and then closed unsaved goes to the trash; one a save kept stays', async () => {
+    const { open, vault, task } = await setup({}, { ...DEFAULT_SETTINGS, saveTaskOnClose: false })
+    const m = open(task)
+    const kept = await m.writeAttachment('kept.exe', new ArrayBuffer(1))
+    await m.persistTask()
+    const dropped = await m.writeAttachment('sample.exe', new ArrayBuffer(1))
+    m.close()
+    await vi.waitFor(() => expect(vault.getAbstractFileByPath(dropped.path)).toBeNull())
+    expect(vault.getAbstractFileByPath(kept.path)).not.toBeNull()
+  })
+
+  it('a copied file the case note on disk already links is never trashed (a save that failed part-way)', async () => {
+    const { open, vault, task, live } = await setup({}, { ...DEFAULT_SETTINGS, saveTaskOnClose: false })
+    const m = open(task)
+    const linked = await m.writeAttachment('sample.exe', new ArrayBuffer(1))
+    const note = vault.getAbstractFileByPath(live(task.id).filePath ?? '')
+    if (!(note instanceof TFile)) throw new Error('no case note')
+    await vault.process(note, (text) => `${text}\n[[sample.exe]]\n`)
+    expect(linked.path.endsWith('/sample.exe')).toBe(true)
+    m.close()
+    await settle()
+    expect(vault.getAbstractFileByPath(linked.path)).not.toBeNull()
+  })
+
+  it('a save on close that fails trashes the files only its edits linked', async () => {
+    const { open, vault, task, store } = await setup()
+    const m = open(task)
+    const copied = await m.writeAttachment('sample.exe', new ArrayBuffer(1))
+    m.task.description = 'edit'
+    vi.spyOn(store, 'updateTask').mockRejectedValueOnce(new Error('disk full'))
+    m.close()
+    await vi.waitFor(() => expect(vault.getAbstractFileByPath(copied.path)).toBeNull())
   })
 
   it('a closed modal is never rebuilt: a late attach would leave editors nothing destroys', async () => {

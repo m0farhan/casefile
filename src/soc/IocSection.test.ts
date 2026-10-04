@@ -95,6 +95,46 @@ describe('renderIocSection', () => {
     expect(requests).toHaveLength(2)
   })
 
+  it('Extract indicators reads a note as the analysis did, and says how many words beside a gap it left out', () => {
+    const description = [
+      'Page 1, drawn so a reader does not show it; the case takes no indicators from it:',
+      '',
+      // A shorter run inside the block does not close it.
+      '````no-indicators',
+      '```',
+      'https://hidden-lure.test/y',
+      '````',
+      '',
+      '```script',
+      'var d = this.info;',
+      'var u = "https://login.microsoftonline.co[…]',
+      '```',
+      '',
+      'Reported by the user from https://kept-lure.test/x'
+    ].join('\n')
+    const root = FakeEl.root()
+    const task = makeTask({ iocs: [], description })
+    renderIocSection(root as unknown as HTMLElement, task, { onChange: () => {}, ownedAssets: () => [] })
+    root
+      .descendants()
+      .find((el) => el.getAttribute('aria-label') === 'Extract indicators from this note')
+      ?.click()
+    expect(task.iocs).toEqual([{ type: 'url', value: 'https://kept-lure.test/x' }])
+    expect(notices).toEqual(['Added 1 indicator(s) from the note; 1 word(s) beside […] left out'])
+  })
+
+  it('a fence left open in the description does not hide the comments from Extract indicators', () => {
+    const root = FakeEl.root()
+    const task = makeTask({ iocs: [], description: '```no-indicators\nhttps://hidden-lure.test/y' })
+    task.comments = [{ at: '2026-10-04 09:00', text: 'Callback seen to https://comment-lure.test/z' }]
+    renderIocSection(root as unknown as HTMLElement, task, { onChange: () => {}, ownedAssets: () => [] })
+    root
+      .descendants()
+      .find((el) => el.getAttribute('aria-label') === 'Extract indicators from this note')
+      ?.click()
+    expect(task.iocs.map((i) => i.value)).toEqual(['https://comment-lure.test/z'])
+  })
+
   it('a value no provider could look up says so, with keys set, and sends nothing', async () => {
     const { buttons } = mount([{ type: 'domain', value: 'C:\\Users\\jdoe' }])
     buttons('Check reputation')[0].click()

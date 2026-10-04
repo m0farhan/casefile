@@ -111,7 +111,7 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
       const state = slaState(r.task, settings.slaPolicies, now)
       const slaText = state
         ? state.breached
-          ? `target breached ${formatSlaRemaining(state.remainingMs)}`
+          ? `${state.phase} target breached ${formatSlaRemaining(state.remainingMs)}`
           : `${state.phase} target in ${formatSlaRemaining(state.remainingMs)}`
         : 'no target'
       // SD-03: this note is what the next shift is handed, read away from the
@@ -180,7 +180,7 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
       const state = slaState(r.task, settings.slaPolicies, now)
       if (!state) continue
       const text = state.breached
-        ? `breached ${formatSlaRemaining(state.remainingMs)}`
+        ? `breached ${formatSlaRemaining(state.remainingMs)} (${state.phase})`
         : `${formatSlaRemaining(state.remainingMs)} left (${state.phase})`
       lines.push(`- ${label(r.task)} — ${text}`)
     }

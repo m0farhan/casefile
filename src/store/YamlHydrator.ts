@@ -141,6 +141,18 @@ function str(v: unknown, fallback: string): string {
 }
 
 /**
+ * A known numeric field. A text-typed property, a script or Sync can write
+ * `progress: "60"` or `60%`, or `timeEstimate: "1.5"`, and reading those as
+ * absent deleted them on the next save, as str() explains. Text that is not a
+ * plain number (`30m`, `abc`) is not guessed at: undefined.
+ */
+function num(v: unknown): number | undefined {
+  const text = typeof v === 'string' ? v.trim().replace(/\s*%$/, '') : ''
+  const n = typeof v === 'number' ? v : text ? Number(text) : NaN
+  return Number.isFinite(n) ? n : undefined
+}
+
+/**
  * A colour, only when it is a hex value or a plain colour name. Colours go
  * into CSS `background`, where `url(…)` is valid and fetches as soon as the
  * board or dashboard draws, so a board note from a shared or synced vault could
@@ -223,7 +235,7 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
     respondedAt: str(r.respondedAt, ''),
     containedAt: str(r.containedAt, ''),
     resolvedAt: str(r.resolvedAt, ''),
-    progress: typeof r.progress === 'number' ? r.progress : 0,
+    progress: num(r.progress) ?? 0,
     completed: day(r.completed),
     iocs: hydrateIocs(r.iocs),
     ...(links.length ? { links } : {}),
@@ -240,7 +252,7 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
       r.recurrence && typeof r.recurrence === 'object'
         ? ({ ...(r.recurrence as Task['recurrence']) } as Task['recurrence'])
         : undefined,
-    timeEstimate: typeof r.timeEstimate === 'number' ? r.timeEstimate : undefined,
+    timeEstimate: num(r.timeEstimate),
     timeLogs: Array.isArray(r.timeLogs) ? hydrateTimeLogs(r.timeLogs) : undefined,
     customFields:
       typeof r.customFields === 'object' && r.customFields !== null

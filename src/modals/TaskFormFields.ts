@@ -1,5 +1,5 @@
 import type PMPlugin from '../main'
-import type { IssueBucket, IssueTypeConfig, Project, Task, Recurrence } from '../types'
+import type { IssueBucket, IssueTypeConfig, Project, Task, Recurrence, StatusConfig } from '../types'
 import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { wouldCreateCycle } from '../store/Scheduler'
@@ -66,6 +66,31 @@ export function subtreeIds(task: Task): Set<string> {
   }
   walk(task)
   return ids
+}
+
+/**
+ * Done is all of it (the store fills the same 100 on save, stampCompletion): a
+ * status pick that closes a case saved open fills its progress, so the slider
+ * shows it at once and the save carries it. `savedStatus` is the status on
+ * disk, not the last pick, so Done → In progress → Done on a case saved Done
+ * fills nothing. Returns the progress the fill replaced, for the host to hold
+ * until the save goes out: a pick that reopens the case before then puts it
+ * back, unless the slider moved since. Milestones have no progress.
+ */
+export function fillProgressOnDone(
+  task: Task,
+  savedStatus: string,
+  statuses: StatusConfig[],
+  filledFrom?: number
+): number | undefined {
+  if (isTerminalStatus(task.status, statuses) && !isTerminalStatus(savedStatus, statuses)) {
+    if (filledFrom !== undefined || task.type === 'milestone' || (task.progress ?? 0) >= 100) return filledFrom
+    const from = task.progress ?? 0
+    task.progress = 100
+    return from
+  }
+  if (filledFrom !== undefined && task.progress === 100) task.progress = filledFrom
+  return undefined
 }
 
 const REPEAT_OPTIONS: SelectItem[] = [
@@ -278,7 +303,10 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
         const slider = cell.createEl('input', { type: 'range', cls: 'slider' })
         slider.min = '0'
         slider.max = '100'
-        slider.step = '25'
+        // Notches of 25, except for a value off them (a migrated board's 5s, a
+        // hand edit): the browser snaps the value to the step, which would draw
+        // 40 at 50, beside a label saying 40%.
+        slider.step = (task.progress ?? 0) % 25 ? '1' : '25'
         slider.value = String(task.progress ?? 0)
         const label = cell.createSpan({ cls: 'pm-prop-progress-label', text: `${Math.round(task.progress ?? 0)}%` })
         // Obsidian 1.13 paints a `.slider`'s fill from --slider-fill-ratio, which
@@ -368,7 +396,9 @@ export function renderTaskFormFields(container: HTMLElement, ctx: TaskFormFields
     'Assignees',
     () => {
       const cell = createDiv('pm-prop-value')
-      const allMembers = () => [...new Set([...project.teamMembers, ...plugin.settings.globalTeamMembers])]
+      // A member row added in Settings and never named is no one to assign.
+      const allMembers = () =>
+        [...new Set([...project.teamMembers, ...plugin.settings.globalTeamMembers])].filter((m) => m.trim())
       renderMultiSelect({
         container: cell,
         avatarStack: true,

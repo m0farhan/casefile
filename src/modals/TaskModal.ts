@@ -1,15 +1,16 @@
-import { App, ButtonComponent, ExtraButtonComponent, Menu, Modal, Notice, setIcon, setTooltip } from 'obsidian'
+import { App, ButtonComponent, ExtraButtonComponent, Menu, Modal, Notice, setIcon, setTooltip, TFile } from 'obsidian'
 import { sightingsIndex } from '../soc/ioc'
 import type PMPlugin from '../main'
 import { type Project, type Task, makeTask } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { TaskFileNameConflictError } from '../store'
+import { isNameableTitle } from '../store/ProjectStore'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
 import { confirmDialog, openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
 import { findTaskById } from '../store/TaskIndex'
 import { renderIssueTypeIcon, renderKeyChip } from '../ui/composites/issueMeta'
 import { renderStatusBadge } from '../ui/StatusBadge'
-import { renderTaskFormFields } from './TaskFormFields'
+import { fillProgressOnDone, renderTaskFormFields } from './TaskFormFields'
 import { renderLifecyclePanel } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
@@ -44,6 +45,12 @@ export class TaskModal extends Modal {
    * only these get their files trashed (live subtasks missing from the patch
    * for any other reason are preserved). */
   private removedSubtaskIds: string[] = []
+  /** What a Done pick's progress fill replaced, until the save goes out (fillProgressOnDone). */
+  private filledFrom: number | undefined
+  /** Files this session copied into the case since its last save. Edits closed
+   * unsaved leave nothing linking them, so they go to the trash with the edits. */
+  private written: TFile[] = []
+  private discarded = false
   private cancelled = false
   private saved = false
   /** Pristine clone of the opened task (existing tasks only) — the diff base for save. */
@@ -175,10 +182,15 @@ export class TaskModal extends Modal {
     this.closed = true
     if (this.plugin.settings.saveTaskOnClose && !this.isNew && !this.cancelled && !this.saved) {
       // A cleared title never discards the rest of the edits — keep the
-      // original title and save everything else.
-      if (!this.task.title.trim()) {
+      // original title and save everything else. Nor does one of only dots,
+      // which names no file, so the store would refuse the whole save.
+      if (!isNameableTitle(this.task.title)) {
+        new Notice(
+          this.task.title.trim()
+            ? 'Title kept — it needs a character a file name can hold.'
+            : 'Title kept — a title is required.'
+        )
         this.task.title = this.originalTitle
-        new Notice('Title kept — a title is required.')
       }
       // Nor does a title another note already has.
       let conflict = this.plugin.store.findTaskFileConflict(this.project, this.task)
@@ -191,10 +203,14 @@ export class TaskModal extends Modal {
       // still stops the save, rather than fail half-way inside the store.
       if (conflict) {
         new Notice(`Task not saved: a note named "${conflict.fileName}" already exists.`)
+        this.discarded = true
       } else {
         this.persistOnClose()
       }
+    } else if (!this.saved && !this.cancelled) {
+      this.discarded = true // closed unsaved, with save-on-close off
     }
+    if (this.discarded) void this.trashWritten()
     if (this.saveKeyHandler) {
       this.modalEl.removeEventListener('keydown', this.saveKeyHandler)
       this.saveKeyHandler = null
@@ -216,13 +232,62 @@ export class TaskModal extends Modal {
       const patch = await guardVerdictOnClose(this.plugin, this.project, this.task, this.task.status)
       if (patch === null) {
         this.task.status = this.originalStatus
+        this.syncProgress() // and the progress a Done pick filled
         new Notice('Status change not saved — the verdict prompt was cancelled. Other edits were saved.')
       } else if (patch.verdict) {
         this.task.verdict = patch.verdict
       }
     }
-    await this.persistTask()
+    try {
+      await this.persistTask()
+    } catch (err) {
+      // The modal is gone, and the edits with it: so are the files only they
+      // linked. trashWritten keeps any a save that failed part-way linked.
+      this.discarded = true
+      await this.trashWritten()
+      throw err
+    }
   })
+
+  /** Fills progress for the picked status against the saved one, or puts it back (fillProgressOnDone). */
+  private syncProgress(): void {
+    const { statuses } = this.plugin.store.configFor(this.project)
+    this.filledFrom = fillProgressOnDone(this.task, this.originalStatus, statuses, this.filledFrom)
+  }
+
+  /** Copies a file into the case, recorded for the trash should the edits linking it be discarded. */
+  private readonly writeAttachment = async (name: string, data: ArrayBuffer): Promise<TFile> => {
+    const base = this.original
+    const file = await this.plugin.store.writeTaskAttachment(this.project, this.task, name, data)
+    // A save made while it copied wrote its link, so the file is that save's.
+    if (this.original === base) this.written.push(file)
+    // Discarded while it copied: nothing will link it.
+    if (this.discarded) void this.trashWritten()
+    return file
+  }
+
+  private async trashWritten(): Promise<void> {
+    const written = this.written.splice(0)
+    if (!written.length) return
+    // A save that failed part-way may still have written the case note, link
+    // and all; a file that note or any other names stays. Unreadable: keep all.
+    const note = this.task.filePath ? this.app.vault.getAbstractFileByPath(this.task.filePath) : null
+    let body = ''
+    try {
+      if (note instanceof TFile) body = await this.app.vault.read(note)
+    } catch {
+      return
+    }
+    const links = this.app.metadataCache.resolvedLinks ?? {}
+    for (const file of written) {
+      if (body.includes(file.name) || Object.values(links).some((to) => file.path in to)) continue
+      try {
+        await this.app.fileManager.trashFile(file)
+      } catch (err) {
+        console.error('[PM] Could not trash', file.path, err)
+      }
+    }
+  }
 
   /** A second caller shares the save in flight; once it settles, the next call saves again. */
   private persistTask(): Promise<void> {
@@ -266,6 +331,9 @@ export class TaskModal extends Modal {
       await this.plugin.store.insertTask(this.project, this.task, this.parentId)
     } else {
       const patch = this.original ? diffTaskPatch(this.original, this.task) : this.task
+      // The form already applied Done's fill to the slider, so a status change
+      // sends the slider as it stands: dragged back after the pick, it stays.
+      if (patch.status !== undefined) patch.progress = this.task.progress
       // subtaskBase makes the subtask merge three-way: a subtask changed on
       // the board while the modal was open keeps that change.
       const opts = { removedSubtaskIds: this.removedSubtaskIds, subtaskBase: this.original?.subtasks }
@@ -277,6 +345,9 @@ export class TaskModal extends Modal {
       }
     }
     this.removedSubtaskIds = []
+    // The save links what was copied, and keeps any fill.
+    this.written = []
+    this.filledFrom = undefined
     // What was just saved is the new starting point. The modal stays open
     // after a save when an Archive then fails, and a later save must send only
     // what changed since, update rather than insert again, and find its own
@@ -430,6 +501,7 @@ export class TaskModal extends Modal {
     renderStatusBadge(crumb, this.task, config.statuses, (id) => {
       if (id === this.task.status) return
       this.task.status = id
+      this.syncProgress()
       this.render()
     }).addClass('pm-status-badge--lg')
 
@@ -506,19 +578,28 @@ export class TaskModal extends Modal {
       setParentId: (id) => {
         this.parentId = id
       },
-      rerender: () => this.render(),
+      rerender: () => {
+        this.syncProgress() // a no-op unless the edit was a status pick
+        this.render()
+      },
       shownExtras: this.shownExtras
     })
 
     body.createEl('hr', { cls: 'pm-te-divider' })
 
     // ── Description (preview / edit) ─────────────────────────────────────────
+    // A new case has no note, so no folder of its own to hold files yet: it
+    // takes them once created, by paste, drop or Evidence alike.
+    const attach = this.isNew
+      ? undefined
+      : { reserve: (name: string) => this.plugin.store.reserveAttachmentName(name), write: this.writeAttachment }
     this.descEditor?.destroy()
     this.descEditor = renderDescriptionEditor(body, {
       app: this.app,
       plugin: this.plugin,
       project: this.project,
       task: this.task,
+      attach,
       // The editor waits for this before it opens the link, so a new draft
       // asks first and nothing opens behind the prompt; Keep opens nothing.
       onNavigateAway: () => this.leave()
@@ -554,15 +635,7 @@ export class TaskModal extends Modal {
       app: this.app,
       project: this.project,
       task: this.task,
-      // A new case has no note, so no folder of its own to hold files yet.
-      attach: this.isNew
-        ? undefined
-        : {
-            reserve: (name) => this.plugin.store.reserveAttachmentName(name),
-            write: (name, data) => this.plugin.store.writeTaskAttachment(this.project, this.task, name, data),
-            onLinked: () => this.render(),
-            onCopied: () => this.render()
-          }
+      attach: attach && { ...attach, onLinked: () => this.render(), onCopied: () => this.render() }
     })
 
     // ── Incident sections (timeline + indicators) ───────────────────────────
@@ -648,6 +721,7 @@ export class TaskModal extends Modal {
       safeAsync(async () => {
         if (this.isDirty() && !(await confirmDialog(this.app, 'Discard unsaved changes?', 'Discard'))) return
         this.cancelled = true
+        this.discarded = true
         this.close()
       })
     )
@@ -700,6 +774,9 @@ export class TaskModal extends Modal {
       if (t && t !== titleInput && (t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault()
+        // A custom field, the estimate or a time-log row writes the clone on
+        // 'change', which only a blur sends before the save reads the clone.
+        ;(activeDocument.activeElement as HTMLElement | null)?.blur()
         void doSave()
       }
     }

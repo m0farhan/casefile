@@ -232,31 +232,63 @@ export class KanbanCard {
     if (!chips.hasChildNodes()) chips.remove()
 
     // ── The card's own bottom edge, not a row ────────────────────────────────
-    if (props.onProgressChange) {
+    // A milestone has no progress: the form hides it and the Done fill skips it.
+    const showProgress = task.type !== 'milestone'
+    if (showProgress && props.onProgressChange) {
       // Minimal in-card progress: the same thin track, but adjustable. The
       // slider must never start a card drag or bubble into click-to-open.
       const onProgressChange = props.onProgressChange
       const slider = card.createEl('input', { type: 'range', cls: 'pm-kanban-progress' })
       slider.min = '0'
       slider.max = '100'
-      slider.step = '25'
+      // 25% detents, unless the stored value sits between them (a migrated
+      // board's 5% steps, a hand edit): step 25 snapped 40 to 50 on the card
+      // while the table said 40.
+      slider.step = task.progress % 25 ? '1' : '25'
       slider.value = String(task.progress)
-      const paint = () => slider.setCssProps({ '--pm-progress-pct': `${slider.value}%` })
-      paint()
+      const paint = (pct: number | string = slider.value) => slider.setCssProps({ '--pm-progress-pct': `${pct}%` })
+      paint(task.progress)
       slider.setAttribute('aria-label', 'Progress')
+      // Chromium on a touch screen hands the slider a tap that landed up to
+      // ~16px above it, on the chip row, and that tap overwrote progress (a
+      // Done card dropped to 0). The event keeps the real point: such a tap
+      // opens the card, as it meant to, and leaves progress alone. Only above:
+      // below the slider is the card's own edge, still the slider's to take.
+      // The flag outlives pointerup a moment, since `change` can arrive after
+      // it, then clears, so a later adjust by keyboard or assistive tech counts.
+      let retargeted = false
+      let gesture = 0
       slider.addEventListener('pointerdown', (e) => {
         e.stopPropagation()
         card.draggable = false
+        gesture++
+        retargeted = e.pointerType === 'touch' && e.clientY < slider.getBoundingClientRect().top
       })
       const restoreDrag = () => {
         card.draggable = true
+        const mine = gesture
+        window.setTimeout(() => {
+          if (gesture === mine) retargeted = false
+        }, 300)
       }
-      slider.addEventListener('pointerup', restoreDrag)
+      slider.addEventListener('pointerup', () => {
+        // A touch tap on a slider fires no click, so the card opens from here.
+        if (retargeted) props.onClick()
+        restoreDrag()
+      })
       slider.addEventListener('pointercancel', restoreDrag)
+      slider.addEventListener('keydown', () => {
+        retargeted = false
+      })
       slider.addEventListener('click', (e) => e.stopPropagation())
-      slider.addEventListener('input', paint)
-      slider.addEventListener('change', () => onProgressChange(Number(slider.value)))
-    } else if (task.progress > 0) {
+      slider.addEventListener('input', () => {
+        if (retargeted) slider.value = String(task.progress)
+        paint()
+      })
+      slider.addEventListener('change', () => {
+        if (!retargeted) onProgressChange(Number(slider.value))
+      })
+    } else if (showProgress && task.progress > 0) {
       new ProgressBar(card.createDiv('pm-kanban-card-progress')).setSize('sm').setValue(task.progress)
     }
 

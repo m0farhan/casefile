@@ -131,6 +131,7 @@ export class PMSettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             this.plugin.settings.ganttWeekLabel = v as PMSettings['ganttWeekLabel']
             await this.plugin.saveSettings()
+            this.plugin.refreshProjectViews()
           })
       )
 
@@ -141,6 +142,7 @@ export class PMSettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings.kanbanShowSubtasks).onChange(async (v) => {
           this.plugin.settings.kanbanShowSubtasks = v
           await this.plugin.saveSettings()
+          this.plugin.refreshProjectViews()
         })
       )
 
@@ -162,6 +164,7 @@ export class PMSettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings.showTagColors).onChange(async (v) => {
           this.plugin.settings.showTagColors = v
           await this.plugin.saveSettings()
+          this.plugin.refreshProjectViews()
         })
       )
 
@@ -484,11 +487,12 @@ export class PMSettingTab extends PluginSettingTab {
       text.setValue(this.plugin.settings.ownedAssets.join('\n')).onChange(async (v) => {
         // One entry per LINE, as the description promises. Splitting on all
         // whitespace would turn "# datacentre range" into three live rules,
-        // one of which ("datacentre") would match a bare hostname.
+        // one of which ("datacentre") would match a bare hostname. A comment
+        // line is kept as typed; the matcher skips it.
         this.plugin.settings.ownedAssets = v
           .split('\n')
           .map((line) => line.trim())
-          .filter((line) => line && !line.startsWith('#'))
+          .filter((line) => line)
         renderAssetWarning()
         await this.plugin.saveSettings()
       })
@@ -502,16 +506,18 @@ export class PMSettingTab extends PluginSettingTab {
       text:
         'Names worth impersonating, one per line — the brands your users would believe. The analyser folds ' +
         'look-alike characters and reports a link host that reads as one of these once folded, or that sits ' +
-        'one character away from it. Nothing ships in this list on purpose: which brands matter is your ' +
-        'call, not the plugin’s, and a guessed list would cry wolf on every mail from a real sender.'
+        'one character away from it. Lines starting with # are comments. Nothing ships in this list on ' +
+        'purpose: which brands matter is your call, not the plugin’s, and a guessed list would cry wolf on ' +
+        'every mail from a real sender.'
     })
     new Setting(containerEl).setName('Brands to watch for').addTextArea((text) => {
       text.inputEl.rows = 4
       text.setValue(this.plugin.settings.phishBrands.join('\n')).onChange(async (v) => {
+        // Comment lines are kept as typed, as in the asset boundary; the analyser skips them.
         this.plugin.settings.phishBrands = v
           .split('\n')
           .map((line) => line.trim())
-          .filter((line) => line && !line.startsWith('#'))
+          .filter((line) => line)
         await this.plugin.saveSettings()
       })
     })

@@ -92,4 +92,30 @@ describe('renderSubtasksPanel', () => {
     expect(sub.status).toBe('done')
     expect(sub.verdict).toBe('true-positive')
   })
+
+  it('refuses a subtask whose note name is taken, or that makes no file name, so later saves are not blocked', () => {
+    const parent = makeTask({ title: 'Case' })
+    const project = { taskIndex: new Map([[parent.id, {}]]) } as unknown as Project
+    const plugin = {
+      settings: { currentUser: '' },
+      store: {
+        findTaskFileConflict: (_p: Project, sub: { title: string }) =>
+          sub.title === 'Check logs' ? { fileName: 'Check logs.md' } : null
+      }
+    } as unknown as PMPlugin
+    const onChange = vi.fn<() => void>()
+    const root = FakeEl.root()
+    renderSubtasksPanel(root as unknown as HTMLElement, parent, plugin, statuses, {
+      project,
+      onOpen: () => {},
+      onChange
+    })
+    const input = root.find('input.pm-subtask-add-input')
+    for (const title of ['Check logs', '...', 'Check mail']) {
+      input.value = title
+      input.dispatchEvent(fakeEvent('keydown', { key: 'Enter' }))
+    }
+    expect(parent.subtasks.map((s) => s.title)).toEqual(['Check mail'])
+    expect(onChange).toHaveBeenCalledOnce()
+  })
 })

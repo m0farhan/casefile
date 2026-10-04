@@ -1,4 +1,4 @@
-import { IOC_TYPE_LABELS, defangIoc, detectIocType, hasIocShape, refangIoc } from './ioc'
+import { IOC_TYPE_LABELS, defangIoc, detectIocType, hasIocShape, refangIoc, stripProseTail } from './ioc'
 import { latin1Bytes } from './eml'
 
 /**
@@ -273,20 +273,57 @@ export function defangSelection(text: string): string {
   return defangLines(text).out
 }
 
+/** What a token's indicator is wrapped in: brackets, quotes (ASCII or typographic), inline code, braces, emphasis. */
+const WRAP_OPEN = '("\'<[`“‘*{'
+const WRAP_CLOSE = ')"\'>].,;:!?`”’*}'
+
+/**
+ * An indicator inside a longer token: a URL with a scheme, an email address or
+ * an IPv4 address in attr="…", [text](…), url(…) or mailto:…. The email starts
+ * only at the beginning of its run, as RE_EMAIL does, so a long word with no @
+ * costs one pass rather than one per character. An IPv4 address stands alone
+ * among dots, digits and slashes, so a version (Firefox/115.0.2.1) or an OID
+ * (1.3.6.1.5.5.7.3.1) is not one. Captured, not looked behind: iOS before
+ * 16.4 cannot compile a lookbehind.
+ */
+const EMBEDDED =
+  /\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s"'<>(){}`\\]+|(^|[^\w.+-])([\w.+-]+@[\w-]+(?:\.[\w-]+)+)|(^|[^\w./])((?:\d{1,3}\.){3}\d{1,3})(?!\.?\d)/gi
+
+/** A defang mark already in a token: defanging around it again would not be undone by one refang. */
+const DEFANGED = /\[(?:\.|:|at|@|:\/\/)\]|hxxps?:/i
+
+/** The defanged IP, URL or email, or null when `core` is none of them or is already defanged. */
+function defangOne(core: string): string | null {
+  if (!core || refangIoc(core) !== core || !hasIocShape(core)) return null
+  const type = detectIocType(core)
+  return type === 'ip' || type === 'url' || type === 'email' ? defangIoc(core, type) : null
+}
+
 /**
  * Defang for pasting outside the vault (the right-click Defang): every
  * indicator line as defangSelection does it, and inside prose the tokens that
- * can be nothing else — an IP address, a URL with a scheme, an email address.
- * A bare word with a dot in prose ('e.g.', 'report.pdf') is left as written,
- * and so is anything already defanged.
+ * can be nothing else — an IP address, a URL with a scheme, an email address —
+ * whether bare, wrapped, or embedded in a longer token. A bare word with a dot
+ * in prose ('e.g.', 'report.pdf') is left as written, and so is anything
+ * already defanged.
  */
 export function defangText(text: string): string {
   return defangSelection(text).replace(/\S+/g, (token) => {
-    const [, lead, core, trail] = /^([("'<[]*)(.*?)([)"'>\].,;:!?]*)$/.exec(token) ?? ['', '', token, '']
-    if (!core || refangIoc(core) !== core || !hasIocShape(core)) return token
-    const type = detectIocType(core)
-    if (type !== 'ip' && type !== 'url' && type !== 'email') return token
-    return lead + defangIoc(core, type) + trail
+    // Walked from both ends rather than a lazy regex, which retried the
+    // closing class from every character of a long punctuation run.
+    let start = 0
+    while (start < token.length && WRAP_OPEN.includes(token[start])) start++
+    let end = token.length
+    while (end > start && WRAP_CLOSE.includes(token[end - 1])) end--
+    const whole = defangOne(token.slice(start, end))
+    if (whole !== null) return token.slice(0, start) + whole + token.slice(end)
+    if (DEFANGED.test(token)) return token
+    return token.replace(EMBEDDED, (m: string, mailBefore?: string, _mail?: string, ipBefore?: string) => {
+      const before = mailBefore ?? ipBefore ?? ''
+      const hit = m.slice(before.length)
+      const core = stripProseTail(hit)
+      return before + (defangOne(core) ?? core) + hit.slice(core.length)
+    })
   })
 }
 
