@@ -45,7 +45,7 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
-## [Unreleased]
+## [2.43.1] - 2026-10-05
 
 ### Changed
 
