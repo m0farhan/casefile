@@ -45,6 +45,12 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [Unreleased]
+
+### Changed
+
+- **Defang straight from the right-click menu in any note.** Select text, right-click, Defang selection: the selection is rewritten in place (`192.168.0.1` becomes `192[.]168[.]0[.]1`) with nothing added around it, and an already-defanged selection is left as it is. It replaces the Analyst toolbox item in that menu; the toolbox, which puts its results in a quoted block under the selection, is still in the command palette. Defang selection is a command too, so it can take a hotkey
+
 ## [2.43.0] - 2026-10-04
 
 ### Added

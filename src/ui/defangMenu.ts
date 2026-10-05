@@ -1,4 +1,4 @@
-import { Menu, Notice } from 'obsidian'
+import { type Editor, Menu, Notice } from 'obsidian'
 import { defangText } from '../soc/toolbox'
 import { safeAsync } from '../utils'
 
@@ -8,6 +8,14 @@ export function copyText(text: string, what = 'Copied'): void {
     await navigator.clipboard.writeText(text)
     new Notice(what)
   })()
+}
+
+/** Defangs the selection where it stands: the brackets only, nothing added around it. */
+export function defangInPlace(editor: Editor): void {
+  const text = editor.getSelection()
+  const out = defangText(text)
+  if (out === text) new Notice('Nothing in the selection to defang.')
+  else editor.replaceSelection(out)
 }
 
 /** Copy text defanged, and say so only when something was defanged. */

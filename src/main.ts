@@ -34,6 +34,7 @@ import {
 } from './store/layout'
 
 import { safeAsync, withUserResponse } from './utils'
+import { defangInPlace } from './ui/defangMenu'
 import { categoryForTags, normalizeAlertCategories, suggestCategory } from './soc/alertCategory'
 import { tickAllSlaChips } from './soc/slaTicker'
 import { setAlertKindDerivation } from './ui/composites/issueMeta'
@@ -357,6 +358,16 @@ export default class PMPlugin extends Plugin {
     })
 
     this.addCommand({
+      id: 'defang-selection',
+      name: 'Defang selection',
+      editorCheckCallback: (checking, editor) => {
+        if (!editor.getSelection().trim()) return false
+        if (!checking) defangInPlace(editor)
+        return true
+      }
+    })
+
+    this.addCommand({
       id: 'create-task-from-selection',
       name: 'Create task from selection',
       editorCheckCallback: (checking, editor) => {
@@ -378,11 +389,13 @@ export default class PMPlugin extends Plugin {
             .setIcon('list-plus')
             .onClick(() => void this.createTaskFromText(selection))
         )
+        // The toolbox stays in the palette: its results go in a quoted block
+        // under the selection, while this rewrites the selection itself.
         menu.addItem((item) =>
           item
-            .setTitle('Analyst toolbox')
-            .setIcon('wand-sparkles')
-            .onClick(() => void openToolbox(this, editor))
+            .setTitle('Defang selection')
+            .setIcon('shield')
+            .onClick(() => defangInPlace(editor))
         )
       })
     )
