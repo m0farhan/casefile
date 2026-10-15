@@ -45,6 +45,29 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.44.0] - 2026-10-16
+
+### Added
+
+- **Open a case in the sidebar.** "Open in sidebar" in the case dialog's ⋯ menu (it saves your edits first) and in a case's right-click menu puts the case in the right-hand panel, so the board or the note stays in view while you work it. The panel saves as you go. Opening another case reuses the same panel instead of adding a sidebar tab each time. To always open cases there, set **Open tasks in** to the side panel in settings
+- **The side panel follows the case in front.** While the case panel is showing, clicking a case on the board, in the table or in the case switcher opens it in the panel instead of a dialog. Open a case note, or switch to its tab, and the panel shows that case too. With the panel out of sight (its sidebar shut), cases open in the dialog as before and the panel moves to the case quietly, ready when the sidebar comes back. Any other note leaves the panel where it is. What the panel held of the previous case is saved first
+- **Open as note in the case dialog.** The dialog's header has the same note button as the side panel; it saves your edits and opens the case's note in a tab
+- **Details on incidents.** A Details section, next to Indicators, records who and what the incident touches as field and value rows: User, Workstation, IP, or any field you name. Field names are suggested as you type. Pasting several lines at once (a copied two-column table, `User: anita.garcia` lines, or tab-separated pairs) adds them all, and says which lines it could not read. Details are saved in the case note as `caseDetails`, each one added or removed is written to the activity log, searching the board finds a case by a detail's value (`corp-wks-102`), and the case report and shift handover list them, with address-shaped values defanged
+
+### Changed
+
+- In the side panel, Details and Indicators come straight after the properties, ahead of the description
+- The side panel's tab shows a ticket icon instead of one that looked like Obsidian's own sidebar toggle
+- Description text in the case dialog and the panel uses a 14px reading size instead of the note font size, and headings step down from it less steeply, so a pasted write-up no longer fills the screen
+
+### Fixed
+
+- Tables in a case description or a comment render as tables again, with borders and cell padding, instead of loose text. A wide table scrolls inside its box
+- The side panel picks up changes made to the case elsewhere: typed into the case note, moved on the board, or synced in. A field you have changed in the panel and not yet saved keeps your version; every other field takes the new one. Previously the panel kept showing the old case, and a later panel save could write the old description back over what you had typed in the note
+- An edit made to a case note within five seconds of a panel save, with no board open, was not noticed by Responder
+- The side panel's title no longer disappears on a long case, and the panel header wraps instead of running off the edge of a narrow sidebar
+- In a narrow sidebar, each indicator's value keeps a line of its own instead of breaking mid-name beside a squeezed note, and a hairline separates one indicator from the next
+
 ## [2.43.1] - 2026-10-05
 
 ### Changed

@@ -2064,6 +2064,46 @@ describe('activity log + incident lifecycle stamps', () => {
     ])
   })
 
+  it('logs each case detail added or removed as Field: value; an edited value is one of each', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('DetailLog', 'Projects')
+    const t = await addNamed(store, project, 'Details')
+    await store.updateTask(project, t.id, { details: [{ field: 'User', value: 'anita.garcia' }] })
+    await store.updateTask(project, t.id, {
+      details: [
+        { field: 'User', value: 'a.garcia' },
+        { field: 'IP', value: '10.0.1.135' }
+      ]
+    })
+    // The same list again (a panel re-saving its clone) logs nothing.
+    await store.updateTask(project, t.id, {
+      details: [
+        { field: 'User', value: 'a.garcia' },
+        { field: 'IP', value: '10.0.1.135' }
+      ]
+    })
+    expect(t.activity.map((a) => [a.field, a.from, a.to])).toEqual([
+      ['details', '', 'User: anita.garcia'],
+      ['details', '', 'User: a.garcia'],
+      ['details', '', 'IP: 10.0.1.135'],
+      ['details', 'User: anita.garcia', '']
+    ])
+  })
+
+  it('removing the last case detail is logged too', async () => {
+    const { store } = newStore()
+    const project = await store.createProject('DetailLast', 'Projects')
+    const t = await addNamed(store, project, 'Details')
+    await store.updateTask(project, t.id, { details: [{ field: 'User', value: 'anita.garcia' }] })
+    // What the Details section sends once its only row is removed: the key, left undefined.
+    await store.updateTask(project, t.id, { details: undefined })
+    expect(t.details).toBeUndefined()
+    expect(t.activity.map((a) => [a.field, a.from, a.to])).toEqual([
+      ['details', '', 'User: anita.garcia'],
+      ['details', 'User: anita.garcia', '']
+    ])
+  })
+
   it('ioc type/note edits and unchanged lists log nothing', async () => {
     const { store } = newStore()
     const project = await store.createProject('IocQuiet', 'Projects')

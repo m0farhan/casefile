@@ -183,6 +183,7 @@ export const KNOWN_TASK_FRONTMATTER_KEYS = new Set([
   'assignees',
   'tags',
   'iocs',
+  'caseDetails',
   'attack',
   'links',
   'activity',
@@ -237,6 +238,7 @@ export function buildTaskFrontmatter(task: Task, project: Project, parentTask: T
   if (task.containedAt) fm.containedAt = task.containedAt
   if (task.resolvedAt) fm.resolvedAt = task.resolvedAt
   if (task.iocs.length) fm.iocs = task.iocs
+  if (task.details?.length) fm.caseDetails = task.details
   if (task.attack.length) fm.attack = task.attack
   // iocs idiom: emitted only when non-empty, omitted key otherwise.
   if (task.links?.length) fm.links = task.links

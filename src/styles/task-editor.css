@@ -484,7 +484,8 @@ input.pm-pop-field:focus {
    .pm-modal-section, whose 24px horizontal padding would indent their content past
    the title and property grid. Inside the editor they align to the body inset; their
    full-width top borders still divide the sections. */
-.pm-task-modal .pm-modal-section {
+.pm-task-modal .pm-modal-section,
+.pm-task-detail .pm-modal-section {
   padding-left: 0;
   padding-right: 0;
 }
@@ -667,10 +668,17 @@ body:not(.is-mobile) .pm-prop-progress .slider {
   padding: 12px 16px;
   overflow-y: auto;
 }
+/* .pm-root is a column flex box. Once a case is longer than the panel, its
+   parts would shrink to fit, and the title (a textarea that hides its
+   overflow, so may shrink to nothing) disappeared. The panel scrolls instead. */
+.pm-task-detail > * {
+  flex-shrink: 0;
+}
 .pm-td-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   margin-bottom: 8px;
 }
 .pm-td-header-spacer {
@@ -689,6 +697,8 @@ body:not(.is-mobile) .pm-prop-progress .slider {
 .pm-td-title {
   width: 100%;
   margin-bottom: 8px;
+  /* The dialog's 24px title took three lines of a sidebar. */
+  font-size: 18px;
 }
 .pm-td-body {
   display: flex;
@@ -981,8 +991,19 @@ a.pm-ioc-rep--unknown {
    These are the only rules that size and space description text; the older
    copies in task-modal.css and widgets.css are gone. */
 .pm-modal-desc-section {
+  /* Ticket text at a reading size of its own, not the note size: at 16px and
+     up a short scenario filled the dialog, and a narrow side panel held a few
+     words a line. The heading steps shrink with it, one step apart, so a
+     pasted write-up keeps its outline without each heading taking a screen. */
+  --pm-desc-size: 14px;
+  --h1-size: 1.4em;
+  --h2-size: 1.25em;
+  --h3-size: 1.15em;
+  --h4-size: 1.05em;
+  --h5-size: 1em;
+  --h6-size: 1em;
   /* One line of body text, the same length wherever it is used. */
-  --pm-desc-line: calc(var(--font-text-size) * var(--line-height-normal));
+  --pm-desc-line: calc(var(--pm-desc-size) * var(--line-height-normal));
   /* How far left of an item's text its bullet or checkbox is centred. */
   --pm-desc-mark: calc(var(--checkbox-size) / 2 + 0.4em);
 }
@@ -997,7 +1018,7 @@ a.pm-ioc-rep--unknown {
   border: 1px solid transparent;
   border-radius: var(--radius-s);
   font-family: var(--font-text);
-  font-size: var(--font-text-size);
+  font-size: var(--pm-desc-size);
   line-height: var(--line-height-normal);
 }
 /* Wrap where the preview wraps. CodeMirror's default (break-spaces) keeps a
@@ -1233,4 +1254,107 @@ a.pm-ioc-rep--unknown {
   border-radius: var(--list-bullet-radius);
   transform: var(--list-bullet-transform);
   background-color: var(--text-faint);
+}
+
+/* Tables in the description and comments. Neither is a .markdown-rendered
+   view, so Obsidian's own table rules never reach them and a table showed as
+   loose text; these take the same variables. A wide one scrolls inside its
+   box instead of pushing the panel sideways. An alignment the table's
+   divider row sets ([align]) is kept. */
+:is(.pm-modal-desc-preview, .pm-comment-body) table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0;
+  border-collapse: collapse;
+}
+:is(.pm-modal-desc-preview, .pm-comment-body) :is(th, td) {
+  padding: var(--size-2-2) var(--size-4-2);
+  border: var(--table-border-width) solid var(--table-border-color);
+  vertical-align: top;
+  overflow-wrap: normal;
+}
+:is(.pm-modal-desc-preview, .pm-comment-body) :is(th, td):not([align]) {
+  text-align: start;
+}
+:is(.pm-modal-desc-preview, .pm-comment-body) th {
+  font-weight: var(--table-header-weight);
+  color: var(--table-header-color);
+  background: var(--table-header-background);
+}
+
+/* Case details: field and value side by side; the value takes the room and,
+   in a narrow panel, the row wraps rather than squeezing either to nothing. */
+.pm-details-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.pm-details-rows:empty {
+  display: none;
+}
+.pm-details-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pm-details-field {
+  flex: 0 1 9em;
+  min-width: 7em;
+  font-size: 12px;
+}
+.pm-details-value {
+  flex: 1 1 12em;
+  min-width: 0;
+  font-family: var(--gs-font-mono);
+  font-size: 12px;
+}
+.pm-details-section .pm-details-row:not(.pm-details-add) .pm-details-field {
+  color: var(--gs-ink-subtle);
+}
+
+/* A narrow side panel (the usual sidebar width): each indicator wraps onto
+   two lines, so a hairline marks where one ends and the next begins; the
+   chips and hints under a row start at its left edge instead of under a
+   type select that is no longer beside them; the new detail's field takes
+   its own line. */
+@container (max-width: 420px) {
+  .pm-ioc-rows > .pm-ioc-row + .pm-ioc-row,
+  .pm-ioc-rows > .pm-ioc-rep + .pm-ioc-row,
+  .pm-ioc-rows > .pm-ioc-sightings + .pm-ioc-row {
+    padding-top: 6px;
+    border-top: 1px solid var(--gs-hairline);
+  }
+  .pm-ioc-rep,
+  .pm-ioc-rows .pm-ioc-sightings {
+    padding-left: 0;
+  }
+  /* The type and the value take the first line (the value whole, not broken
+     mid-name beside a squeezed note); the note and the buttons the second. */
+  .pm-ioc-row:not(.pm-ioc-add) .pm-ioc-value {
+    flex-basis: calc(100% - 100px);
+  }
+  .pm-details-add .pm-details-field {
+    flex-basis: 100%;
+  }
+  /* A saved row keeps field and value on one line. The name reads as a
+     label (its box shows on hover and while edited), which leaves the room
+     for the value. */
+  .pm-details-row:not(.pm-details-add) {
+    gap: 4px;
+  }
+  .pm-details-row:not(.pm-details-add) .pm-details-field {
+    flex: 0 1 8em;
+    min-width: 4em;
+    padding-inline: 4px;
+  }
+  .pm-details-row:not(.pm-details-add) .pm-details-field:not(:hover, :focus) {
+    border-color: transparent;
+    background: transparent;
+  }
+  .pm-details-row:not(.pm-details-add) .pm-details-value {
+    flex: 1 1 0;
+  }
 }

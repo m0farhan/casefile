@@ -1,4 +1,4 @@
-import type { App, WorkspaceLeaf } from 'obsidian'
+import type { App, Plugin, WorkspaceLeaf } from 'obsidian'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FakeEl, fakeEvent } from '../../test/fakeDom'
 import { makeFakeApp } from '../../test/fakeVault'
@@ -147,6 +147,9 @@ interface Panel {
   persist(): Promise<void>
   onStatusChanged(task: Task): Promise<void>
   persistTitle(input: { value: string }): Promise<void>
+  syncExternal(): Promise<void>
+  followFile(file: { path: string } | null): Promise<void>
+  leaf: { setViewState(state: unknown): Promise<void> }
   contentEl: { isConnected: boolean }
 }
 
@@ -181,7 +184,17 @@ async function setup(fields: Partial<Task> = {}, subtaskTitles: string[] = []) {
     await fresh.loadTaskBody(t)
     return t
   }
-  return { store, project, panel, live, reload, onDisk }
+  /** The case changed by someone else: another store's save, as typing in the note or Sync would. */
+  const editElsewhere = async (patch: Partial<Task>): Promise<void> => {
+    store.registerCacheInvalidation({ registerEvent: () => {} } as unknown as Plugin)
+    // The markers of this store's own earlier writes, as the panel's 'changed' handler takes them up.
+    for (const path of [project.filePath, live().filePath ?? '']) store.consumeSelfWrite(path)
+    const other = new ProjectStore(app as unknown as App, () => DEFAULT_SETTINGS)
+    const [board] = await other.loadAllProjects('Projects')
+    await other.loadTaskBody(board.tasks[0])
+    await other.updateTask(board, board.tasks[0].id, patch)
+  }
+  return { store, project, panel, live, reload, onDisk, editElsewhere }
 }
 
 afterEach(() => {
@@ -351,5 +364,141 @@ describe('TaskDetailView saving', () => {
     panel.task.description = 'evidence'
     await panel.flushPendingSave()
     expect(live().description).toBe('evidence')
+  })
+})
+
+describe('TaskDetailView outside changes', () => {
+  it('a change made in the note shows in the panel, and the next panel save keeps it', async () => {
+    const { panel, editElsewhere, onDisk } = await setup({ issueType: 'incident' })
+    const render = vi.fn<() => void>()
+    panel.render = render
+    await editElsewhere({ description: 'At 11:05:40, the user ran PowerShell', severity: 'sev1' })
+    await panel.syncExternal()
+    expect(panel.task.description).toBe('At 11:05:40, the user ran PowerShell')
+    expect(panel.task.severity).toBe('sev1')
+    expect(render).toHaveBeenCalledOnce()
+
+    panel.task.details = [{ field: 'User', value: 'anita.garcia' }]
+    await panel.flushPendingSave()
+    const disk = await onDisk()
+    expect(disk.description).toBe('At 11:05:40, the user ran PowerShell')
+    expect(disk.details).toEqual([{ field: 'User', value: 'anita.garcia' }])
+  })
+
+  it('a field the panel has changed keeps the panel value; the others take the note', async () => {
+    const { panel, editElsewhere, onDisk } = await setup()
+    panel.task.description = 'typed in the panel'
+    await editElsewhere({ description: 'typed in the note', tags: ['malware'] })
+    await panel.syncExternal()
+    expect(panel.task.description).toBe('typed in the panel')
+    expect(panel.task.tags).toEqual(['malware'])
+    await panel.flushPendingSave()
+    const disk = await onDisk()
+    expect(disk.description).toBe('typed in the panel')
+    expect(disk.tags).toEqual(['malware'])
+  })
+
+  it("the panel's own save reads back as no change, so nothing redraws under the caret", async () => {
+    vi.stubGlobal('window', globalThis)
+    const { panel } = await setup({ issueType: 'incident' })
+    panel.task.description = 'Scenario\n\n| User | anita.garcia |\n| --- | --- |\n'
+    panel.task.details = [{ field: 'IP', value: '10.0.1.135' }]
+    panel.task.iocs.push({ type: 'domain', value: 'promptcraft.online', note: 'payload' })
+    panel.task.status = 'in-progress'
+    await panel.onStatusChanged(panel.task)
+    await panel.flushPendingSave()
+    const render = vi.fn<() => void>()
+    panel.render = render
+    await panel.syncExternal()
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  it('a list both sides changed is merged and the merge saved', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', globalThis)
+    const { panel, editElsewhere, onDisk } = await setup({ tags: ['triage'] })
+    panel.task.tags.push('phish')
+    await editElsewhere({ tags: ['triage', 'malware'] })
+    await panel.syncExternal()
+    expect(panel.task.tags).toEqual(['triage', 'phish', 'malware'])
+    await vi.advanceTimersByTimeAsync(900)
+    expect((await onDisk()).tags).toEqual(['triage', 'phish', 'malware'])
+  })
+
+  it('a row removed on the other side goes; one the panel removed stays gone', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', globalThis)
+    const { panel, editElsewhere, onDisk } = await setup({ tags: ['a', 'b', 'c'] })
+    panel.task.tags = ['a', 'c', 'mine']
+    await editElsewhere({ tags: ['b', 'c'] })
+    await panel.syncExternal()
+    expect(panel.task.tags).toEqual(['c', 'mine'])
+    await vi.advanceTimersByTimeAsync(900)
+    expect((await onDisk()).tags).toEqual(['c', 'mine'])
+  })
+
+  it('waits while a panel save is pending, then takes the change in', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', globalThis)
+    const { panel, editElsewhere } = await setup()
+    panel.task.assignees.push('alice')
+    panel.scheduleSave()
+    await editElsewhere({ tags: ['phish'] })
+    await panel.syncExternal()
+    expect(panel.task.tags).toEqual([])
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(panel.task.tags).toEqual(['phish'])
+    expect(panel.task.assignees).toEqual(['alice'])
+  })
+})
+
+describe('TaskDetailView follows the case note in front', () => {
+  async function following() {
+    const ctx = await setup()
+    const second = makeTask({ title: 'Second case' })
+    await ctx.store.insertTask(ctx.project, second, null)
+    const shown: unknown[] = []
+    ctx.panel.leaf = {
+      setViewState: (state) => {
+        shown.push(state)
+        return Promise.resolve()
+      }
+    }
+    // The cache as Obsidian has it: case notes carry the marker and their id.
+    const notes = new Map<string, Record<string, unknown>>([
+      [ctx.panel.task.filePath ?? '', { 'pm-task': true, id: ctx.panel.task.id }],
+      [second.filePath ?? '', { 'pm-task': true, id: second.id }],
+      ['Notes/plain.md', { tags: ['reading'] }],
+      ['Copies/copy.md', { 'pm-task': true, id: second.id }]
+    ])
+    const app = ctx.panel.app as unknown as { metadataCache: { getFileCache: (f: { path: string }) => unknown } }
+    app.metadataCache.getFileCache = (f) => ({ frontmatter: notes.get(f.path) })
+    return { ...ctx, second, shown }
+  }
+
+  it('shows the case whose note comes to the front', async () => {
+    const { panel, project, second, shown } = await following()
+    await panel.followFile({ path: second.filePath ?? '' })
+    expect(shown).toEqual([
+      { type: 'casefile-task-detail', state: { projectPath: project.filePath, taskId: second.id }, active: false }
+    ])
+  })
+
+  it('leaves the panel alone for its own case, another note, no note, or a copy carrying a case id', async () => {
+    const { panel, shown } = await following()
+    await panel.followFile({ path: panel.task.filePath ?? '' })
+    await panel.followFile({ path: 'Notes/plain.md' })
+    await panel.followFile(null)
+    await panel.followFile({ path: 'Copies/copy.md' })
+    expect(shown).toEqual([])
+  })
+
+  it('switching notes quickly follows the last one only', async () => {
+    const { panel, second, shown } = await following()
+    const first = panel.followFile({ path: second.filePath ?? '' })
+    const last = panel.followFile({ path: 'Notes/plain.md' })
+    const again = panel.followFile({ path: second.filePath ?? '' })
+    await Promise.all([first, last, again])
+    expect(shown).toHaveLength(1)
   })
 })

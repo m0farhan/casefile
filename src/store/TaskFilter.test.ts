@@ -92,6 +92,13 @@ describe('matchesFilter', () => {
     expect(matchesFilter(t, filter({ text: 'medium' }))).toBe(false)
   })
 
+  it('matches text against case detail values, so a user or host finds its cases', () => {
+    const t = task({ id: 'a', title: 'ClickFix', details: [{ field: 'Workstation', value: 'corp-wks-102' }] })
+    expect(matchesFilter(t, filter({ text: 'CORP-WKS' }))).toBe(true)
+    // The field name is a label, not something the case names.
+    expect(matchesFilter(t, filter({ text: 'workstation' }))).toBe(false)
+  })
+
   it('matches a task id pasted into the search box', () => {
     const t = task({ id: 'ci9q78ljy7xcz0out', title: 'Refactor parser' })
     expect(matchesFilter(t, filter({ text: 'ci9q78ljy7xcz0out' }))).toBe(true)

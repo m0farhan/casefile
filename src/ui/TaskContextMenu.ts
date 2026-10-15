@@ -5,7 +5,7 @@ import { BUCKETS } from '../types'
 import { safeAsync } from '../utils'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderStatusDot } from './StatusBadge'
-import { openTaskModal, confirmDialog, confirmDuplicateSubtasks } from './ModalFactory'
+import { openTaskModal, openTaskDetailPanel, confirmDialog, confirmDuplicateSubtasks } from './ModalFactory'
 import { showUndoNotice } from './undoNotice'
 import { toggleTaskFlag } from './flagOps'
 import { copyCaseReport, generateCaseReport } from '../soc/caseReport'
@@ -33,6 +33,16 @@ export function buildTaskContextMenu(menu: Menu, task: Task, ctx: TaskMenuContex
         })
       })
   )
+  // The board stays in view; the panel autosaves. Only a saved task has a
+  // page the panel can open, and with tasks opening there already, Edit does this.
+  if (task.filePath && ctx.plugin.settings.openTaskIn !== 'panel') {
+    menu.addItem((item) =>
+      item
+        .setTitle('Open in sidebar')
+        .setIcon('panel-right')
+        .onClick(() => openTaskDetailPanel(ctx.plugin, ctx.project, task.id))
+    )
+  }
   menu.addItem((item) =>
     item
       .setTitle('Add subtask')

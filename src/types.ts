@@ -40,6 +40,13 @@ export interface Ioc {
   note?: string
 }
 
+/** One fact about the case as the analyst recorded it ("User: anita.garcia",
+ * "Workstation: corp-wks-102"). Free-form field names; order is the analyst's. */
+export interface CaseDetail {
+  field: string
+  value: string
+}
+
 /** One audit-log entry. Appended by the store on tracked field changes; never edited. */
 export interface ActivityEntry {
   at: string // ISO datetime
@@ -109,6 +116,10 @@ export interface Task {
   assignees: string[]
   tags: string[]
   iocs: Ioc[]
+  /** Affected user, host, address and the like. Absent when none — serialized
+   * only when non-empty, as `caseDetails` (a plain `details` key is too likely
+   * to be a property the analyst already uses). */
+  details?: CaseDetail[]
   /** MITRE ATT&CK technique IDs, e.g. "T1566.001". */
   attack: string[]
   /** Append-only audit log, stamped by the store on tracked field changes. */

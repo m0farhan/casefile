@@ -70,7 +70,9 @@ export function matchesFilter(
         task.status.includes(q) ||
         task.assignees.some((a) => a.toLowerCase().includes(q)) ||
         task.tags.some((t) => t.toLowerCase().includes(q)) ||
-        task.iocs.some((i) => refangIoc(i.value).toLowerCase().includes(iocQ))
+        task.iocs.some((i) => refangIoc(i.value).toLowerCase().includes(iocQ)) ||
+        // 'anita.garcia' or 'corp-wks-102' finds every case that names them.
+        (task.details ?? []).some((d) => d.value.toLowerCase().includes(q))
       )
     ) {
       return false

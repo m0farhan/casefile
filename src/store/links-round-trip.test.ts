@@ -90,3 +90,45 @@ describe('sharedIndicatorLinks', () => {
     expect(sharedIndicatorLinks(me, [me, other], [])).toEqual([{ task: other, shared: 1 }])
   })
 })
+
+describe('case details round-trip', () => {
+  it('writes caseDetails only when there are some, and reads them back in order', () => {
+    const details = [
+      { field: 'User', value: 'anita.garcia' },
+      { field: 'Workstation', value: 'corp-wks-102' }
+    ]
+    const md = serializeTask(makeTask({ id: 'd1', details }), project, null)
+    expect(md).toContain('caseDetails:')
+    expect(roundTrip(md).task.details).toEqual(details)
+    const none = serializeTask(makeTask({ id: 'd2', details: [] }), project, null)
+    expect(none).not.toContain('caseDetails')
+    expect(roundTrip(none).task.details).toBeUndefined()
+  })
+
+  it('drops rows without a field or a value, keeps a number typed by hand, and leaves a details property of your own alone', () => {
+    const md = [
+      '---',
+      'pm-task: true',
+      'id: d3',
+      'title: X',
+      'details: my own note',
+      'caseDetails:',
+      '  - field: User',
+      '    value: anita.garcia',
+      '  - field: IP',
+      '  - value: orphan',
+      '  - field: Port',
+      '    value: 443',
+      '  - not-an-object',
+      '---',
+      ''
+    ].join('\n')
+    const { task } = roundTrip(md)
+    expect(task.details).toEqual([
+      { field: 'User', value: 'anita.garcia' },
+      { field: 'Port', value: '443' }
+    ])
+    expect(task.extraFrontmatter?.details).toBe('my own note')
+    expect(serializeTask(task, project, null)).toContain('details: "my own note"')
+  })
+})

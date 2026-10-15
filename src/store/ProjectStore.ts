@@ -1704,6 +1704,17 @@ export class ProjectStore implements TaskSource {
       for (const v of nextVals) if (!prevVals.has(v)) entries.push({ at, field: 'iocs', from: '', to: v })
       for (const v of prevVals) if (!nextVals.has(v)) entries.push({ at, field: 'iocs', from: v, to: '' })
     }
+    // Case details the same way, a row known by "Field: value": an edited
+    // value logs as the old row removed and the new one added.
+    // `in`, not !== undefined: removing the last row leaves the key undefined,
+    // and that removal is logged like any other.
+    if ('details' in patch) {
+      const row = (d: { field: string; value: string }) => `${d.field}: ${d.value}`
+      const prevRows = new Set((task.details ?? []).map(row))
+      const nextRows = new Set((patch.details ?? []).map(row))
+      for (const v of nextRows) if (!prevRows.has(v)) entries.push({ at, field: 'details', from: '', to: v })
+      for (const v of prevRows) if (!nextRows.has(v)) entries.push({ at, field: 'details', from: v, to: '' })
+    }
 
     // Incident lifecycle auto-stamps (manual edits in the patch always win).
     // Never for an administrative change: nobody responded to or resolved the
@@ -1880,7 +1891,7 @@ export class ProjectStore implements TaskSource {
   /** The tracked fields a subtask's saved copy changed, as a patch against the live one; null when none did. */
   private subtaskChanges(prev: Task, next: Task): Partial<Task> | null {
     const patch: Record<string, unknown> = {}
-    for (const field of [...ProjectStore.ACTIVITY_FIELDS, 'completed', 'iocs'] as const) {
+    for (const field of [...ProjectStore.ACTIVITY_FIELDS, 'completed', 'iocs', 'details'] as const) {
       if (JSON.stringify(prev[field]) !== JSON.stringify(next[field])) patch[field] = next[field]
     }
     return Object.keys(patch).length ? patch : null

@@ -30,8 +30,10 @@ trail, hand over cleanly.
   set-severity / set-verdict for alert storms
 - Query bar with a JQL-lite grammar (`sev:>=high sla:breached ioc:evil[.]com`),
   a built-in syntax popover, live match counts, and saved views
-- Right-leaf task detail panel with debounced autosave; Gantt and dashboard
-  views for the bigger picture
+- Right-leaf task detail panel with debounced autosave: open any case there
+  ("Open in sidebar" in the case dialog or its right-click menu) to keep the
+  board or the note in view while you work it. It follows the case note in
+  front and picks up changes made to the case elsewhere. Gantt and dashboard views for the bigger picture
 - Auto-archive: closed cases move into their board's `Tasks/Archive/` folder a
   set number of days after they were closed. Off by default (0 days); the
   file is moved, never deleted, and a case with no completion date is never
@@ -64,6 +66,10 @@ trail, hand over cleanly.
   never open links or load remote images from case text — a click on a link
   copies it defanged instead; opening the same note directly in Obsidian
   follows Obsidian's normal behaviour.
+- Details on incidents: who and what the incident touches (user,
+  workstation, IP or any field you name) as field and value rows. Paste a
+  copied table to add several at once. They are logged in the activity
+  timeline, searchable, and listed in the case report and the shift handover
 - Incident lifecycle stamps (occurred / detected / responded / contained /
   resolved) with an append-only, per-task activity timeline — nothing edits
   history — and a case timeline pane that tells one case's story in order

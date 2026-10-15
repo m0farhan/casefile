@@ -6,7 +6,7 @@ import { ensureFolder } from '../store/vaultFs'
 import { isTerminalStatus } from '../utils'
 import { inertLine } from './caseReport'
 import { quoteUntrusted } from './emailHeaders'
-import { OWN_ASSET_SUFFIX, activityValue, assetRule, defangIoc } from './ioc'
+import { OWN_ASSET_SUFFIX, activityValue, assetRule, defangIoc, detailValueShown } from './ioc'
 import { formatSlaRemaining, slaAnchor, slaAtRisk, slaState } from './sla'
 
 /**
@@ -63,7 +63,11 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
   // lines; everything else is its label, as inert text.
   const shown = (p: Project, field: string, v: string): string => {
     if (!v) return '(unset)'
-    return field === 'iocs' ? quoteUntrusted(activityValue(field, v)) : inertLine(valueLabel(p, field, v))
+    if (field === 'iocs') return quoteUntrusted(activityValue(field, v))
+    // "Field: value", the value printed as the Details lines print it.
+    const split = field === 'details' ? /^(.*?): (.*)$/s.exec(v) : null
+    if (split) return `${quoteUntrusted(split[1])}: ${quoteUntrusted(detailValueShown(split[2]))}`
+    return inertLine(valueLabel(p, field, v))
   }
 
   const lines: string[] = [
@@ -125,6 +129,10 @@ export function buildHandover(projects: Project[], settings: PMSettings, nowIso:
       const lastText = last ? ` · last: ${last.field} → ${shown(r.project, last.field, last.to)} at ${last.at}` : ''
       const status = shown(r.project, 'status', r.task.status)
       lines.push(`- ${label(r.task)} — ${status} · ${slaText}${anchorNote}${lastText}`)
+      // Who and what the incident touches, before what it points at.
+      for (const d of r.task.details ?? []) {
+        lines.push(`  - ${quoteUntrusted(d.field)}: ${quoteUntrusted(detailValueShown(d.value))}`)
+      }
       // ponytail: 8 defanged indicators per incident keeps the note scannable; bump the cap if shifts want more.
       for (const ioc of r.task.iocs.slice(0, 8)) {
         // formatIocLine's wording, with the value in a code span (a defanged

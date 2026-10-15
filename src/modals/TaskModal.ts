@@ -6,13 +6,14 @@ import { flattenTasks } from '../store/TaskTreeOps'
 import { TaskFileNameConflictError } from '../store'
 import { isNameableTitle } from '../store/ProjectStore'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
-import { confirmDialog, openIndicatorSearch, openTaskModal } from '../ui/ModalFactory'
+import { confirmDialog, openIndicatorSearch, openTaskDetailPanel, openTaskModal } from '../ui/ModalFactory'
 import { findTaskById } from '../store/TaskIndex'
 import { renderIssueTypeIcon, renderKeyChip } from '../ui/composites/issueMeta'
 import { renderStatusBadge } from '../ui/StatusBadge'
 import { fillProgressOnDone, renderTaskFormFields } from './TaskFormFields'
 import { renderLifecyclePanel } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
+import { renderDetailsSection } from '../soc/DetailsSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderActivitySection, diffTaskPatch } from '../views/TaskDetailView'
@@ -373,6 +374,22 @@ export class TaskModal extends Modal {
           .setIcon('file-text')
           .onClick(() => this.closeThen(() => void this.app.workspace.openLinkText(filePath, '', true)))
       )
+      // Carries on in the right-hand panel, which autosaves: the edits made
+      // here are saved first, through the same checks as Save.
+      menu.addItem((item) =>
+        item
+          .setTitle('Open in sidebar')
+          .setIcon('panel-right')
+          .onClick(
+            safeAsync(async () => {
+              if (!(await this.readyToPersist(titleError))) return
+              if (this.isDirty()) await this.persistTask()
+              this.cancelled = true
+              this.close()
+              openTaskDetailPanel(this.plugin, this.project, this.task.id)
+            })
+          )
+      )
       menu.addSeparator()
     }
     // Archive and Unarchive save first, through the same checks as Save:
@@ -509,6 +526,13 @@ export class TaskModal extends Modal {
 
     // The title's inline error is built below; the menu reports into it (this.titleError).
     if (!this.isNew) {
+      // The side panel's note button, here too: the case's note in a tab, edits saved on the way (closeThen).
+      const filePath = this.task.filePath
+      if (filePath) {
+        const noteBtn = new ExtraButtonComponent(header).setIcon('file-text').setTooltip('Open as note')
+        noteBtn.extraSettingsEl.addClass('pm-te-header-btn')
+        noteBtn.onClick(() => this.closeThen(() => void this.app.workspace.openLinkText(filePath, '', true)))
+      }
       const moreBtn = new ExtraButtonComponent(header).setIcon('more-horizontal').setTooltip('More actions')
       moreBtn.extraSettingsEl.addClass('pm-te-header-btn')
       moreBtn.onClick(() => this.openOverflowMenu(moreBtn.extraSettingsEl, (m) => this.titleError(m)))
@@ -650,6 +674,7 @@ export class TaskModal extends Modal {
           slaPolicies: this.plugin.settings.slaPolicies
         })
       }
+      renderDetailsSection(body, this.task, { onChange: () => {} })
       renderIocSection(body, this.task, {
         onChange: () => {},
         reputationKeys: {

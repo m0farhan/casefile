@@ -4,7 +4,7 @@ import type { Project, SeverityConfig, SlaPolicy, StatusConfig, Task, VerdictCon
 import { BUCKETS } from '../types'
 import { flattenTasks } from '../store/TaskTreeOps'
 import { quoteUntrusted } from './emailHeaders'
-import { OWN_ASSET_SUFFIX, assetRule, defangIoc } from './ioc'
+import { OWN_ASSET_SUFFIX, assetRule, defangIoc, detailValueShown } from './ioc'
 import { formatSlaRemaining, slaAnchor, slaPolicy, slaState } from './sla'
 
 export interface CaseReportContext {
@@ -180,6 +180,20 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
             : `still running (${formatSlaRemaining(remainingMs)} left)`
         }`
       )
+    }
+  }
+  lines.push('')
+
+  // ── Details ────────────────────────────────────────────────────────────────
+  lines.push('## Details', '')
+  const details = task.details ?? []
+  if (!details.length) {
+    lines.push('None recorded.')
+  } else {
+    lines.push('| Field | Value |', '| --- | --- |')
+    for (const d of details) {
+      // The field name is pasted text too: in a code span, so `[Pay](https://…)` is no link.
+      lines.push(`| ${cell(quoteUntrusted(d.field))} | ${cell(quoteUntrusted(detailValueShown(d.value)))} |`)
     }
   }
   lines.push('')

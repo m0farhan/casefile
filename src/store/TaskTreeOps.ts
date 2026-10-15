@@ -119,6 +119,8 @@ function cloneNode(source: Task, includeSubtasks: boolean, idMap: Map<string, st
     // A duplicated incident is a fresh investigation: keep severity/tags/attack,
     // reset the audit trail, verdict and lifecycle stamps.
     iocs: source.iocs.map((i) => ({ ...i })),
+    // Copied, never shared: the spread above hands over the source's array.
+    details: source.details?.map((d) => ({ ...d })),
     attack: [...source.attack],
     activity: [],
     comments: undefined,

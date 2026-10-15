@@ -7,6 +7,7 @@ import { renderCommentsSection, type CommentsSectionHandle } from '../soc/Commen
 import { fillProgressOnDone, renderTaskFormFields } from '../modals/TaskFormFields'
 import { renderLifecyclePanel, isoToLocalInput } from '../soc/LifecyclePanel'
 import { renderIocSection } from '../soc/IocSection'
+import { renderDetailsSection } from '../soc/DetailsSection'
 import { renderSeverityBadge, renderSlaChip } from '../soc/slaTicker'
 import { guardVerdictOnClose } from '../soc/verdictGuard'
 import { renderSubtasksPanel } from '../modals/SubtasksPanel'
@@ -22,6 +23,7 @@ import { renderStatusBadge } from '../ui/StatusBadge'
 import { CollapseToggle } from '../ui/primitives/CollapseToggle'
 import { isTerminalStatus } from '../utils'
 import { today } from '../dates'
+import { TASK_FRONTMATTER_KEY } from '../store/YamlParser'
 
 export const CASEFILE_TASK_DETAIL_VIEW_TYPE = 'casefile-task-detail'
 
@@ -142,6 +144,15 @@ export class TaskDetailView extends ItemView {
   private snapshot: Task | null = null
   /** Subtask ids removed in the panel since the last successful save — only these get their files trashed. */
   private removedSubtaskIds: string[] = []
+  /** A save is writing; an outside change read now would include it half-done. */
+  private persisting = false
+  private syncTimer: number | null = null
+  /** An outside change arrived while something in the panel had focus: read it once focus leaves. */
+  private syncOnBlur = false
+  /** Re-fits the title to its text; set by render, rerun when the panel changes size. */
+  private fitTitle: (() => void) | null = null
+  /** Counts case notes brought to the front; only the latest one is followed. */
+  private followSeq = 0
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -158,7 +169,69 @@ export class TaskDetailView extends ItemView {
     return this.task ? this.task.key || this.task.title : 'Task'
   }
   getIcon(): string {
-    return 'panel-right'
+    // A case, not the sidebar: 'panel-right' looked like Obsidian's own sidebar toggle beside it.
+    return 'ticket'
+  }
+
+  onOpen(): Promise<void> {
+    // The case's note changed from outside the panel: typed into in the main
+    // pane, a card dragged on the board, a Sync. 'changed' comes once
+    // Obsidian has read the new text, so the store reads the new case.
+    this.registerEvent(
+      this.app.metadataCache.on('changed', (file) => {
+        if (file.path !== this.task?.filePath) return
+        // This panel's own save leaves the store a marker that only an open
+        // board took up; left, it hid the analyst's next edit to the note for
+        // five seconds. The read below finds nothing new in an own save.
+        this.plugin.store.consumeSelfWrite(file.path)
+        this.queueSync()
+      })
+    )
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        if (!this.task || !this.snapshot || oldPath !== this.task.filePath) return
+        this.task.filePath = file.path
+        this.snapshot.filePath = file.path
+      })
+    )
+    // The panel shows whichever case note is in front: opened, or its tab chosen.
+    this.registerEvent(this.app.workspace.on('file-open', (file) => void this.followFile(file)))
+    this.registerDomEvent(this.contentEl, 'focusout', (e) => {
+      if (this.syncOnBlur && !(e.relatedTarget instanceof Node && this.contentEl.contains(e.relatedTarget))) {
+        this.queueSync()
+      }
+    })
+    return Promise.resolve()
+  }
+
+  /**
+   * A case note came to the front: the panel shows that case, after saving
+   * what it holds of the last one. Any other note leaves the panel as it is.
+   * The note is found on its board by the id in its frontmatter and its own
+   * path, so a copy of a note carrying the same id is not taken for it.
+   */
+  private async followFile(file: TFile | null): Promise<void> {
+    if (!file || file.path === this.task?.filePath) return
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter
+    const id: unknown = fm?.[TASK_FRONTMATTER_KEY] === true ? fm.id : null
+    if (typeof id !== 'string' || !id) return
+    const seq = ++this.followSeq
+    const projects = await this.plugin.store.loadAllProjects(this.plugin.settings.projectsFolder)
+    // A later note came to the front while the boards loaded: that one is followed.
+    if (seq !== this.followSeq) return
+    const project = projects.find((p) => p.taskIndex.get(id)?.task.filePath === file.path)
+    if (!project) return
+    await this.leaf.setViewState({
+      type: CASEFILE_TASK_DETAIL_VIEW_TYPE,
+      state: { projectPath: project.filePath, taskId: id },
+      active: false
+    })
+  }
+
+  onResize(): void {
+    // A panel drawn while its sidebar was shut measured its title at no
+    // height at all, and kept it at none once shown.
+    this.fitTitle?.()
   }
 
   async setState(state: TaskDetailState, result: unknown): Promise<void> {
@@ -178,6 +251,8 @@ export class TaskDetailView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    if (this.syncTimer !== null) window.clearTimeout(this.syncTimer)
+    this.syncTimer = null
     await this.flushPendingSave()
     this.descEditor?.destroy()
     this.descEditor = null
@@ -291,6 +366,7 @@ export class TaskDetailView extends ItemView {
     const sent = JSON.parse(JSON.stringify(saved())) as Task
     // The fill goes out with this save; reopening from here keeps it, as the store does.
     this.filledFrom = undefined
+    this.persisting = true
     try {
       // The store gets its own copy. Handed the panel's arrays, the live task
       // shared them, and the next edit here changed the live task before the
@@ -311,6 +387,8 @@ export class TaskDetailView extends ItemView {
           t.respondedAt = live.respondedAt
           t.resolvedAt = live.resolvedAt
           t.completed = live.completed
+          // A title save renames the note; the clone and the snapshot follow it.
+          t.filePath = live.filePath
           // The store sets 100 on reaching Done. A slider move made here while
           // this save wrote is newer, so the clone keeps it (sent is first
           // compared, then synced, in that order).
@@ -342,7 +420,105 @@ export class TaskDetailView extends ItemView {
     } catch (err) {
       console.error('[PM] Panel autosave failed', err)
       new Notice('Autosave failed. Check console for details.')
+    } finally {
+      this.persisting = false
     }
+  }
+
+  private queueSync(): void {
+    this.syncOnBlur = false
+    if (this.syncTimer !== null) window.clearTimeout(this.syncTimer)
+    this.syncTimer = window.setTimeout(() => {
+      this.syncTimer = null
+      void this.syncExternal()
+    }, 300)
+  }
+
+  /** Focus is in the panel: a redraw now would close whatever is being typed. */
+  private focusedInside(): boolean {
+    const focused = this.contentEl.ownerDocument?.activeElement
+    return !!focused && this.contentEl.contains(focused)
+  }
+
+  /**
+   * Takes in a change made to the case outside this panel. Each field the
+   * panel has not changed since its last save takes the value on disk. A list
+   * both changed (comments, indicators, details, tags) is merged: what the
+   * other side added is added, what it removed is removed, the panel's own
+   * changes stay, and the merge is saved. Any other field both changed keeps
+   * the panel's value, which its next save writes. Never while the panel's
+   * own save is pending or writing, and never under the caret: the redraw
+   * would close whatever is being typed, so it waits for focus to leave.
+   */
+  private async syncExternal(): Promise<void> {
+    if (!this.task || !this.snapshot) return
+    if (this.saveTimer !== null || this.persisting) {
+      this.queueSync()
+      return
+    }
+    if (this.focusedInside()) {
+      this.syncOnBlur = true
+      return
+    }
+    const file = this.app.vault.getAbstractFileByPath(this.projectPath)
+    if (!(file instanceof TFile)) return
+    const project = await this.plugin.store.loadProject(file)
+    const live = project?.taskIndex.get(this.taskId)?.task
+    if (!project || !live) return
+    await this.plugin.store.loadTaskBody(live)
+    // Read again after the awaits: an edit, a save or a click into the panel may have come meanwhile.
+    const task = this.task
+    const snapshot = this.snapshot
+    if (!task || !snapshot || this.saveTimer !== null || this.persisting) return
+    if (this.focusedInside()) {
+      this.syncOnBlur = true
+      return
+    }
+    this.project = project
+    const fresh = structuredClone(live)
+    // Against the clone as it stands: a title being typed or a close waiting
+    // on the verdict prompt is the panel's change too.
+    const local = diffTaskPatch(snapshot, task)
+    const outside = diffTaskPatch(snapshot, fresh)
+    // Every save stamps it; on its own it is no change to show.
+    snapshot.updatedAt = fresh.updatedAt
+    task.updatedAt = fresh.updatedAt
+    const changed = (Object.keys(outside) as (keyof Task)[]).filter((k) => k !== 'updatedAt')
+    const panelTask = task as unknown as Record<string, unknown>
+    const panelSnapshot = snapshot as unknown as Record<string, unknown>
+    const fromDisk = fresh as unknown as Record<string, unknown>
+    const isList = (v: unknown): v is unknown[] | undefined => v === undefined || Array.isArray(v)
+    let merged = false
+    let adopted = false
+    for (const key of changed) {
+      const mine = panelTask[key]
+      const base = panelSnapshot[key]
+      const theirs = fromDisk[key]
+      if (!(key in local)) {
+        panelTask[key] = structuredClone(theirs)
+        adopted = true
+      } else if (key !== 'subtasks' && isList(mine) && isList(base) && isList(theirs)) {
+        // Subtasks are left out: persist merges those three ways itself
+        // (subtaskBase). An absent list (the last detail removed) is an empty one.
+        const id = (x: unknown) => JSON.stringify(x)
+        const before = new Set((base ?? []).map(id))
+        const now = theirs ?? []
+        const onDisk = new Set(now.map(id))
+        const result = (mine ?? []).filter((x) => !before.has(id(x)) || onDisk.has(id(x)))
+        const kept = new Set(result.map(id))
+        for (const x of now) if (!before.has(id(x)) && !kept.has(id(x))) result.push(structuredClone(x))
+        panelTask[key] = result
+        merged = true
+      } else {
+        continue
+      }
+      panelSnapshot[key] = structuredClone(theirs)
+    }
+    if (!adopted && !merged) return
+    if (!('title' in local) && 'title' in outside) this.persistedTitle = fresh.title
+    if (!('status' in local) && 'status' in outside) this.lastStatus = fresh.status
+    if (merged) this.scheduleSave()
+    if (this.contentEl.isConnected) this.render()
   }
 
   /** Blur-path save: persists the title (renames the file) after a conflict pre-check. */
@@ -444,8 +620,11 @@ export class TaskDetailView extends ItemView {
     titleInput.spellcheck = false
     const autosizeTitle = () => {
       titleInput.setCssProps({ '--te-title-height': 'auto' })
-      titleInput.setCssProps({ '--te-title-height': titleInput.scrollHeight + 'px' })
+      // Not laid out (the sidebar is shut): a measure of 0 would hide the
+      // title, so it keeps its natural height until onResize measures again.
+      if (titleInput.scrollHeight) titleInput.setCssProps({ '--te-title-height': titleInput.scrollHeight + 'px' })
     }
+    this.fitTitle = autosizeTitle
     titleInput.addEventListener('input', () => {
       task.title = titleInput.value
       autosizeTitle()
@@ -485,6 +664,21 @@ export class TaskDetailView extends ItemView {
       onChange: () => this.scheduleSave(),
       shownExtras: this.shownExtras
     })
+    // Details and indicators come first here, unlike the dialog: the panel is
+    // where they are added while the case is read and worked in the main pane.
+    const incident = config.boardType !== 'plain' && task.issueType === 'incident'
+    if (incident) {
+      renderDetailsSection(body, task, { onChange: () => this.scheduleSave() })
+      renderIocSection(body, task, {
+        onChange: () => this.scheduleSave(),
+        onPivot: (value) => void openIndicatorSearch(this.plugin, value),
+        reputationKeys: {
+          ...this.plugin.reputationKeys()
+        },
+        ownedAssets: () => this.plugin.settings.ownedAssets,
+        findSightings: () => sightingsIndex(project.tasks, task.id, this.plugin.settings.ownedAssets)
+      })
+    }
 
     body.createEl('hr', { cls: 'pm-te-divider' })
     // The panel shows only saved cases, so files always have a folder to go in.
@@ -539,21 +733,10 @@ export class TaskDetailView extends ItemView {
         }
       }
     })
-    if (config.boardType !== 'plain' && task.issueType === 'incident') {
-      if (this.plugin.settings.showIncidentTimeline) {
-        renderLifecyclePanel(body, task, {
-          onChange: () => this.scheduleSave(),
-          slaPolicies: this.plugin.settings.slaPolicies
-        })
-      }
-      renderIocSection(body, task, {
+    if (incident && this.plugin.settings.showIncidentTimeline) {
+      renderLifecyclePanel(body, task, {
         onChange: () => this.scheduleSave(),
-        onPivot: (value) => void openIndicatorSearch(this.plugin, value),
-        reputationKeys: {
-          ...this.plugin.reputationKeys()
-        },
-        ownedAssets: () => this.plugin.settings.ownedAssets,
-        findSightings: () => sightingsIndex(project.tasks, task.id, this.plugin.settings.ownedAssets)
+        slaPolicies: this.plugin.settings.slaPolicies
       })
     }
     this.commentsSection?.destroy()

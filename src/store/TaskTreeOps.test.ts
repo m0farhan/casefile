@@ -323,3 +323,14 @@ describe('mergeMissingSubtasks', () => {
     expect(merged[0].subtasks[0]).toBe(grand)
   })
 })
+
+describe('cloneTaskSubtree details', () => {
+  it('copies the case details, sharing no row with the source', () => {
+    const source = makeTask({ details: [{ field: 'User', value: 'anita.garcia' }] })
+    const copy = cloneTaskSubtree(source, false)
+    expect(copy.details).toEqual(source.details)
+    copy.details?.push({ field: 'IP', value: '10.0.1.135' })
+    if (copy.details) copy.details[0].value = 'changed'
+    expect(source.details).toEqual([{ field: 'User', value: 'anita.garcia' }])
+  })
+})

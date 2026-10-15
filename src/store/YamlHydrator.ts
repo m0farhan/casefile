@@ -1,5 +1,6 @@
 import type {
   ActivityEntry,
+  CaseDetail,
   CustomFieldDef,
   Ioc,
   IssueBucket,
@@ -50,6 +51,24 @@ function hydrateIocs(raw: unknown): Ioc[] {
     })
   }
   return iocs
+}
+
+/** Rows with a field and a value; anything else is dropped (hydrateIocs precedent).
+ * A value typed by hand in Properties as `443` or `true` reads back as YAML
+ * makes it, a number or a boolean: kept as its text, not dropped. */
+function hydrateDetails(raw: unknown): CaseDetail[] {
+  if (!Array.isArray(raw)) return []
+  const text = (v: unknown): string =>
+    typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : ''
+  const details: CaseDetail[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const d = entry as Record<string, unknown>
+    const field = text(d.field)
+    const value = text(d.value)
+    if (field && value) details.push({ field, value })
+  }
+  return details
 }
 
 /** Accept only well-formed entries ({type in the union, taskId string}); drop garbage silently (hydrateIocs precedent). */
@@ -211,6 +230,7 @@ function hydrateTimeLogs(raw: unknown[]): Task['timeLogs'] {
 export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Task>): Task {
   // Absent when empty (flagged/recurrence idiom): the key never round-trips into files.
   const links = hydrateLinks(r.links)
+  const details = hydrateDetails(r.caseDetails)
   const id = str(r.id, '')
   return makeTask({
     // A missing id keeps makeTask's fresh one; a note file passes its own
@@ -238,6 +258,7 @@ export function mapRawToTask(r: Record<string, unknown>, overrides?: Partial<Tas
     progress: num(r.progress) ?? 0,
     completed: day(r.completed),
     iocs: hydrateIocs(r.iocs),
+    ...(details.length ? { details } : {}),
     ...(links.length ? { links } : {}),
     attack: strList(r.attack),
     activity: hydrateActivity(r.activity),

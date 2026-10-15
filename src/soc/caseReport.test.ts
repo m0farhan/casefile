@@ -327,6 +327,54 @@ describe('buildHandover', () => {
   })
 })
 
+describe('case details in the report and the handover', () => {
+  const details = [
+    { field: 'User', value: 'anita.garcia' },
+    { field: 'IP', value: '10.0.1.135' },
+    { field: 'Lure | page', value: 'https://eemmbryequo.shop/x' },
+    { field: 'Host', value: 'corp-wks-102' }
+  ]
+
+  it('the report tables them, address-shaped values defanged, cells kept whole', () => {
+    const md = composeCaseReport(makeTask({ details }), ctxFor([]))
+    expect(md).toContain('## Details\n\n| Field | Value |\n| --- | --- |')
+    expect(md).toContain('| `IP` | `10[.]0[.]1[.]135` |')
+    expect(md).toContain('| `Lure \\| page` | `hxxps://eemmbryequo[.]shop/x` |')
+    expect(md).toContain('| `Host` | `corp-wks-102` |')
+    expect(md).not.toContain('https://eemmbryequo')
+    // A field name that would be a link is shown as text.
+    const hostile = composeCaseReport(
+      makeTask({ details: [{ field: '[Pay](https://evil.test)', value: 'x' }] }),
+      ctxFor([])
+    )
+    expect(hostile).toContain('| `[Pay](https://evil.test)` | `x` |')
+    // Empty, it says so, like every other section.
+    expect(composeCaseReport(makeTask({}), ctxFor([]))).toContain('## Details\n\nNone recorded.')
+  })
+
+  it('the handover lists them under the open incident, before its indicators', () => {
+    const task = makeTask({
+      issueType: 'incident',
+      key: 'C-9',
+      title: 'ClickFix',
+      details,
+      iocs: [{ type: 'domain', value: 'promptcraft.online' }]
+    })
+    const project = makeProject('Cases', 'Cases/Cases.md')
+    project.tasks = [task]
+    const md = buildHandover([project], DEFAULT_SETTINGS, '2026-07-30T12:00:00.000Z')
+    const lines = md.split('\n')
+    const at = lines.findIndex((l) => l.startsWith('- C-9 ClickFix'))
+    expect(lines.slice(at + 1, at + 6)).toEqual([
+      '  - `User`: `anita[.]garcia`',
+      '  - `IP`: `10[.]0[.]1[.]135`',
+      '  - `Lure | page`: `hxxps://eemmbryequo[.]shop/x`',
+      '  - `Host`: `corp-wks-102`',
+      '  - domain: `promptcraft[.]online`'
+    ])
+  })
+})
+
 describe('writeCaseReportNote', () => {
   it('creates the report beside the case file and suffixes instead of overwriting', async () => {
     const vault = new FakeVault()

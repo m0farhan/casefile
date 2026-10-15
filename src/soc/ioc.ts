@@ -135,6 +135,13 @@ export function activityValue(field: string, v: string): string {
   return field === 'iocs' && v ? defangIoc(v, detectIocType(v)) : v
 }
 
+/** A case detail's value as a note prints it: defanged when it has the shape
+ * of an address, host, URL or hash (a username with a dot in it does too —
+ * the shape cannot tell them apart), otherwise as recorded. */
+export function detailValueShown(value: string): string {
+  return hasIocShape(value) ? defangIoc(value, detectIocType(value)) : value
+}
+
 /**
  * The key two indicators are the same by. Hosts, addresses and hashes do not
  * depend on case, so they compare lower-cased. A URL keeps its exact spelling:

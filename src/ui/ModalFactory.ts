@@ -241,7 +241,10 @@ export interface OpenTaskModalOpts {
 /** Reveal (or create) the right-leaf task detail panel for an existing task. */
 export function openTaskDetailPanel(plugin: PMPlugin, project: Project, taskId: string): void {
   void (async () => {
-    const leaf = plugin.app.workspace.getRightLeaf(false)
+    // The panel already open shows the next case, rather than each case adding a sidebar tab.
+    const leaf =
+      plugin.app.workspace.getLeavesOfType(CASEFILE_TASK_DETAIL_VIEW_TYPE)[0] ??
+      plugin.app.workspace.getRightLeaf(false)
     if (!leaf) return
     await leaf.setViewState({
       type: CASEFILE_TASK_DETAIL_VIEW_TYPE,
@@ -268,9 +271,22 @@ export function openTaskModal(plugin: PMPlugin, project: Project, opts: OpenTask
   // Every view routes task-opening through this factory, so the modal-vs-panel
   // setting lives here. New-task creation always uses the modal — a panel for a
   // not-yet-persisted task has no autosave target.
-  if (opts.task && plugin.settings.openTaskIn === 'panel') {
+  // A case panel on screen takes the case too: with one showing, a click on
+  // the board changes the panel rather than opening a dialog over it.
+  const panel = opts.task ? plugin.app.workspace.getLeavesOfType(CASEFILE_TASK_DETAIL_VIEW_TYPE)[0] : undefined
+  if (opts.task && (plugin.settings.openTaskIn === 'panel' || panel?.view.containerEl.isShown())) {
     openTaskDetailPanel(plugin, project, opts.task.id)
     return
+  }
+  // A panel open but out of sight (its sidebar shut, another tab in front)
+  // follows the case opened here, so it shows the last case looked at once
+  // it is brought back. It is not brought forward.
+  if (panel && opts.task && panel.view.getState().taskId !== opts.task.id) {
+    void panel.setViewState({
+      type: CASEFILE_TASK_DETAIL_VIEW_TYPE,
+      state: { projectPath: project.filePath, taskId: opts.task.id },
+      active: false
+    })
   }
   const open = (): void => {
     new TaskModal(
