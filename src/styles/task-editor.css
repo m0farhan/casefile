@@ -1321,20 +1321,68 @@ a.pm-ioc-rep--unknown {
    type select that is no longer beside them; the new detail's field takes
    its own line. */
 @container (max-width: 420px) {
-  .pm-ioc-rows > .pm-ioc-row + .pm-ioc-row,
-  .pm-ioc-rows > .pm-ioc-rep + .pm-ioc-row,
-  .pm-ioc-rows > .pm-ioc-sightings + .pm-ioc-row {
-    padding-top: 6px;
-    border-top: 1px solid var(--gs-hairline);
+  /* Indicators read like Details: the type is a label, the value sits in a
+     box with copy and remove after it, and under the value come the note
+     (a label too until it is touched) and the reputation and search buttons.
+     Spacing, not rules, keeps one indicator from the next. The flex order
+     lays that out; the value's basis leaves the line just room for the two
+     buttons, so the note always starts the second line. */
+  .pm-ioc-rows {
+    gap: 8px;
+  }
+  .pm-ioc-row:not(.pm-ioc-add) {
+    gap: 4px;
+  }
+  .pm-ioc-row:not(.pm-ioc-add) > * {
+    order: 5;
+  }
+  .pm-ioc-row:not(.pm-ioc-add) > .pm-ioc-type {
+    order: 0;
+    flex: 0 0 64px;
+    width: 64px;
+    padding-inline: 4px;
+    color: var(--gs-ink-subtle);
+  }
+  .pm-ioc-row:not(.pm-ioc-add) > .pm-ioc-value {
+    order: 1;
+    flex: 1 1 calc(100% - 64px - 90px);
+    box-sizing: border-box;
+    min-height: 30px;
+    padding: 5px 8px;
+    border: 1px solid var(--gs-hairline);
+    border-radius: var(--radius-s);
+    background: var(--gs-surface-1);
+    flex-wrap: wrap;
+  }
+  .pm-ioc-row:not(.pm-ioc-add) > .pm-ioc-copy {
+    order: 2;
+  }
+  .pm-ioc-row:not(.pm-ioc-add) > .pm-ioc-remove {
+    order: 3;
+  }
+  .pm-ioc-row:not(.pm-ioc-add) > .pm-ioc-note {
+    order: 4;
+    flex: 1 1 0;
+    margin-left: 68px;
+    padding-inline: 4px;
+    color: var(--gs-ink-subtle);
+  }
+  /* background-color, not background: the select keeps its arrow. */
+  .pm-ioc-row:not(.pm-ioc-add) > :is(.pm-ioc-type, .pm-ioc-note):not(:hover, :focus) {
+    border-color: transparent;
+    background-color: transparent;
   }
   .pm-ioc-rep,
   .pm-ioc-rows .pm-ioc-sightings {
-    padding-left: 0;
+    padding-left: 68px;
   }
-  /* The type and the value take the first line (the value whole, not broken
-     mid-name beside a squeezed note); the note and the buttons the second. */
-  .pm-ioc-row:not(.pm-ioc-add) .pm-ioc-value {
-    flex-basis: calc(100% - 100px);
+  /* The add line as Details has it: type and value, then note and Add. */
+  .pm-ioc-add .pm-ioc-type {
+    flex: 0 0 64px;
+    width: 64px;
+  }
+  .pm-ioc-add .pm-ioc-value-input {
+    flex: 1 1 calc(100% - 72px);
   }
   .pm-details-add .pm-details-field {
     flex-basis: 100%;

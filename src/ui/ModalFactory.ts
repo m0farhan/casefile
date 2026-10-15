@@ -1,4 +1,4 @@
-import { type App, ButtonComponent, Modal, SuggestModal } from 'obsidian'
+import { type App, ButtonComponent, Modal, Platform, SuggestModal } from 'obsidian'
 import type PMPlugin from '../main'
 import type { Ioc, Project, Task } from '../types'
 import { CASEFILE_TASK_DETAIL_VIEW_TYPE } from '../views/TaskDetailView'
@@ -238,20 +238,52 @@ export interface OpenTaskModalOpts {
   onSave: (task: Task) => void | Promise<void>
 }
 
-/** Reveal (or create) the right-leaf task detail panel for an existing task. */
-export function openTaskDetailPanel(plugin: PMPlugin, project: Project, taskId: string): void {
+/**
+ * Reveal (or create) the right-leaf task detail panel for an existing task.
+ * `focus: false` shows it beside the leaf that has the focus (a note just
+ * opened) and gives the focus back to that leaf, so typing goes on there.
+ */
+export function openTaskDetailPanel(
+  plugin: PMPlugin,
+  project: Project,
+  taskId: string,
+  opts: { focus?: boolean } = {}
+): void {
+  const focus = opts.focus ?? true
   void (async () => {
+    const { workspace } = plugin.app
     // The panel already open shows the next case, rather than each case adding a sidebar tab.
-    const leaf =
-      plugin.app.workspace.getLeavesOfType(CASEFILE_TASK_DETAIL_VIEW_TYPE)[0] ??
-      plugin.app.workspace.getRightLeaf(false)
+    const leaf = workspace.getLeavesOfType(CASEFILE_TASK_DETAIL_VIEW_TYPE)[0] ?? workspace.getRightLeaf(false)
     if (!leaf) return
+    const keep = focus ? null : workspace.getMostRecentLeaf()
     await leaf.setViewState({
       type: CASEFILE_TASK_DETAIL_VIEW_TYPE,
-      active: true,
+      active: focus,
       state: { projectPath: project.filePath, taskId }
     })
-    await plugin.app.workspace.revealLeaf(leaf)
+    // On a phone the sidebar is a drawer over the note: the panel shows the
+    // case for when it is opened, but is not pulled over the note now.
+    if (!focus && Platform.isPhone) return
+    // A panel dragged into the note's own tab group is left behind it:
+    // revealing it there would put it in front of the note, and setActiveLeaf
+    // on the leaf that is already active would not switch the tab back.
+    if (keep && keep !== leaf && keep.parent === leaf.parent) return
+    await workspace.revealLeaf(leaf)
+    if (keep && keep !== leaf) workspace.setActiveLeaf(keep, { focus: true })
+  })()
+}
+
+/**
+ * The case's note in a new tab, with the side panel brought up beside it
+ * showing the case: the note to write in, the case's fields next to it. The
+ * note keeps the focus.
+ */
+export function openCaseNote(plugin: PMPlugin, project: Project, task: Task): void {
+  const filePath = task.filePath
+  if (!filePath) return
+  void (async () => {
+    await plugin.app.workspace.openLinkText(filePath, '', true)
+    openTaskDetailPanel(plugin, project, task.id, { focus: false })
   })()
 }
 
@@ -271,22 +303,12 @@ export function openTaskModal(plugin: PMPlugin, project: Project, opts: OpenTask
   // Every view routes task-opening through this factory, so the modal-vs-panel
   // setting lives here. New-task creation always uses the modal — a panel for a
   // not-yet-persisted task has no autosave target.
-  // A case panel on screen takes the case too: with one showing, a click on
-  // the board changes the panel rather than opening a dialog over it.
-  const panel = opts.task ? plugin.app.workspace.getLeavesOfType(CASEFILE_TASK_DETAIL_VIEW_TYPE)[0] : undefined
-  if (opts.task && (plugin.settings.openTaskIn === 'panel' || panel?.view.containerEl.isShown())) {
+  // The board leaves the side panel alone: a case clicked there opens in the
+  // dialog unless the setting says otherwise. The panel comes up with Open as
+  // note (openCaseNote) and follows the case note in front.
+  if (opts.task && plugin.settings.openTaskIn === 'panel') {
     openTaskDetailPanel(plugin, project, opts.task.id)
     return
-  }
-  // A panel open but out of sight (its sidebar shut, another tab in front)
-  // follows the case opened here, so it shows the last case looked at once
-  // it is brought back. It is not brought forward.
-  if (panel && opts.task && panel.view.getState().taskId !== opts.task.id) {
-    void panel.setViewState({
-      type: CASEFILE_TASK_DETAIL_VIEW_TYPE,
-      state: { projectPath: project.filePath, taskId: opts.task.id },
-      active: false
-    })
   }
   const open = (): void => {
     new TaskModal(

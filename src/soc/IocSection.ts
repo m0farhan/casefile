@@ -392,6 +392,8 @@ export function renderIocSection(
           .onClick(() => onPivot(refangIoc(ioc.value)))
       }
       const copyBtn = new IconButton(row).setIcon('copy').setTooltip('Copy real value')
+      // Named so a narrow panel can put copy and remove beside the value, as Details does.
+      copyBtn.el.addClass('pm-ioc-copy')
       copyBtn.onClick(
         safeAsync(async () => {
           await navigator.clipboard.writeText(ioc.value)
@@ -407,6 +409,7 @@ export function renderIocSection(
           renderRows()
           opts.onChange()
         })
+        .el.addClass('pm-ioc-remove')
       repStrips.set(ioc, rowsEl.createDiv('pm-ioc-rep'))
       fillRepStrip(ioc)
       // Seen-before hint: same tucked-under-the-row placement as the reputation

@@ -6,7 +6,13 @@ import { flattenTasks } from '../store/TaskTreeOps'
 import { TaskFileNameConflictError } from '../store'
 import { isNameableTitle } from '../store/ProjectStore'
 import { safeAsync, getDefaultStatusId, getDefaultPriorityId } from '../utils'
-import { confirmDialog, openIndicatorSearch, openTaskDetailPanel, openTaskModal } from '../ui/ModalFactory'
+import {
+  confirmDialog,
+  openCaseNote,
+  openIndicatorSearch,
+  openTaskDetailPanel,
+  openTaskModal
+} from '../ui/ModalFactory'
 import { findTaskById } from '../store/TaskIndex'
 import { renderIssueTypeIcon, renderKeyChip } from '../ui/composites/issueMeta'
 import { renderStatusBadge } from '../ui/StatusBadge'
@@ -367,12 +373,11 @@ export class TaskModal extends Modal {
   private openOverflowMenu(anchorEl: HTMLElement, titleError: (message: string) => void): void {
     const menu = new Menu()
     if (this.task.filePath) {
-      const filePath = this.task.filePath
       menu.addItem((item) =>
         item
           .setTitle('Open as note')
           .setIcon('file-text')
-          .onClick(() => this.closeThen(() => void this.app.workspace.openLinkText(filePath, '', true)))
+          .onClick(() => this.closeThen(() => openCaseNote(this.plugin, this.project, this.task)))
       )
       // Carries on in the right-hand panel, which autosaves: the edits made
       // here are saved first, through the same checks as Save.
@@ -526,12 +531,12 @@ export class TaskModal extends Modal {
 
     // The title's inline error is built below; the menu reports into it (this.titleError).
     if (!this.isNew) {
-      // The side panel's note button, here too: the case's note in a tab, edits saved on the way (closeThen).
-      const filePath = this.task.filePath
-      if (filePath) {
+      // The side panel's note button, here too: the case's note in a tab with
+      // the panel beside it, edits saved on the way (closeThen).
+      if (this.task.filePath) {
         const noteBtn = new ExtraButtonComponent(header).setIcon('file-text').setTooltip('Open as note')
         noteBtn.extraSettingsEl.addClass('pm-te-header-btn')
-        noteBtn.onClick(() => this.closeThen(() => void this.app.workspace.openLinkText(filePath, '', true)))
+        noteBtn.onClick(() => this.closeThen(() => openCaseNote(this.plugin, this.project, this.task)))
       }
       const moreBtn = new ExtraButtonComponent(header).setIcon('more-horizontal').setTooltip('More actions')
       moreBtn.extraSettingsEl.addClass('pm-te-header-btn')

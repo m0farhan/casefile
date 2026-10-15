@@ -45,6 +45,14 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.44.1] - 2026-10-16
+
+### Changed
+
+- **The board opens cases in the dialog again**, even while the side panel is showing, and the panel no longer moves to cases opened from the board. The panel comes up with Open as note and follows the case note in front. (The **Open tasks in** setting still sends every case to the panel if you set it to the side panel)
+- **Open as note brings the side panel up beside the note.** From the case dialog (its header button or its ⋯ menu), Open as note now opens the case's note in a new tab and slides the right sidebar open on the case panel, so the case's fields sit next to the note you write in. The note keeps the focus, so you can type straight away. On a phone the sidebar is a drawer over the note, so the panel is set to the case but left closed; a panel you have dragged into the note's own tab group stays behind the note
+- **Indicators in the side panel read like Details.** Each indicator's type is a label beside its value, which sits in a box with copy and remove after it; the note and the reputation and search buttons go on the line under the value, and spacing replaces the rules between indicators. The add line is laid out as Details' is
+
 ## [2.44.0] - 2026-10-16
 
 ### Added
