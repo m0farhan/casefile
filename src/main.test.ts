@@ -137,7 +137,10 @@ describe('onload commands and listeners', () => {
       addCommand: (c: Command) => commands.set(c.id, c),
       registerEvent: () => {},
       addSettingTab: () => {},
-      registerInterval: () => {}
+      registerInterval: () => {},
+      registerEditorExtension: () => {},
+      registerMarkdownPostProcessor: () => {},
+      registerDomEvent: () => {}
     })
     vi.stubGlobal('__STYLEGUIDE__', false)
     vi.stubGlobal('activeDocument', { body: { classList: { toggle: () => {} } } })

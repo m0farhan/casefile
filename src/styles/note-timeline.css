@@ -1,0 +1,670 @@
+/* ─ Responder note timeline ─
+ * The bullets under a `%% timeline %%` line drawn as event cards on a rail,
+ * in Live Preview (classes on CodeMirror's .cm-line elements) and in Reading
+ * view (the same classes on the rendered <ul>/<li>). Obsidian theme
+ * variables only, so light and dark both work; never the dark-only --gs-*.
+ *
+ * Live Preview takes no vertical margin and no pseudo-element spanning lines,
+ * so CodeMirror's line heights stay true: the rail is each line's border
+ * image, the card is the line's padding box, and the band above a card is the
+ * line's transparent top border. Widgets sit absolutely inside their line. */
+
+body {
+  --cf-ntl-indent: 40px;
+  /* The indent again, unitless, for border-image-slice. */
+  --cf-ntl-indent-n: 40;
+  /* The rail's centre, and the centre of a card's first line. */
+  --cf-ntl-rail-c: 15px;
+  --cf-ntl-row-c: 20px;
+  --cf-ntl-node-size: 22px;
+  --cf-ntl-band-h: 28px;
+  --cf-ntl-band-long-h: 44px;
+  /* Room under the last card for the add row: an 18px gap and the row. */
+  --cf-ntl-add-h: 38px;
+  --cf-ntl-foot: calc(18px + var(--cf-ntl-add-h));
+  --cf-ntl-rail: var(--background-modifier-border);
+  --cf-ntl-warn: var(--color-yellow);
+}
+
+/* ─ Kind colours ─ */
+.cf-ntl-k-observed {
+  --cf-ntl-kc: var(--text-faint);
+}
+.cf-ntl-k-web {
+  --cf-ntl-kc: var(--color-cyan);
+}
+.cf-ntl-k-execution {
+  --cf-ntl-kc: var(--color-orange);
+}
+.cf-ntl-k-file {
+  --cf-ntl-kc: var(--color-purple);
+}
+.cf-ntl-k-email {
+  --cf-ntl-kc: var(--color-blue);
+}
+.cf-ntl-k-detection {
+  --cf-ntl-kc: var(--color-red);
+}
+.cf-ntl-k-response {
+  --cf-ntl-kc: var(--color-green);
+}
+
+/* ─ Card surface, shared by a Reading view item and a Live Preview line ─ */
+.cf-ntl-item,
+.cf-ntl-line {
+  --cf-ntl-fill: var(--background-secondary);
+  --cf-ntl-edge: var(--background-modifier-border);
+  --cf-ntl-bar: 0 0 #0000;
+}
+.cf-ntl-k-detection.cf-ntl-item,
+.cf-ntl-k-detection.cf-ntl-line {
+  --cf-ntl-fill: rgba(var(--color-red-rgb), 0.08);
+  --cf-ntl-edge: rgba(var(--color-red-rgb), 0.35);
+  --cf-ntl-bar: inset 3px 0 0 var(--color-red);
+}
+.cf-ntl-k-response.cf-ntl-item,
+.cf-ntl-k-response.cf-ntl-line {
+  --cf-ntl-fill: rgba(var(--color-green-rgb), 0.07);
+  --cf-ntl-edge: rgba(var(--color-green-rgb), 0.32);
+  --cf-ntl-bar: inset 3px 0 0 var(--color-green);
+}
+.cf-ntl-key.cf-ntl-item,
+.cf-ntl-key.cf-ntl-line {
+  --cf-ntl-bar: inset 3px 0 0 var(--interactive-accent);
+}
+
+/* ─ Header (the marker line) ─ */
+.cf-ntl-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 32px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-family: var(--font-interface);
+  line-height: 1.4;
+  text-indent: 0;
+  white-space: normal;
+}
+.cf-ntl-header-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+  --icon-size: 15px;
+}
+.cf-ntl-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.cf-ntl-meta {
+  flex: 1 1 var(--cf-ntl-meta-basis, auto);
+  order: var(--cf-ntl-wrap-order, 0);
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+.cf-ntl-derived {
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: lowercase;
+  color: var(--text-faint);
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: 3px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.cf-ntl-live {
+  order: var(--cf-ntl-wrap-order, 0);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--cf-ntl-warn);
+  background: rgba(var(--color-yellow-rgb), 0.1);
+  border: 1px solid rgba(var(--color-yellow-rgb), 0.45);
+  border-radius: 10px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+.cf-ntl-header button.cf-ntl-defang {
+  position: relative;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: var(--cursor);
+}
+.cf-ntl-header button.cf-ntl-defang:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.cf-ntl-header .cf-ntl-menu {
+  margin-left: auto;
+  min-width: var(--cf-ntl-tap-size, 0px);
+  min-height: var(--cf-ntl-tap-size, 0px);
+}
+/* Touch targets: on a narrow screen the small controls answer 14px around them. */
+.cf-ntl-node[role='button']::after,
+.cf-ntl-header button.cf-ntl-defang::after {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--cf-ntl-tap, 0px));
+}
+/* Reading view: the header is its own block above the list. */
+.cf-ntl-header + ul.cf-ntl-list {
+  margin-top: 12px;
+}
+/* Live Preview: the header widget replaces the marker line's text. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-marker-line {
+  padding-bottom: 12px;
+}
+
+/* ─ Rail node ─ */
+.cf-ntl-node {
+  --cf-ntl-s: var(--cf-ntl-node-size);
+  --icon-size: 12px;
+  --icon-stroke: 2.2px;
+  position: absolute;
+  z-index: 1;
+  left: calc(var(--cf-ntl-rail-c) - var(--cf-ntl-s) / 2 - var(--cf-ntl-indent));
+  top: calc(var(--cf-ntl-row-c) - var(--cf-ntl-s) / 2);
+  width: var(--cf-ntl-s);
+  height: var(--cf-ntl-s);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--cf-ntl-kc);
+  border-radius: 50%;
+  background: var(--background-primary);
+  color: var(--cf-ntl-kc);
+  line-height: 1;
+  text-indent: 0;
+}
+.cf-ntl-node.cf-ntl-node-explicit {
+  background: var(--cf-ntl-kc);
+  color: var(--background-primary);
+}
+.cf-ntl-node.cf-ntl-k-observed {
+  --cf-ntl-s: 10px;
+}
+.cf-ntl-node.cf-ntl-node-key {
+  --cf-ntl-s: calc(var(--cf-ntl-node-size) + 4px);
+  --icon-size: 14px;
+}
+.cf-ntl-node.cf-ntl-node-key.cf-ntl-k-observed {
+  --cf-ntl-s: 14px;
+}
+/* A node the kind picker opens from. */
+.cf-ntl-node[role='button'] {
+  cursor: var(--cursor);
+}
+.cf-ntl-node[role='button']:hover {
+  box-shadow: 0 0 0 3px var(--background-modifier-hover);
+}
+.cf-ntl-node[role='button']:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* ─ Band above a card: gap pill, long-gap break, out of order, day ─ */
+.cf-ntl-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: var(--cf-ntl-band, var(--cf-ntl-band-h));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-interface);
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--text-muted);
+  text-indent: 0;
+  white-space: nowrap;
+}
+.cf-ntl-gap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-monospace);
+  font-variant-numeric: tabular-nums;
+  border: 1px dashed var(--background-modifier-border-hover);
+  border-radius: 10px;
+  padding: 0 7px;
+  --icon-size: 11px;
+}
+.cf-ntl-band-back .cf-ntl-gap-chip {
+  font-family: var(--font-interface);
+  color: var(--cf-ntl-warn);
+  background: rgba(var(--color-yellow-rgb), 0.12);
+  border: 1px solid rgba(var(--color-yellow-rgb), 0.5);
+}
+.cf-ntl-chip-icon {
+  display: inline-flex;
+}
+.cf-ntl-long-label {
+  font-size: 12px;
+  font-style: italic;
+}
+/* Cuts the rail with two slanted strokes, as a broken axis does. */
+.cf-ntl-break {
+  position: absolute;
+  left: calc(var(--cf-ntl-rail-c) - 8px - var(--cf-ntl-indent));
+  top: calc(50% - 8px);
+  width: 16px;
+  height: 16px;
+  background: var(--background-primary);
+}
+.cf-ntl-break::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 4px;
+  height: 5px;
+  border-top: 1.6px solid var(--text-faint);
+  border-bottom: 1.6px solid var(--text-faint);
+  transform: skewY(-17deg);
+}
+.cf-ntl-band-day {
+  font-weight: 600;
+  letter-spacing: 0.07em;
+}
+.cf-ntl-day-date {
+  text-transform: uppercase;
+  color: var(--text-normal);
+}
+
+/* ─ Marks on the text ─ */
+.cf-ntl-lead {
+  color: var(--text-muted);
+}
+.cf-ntl-time {
+  font-family: var(--font-monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.cf-ntl-sec {
+  font-size: 0.88em;
+  color: var(--text-muted);
+}
+/* On the time itself, or around it when Live Preview nests the marks. */
+.cf-ntl-time.cf-ntl-approx,
+.cf-ntl-approx .cf-ntl-time {
+  outline: 1px dashed var(--background-modifier-border-hover);
+  outline-offset: -1px;
+}
+.cf-ntl-untimed {
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  font-style: italic;
+  text-transform: lowercase;
+  color: var(--text-muted);
+  border: 1px dashed var(--background-modifier-border-hover);
+  border-radius: 4px;
+  padding: 0 6px;
+  margin-inline-end: 0.35em;
+  text-indent: 0;
+  white-space: nowrap;
+}
+.cf-ntl-tag {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--cf-ntl-kc);
+}
+.cf-ntl-colon {
+  color: var(--text-faint);
+}
+.cf-ntl-ioc {
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 0 6px;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+/* Reading view: a chip moves to the next line whole and wraps inside only when
+   longer than a line; its icon sits in the padding so no break falls after it. */
+ul.cf-ntl-list .cf-ntl-ioc {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding-inline-start: 23px;
+}
+ul.cf-ntl-list .cf-ntl-ioc-icon {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+}
+.cf-ntl-ioc-icon {
+  display: inline-flex;
+  vertical-align: -1px;
+  margin-inline-end: 5px;
+  color: var(--color-cyan);
+  --icon-size: 12px;
+}
+/* Coloured by type: inside the chip in Reading view, just before it in Live Preview. */
+.cf-ntl-ioc-hash .cf-ntl-ioc-icon,
+.cf-ntl-ioc-icon-hash {
+  color: var(--color-purple);
+}
+.cf-ntl-ioc-email .cf-ntl-ioc-icon,
+.cf-ntl-ioc-icon-email {
+  color: var(--color-blue);
+}
+/* The hint on an empty event bullet: display only, never in the note. */
+.cf-ntl-ghost {
+  color: var(--text-faint);
+}
+/* Indicators are evidence, not links. In a timeline, Obsidian's link colour
+   and underline come off bare URLs, emails and links, and a click never opens
+   one (menu.ts, guardTimelineLinks): it places the caret, and Mod-click copies
+   the value defanged. */
+.markdown-source-view.mod-cm6 .cf-ntl-line :is(.cm-url, .cm-link, .cm-underline, .cm-hmd-barelink, .external-link) {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
+}
+.cf-ntl-att {
+  font-family: var(--font-monospace);
+  font-size: 0.78em;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: 10px;
+  padding: 0 7px;
+  white-space: nowrap;
+}
+/* A link in a Reading view timeline copies, defanged; it never opens. */
+.cf-ntl-link,
+.cf-ntl-link:hover {
+  color: inherit;
+  text-decoration: none;
+  cursor: copy;
+}
+.cf-ntl-link:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* ─ Add event row (Live Preview, inside the last line's foot) ─ */
+.cf-ntl-add {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + var(--cf-ntl-foot) - var(--cf-ntl-add-h));
+  height: var(--cf-ntl-add-h);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  font-family: var(--font-interface);
+  font-size: 14px;
+  color: var(--text-faint);
+  text-indent: 0;
+  white-space: nowrap;
+  cursor: var(--cursor);
+  --icon-size: 14px;
+}
+.cf-ntl-add::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--cf-ntl-rail-c) - var(--cf-ntl-node-size) / 2 - var(--cf-ntl-indent) - 1px);
+  top: calc(50% - var(--cf-ntl-node-size) / 2);
+  width: var(--cf-ntl-node-size);
+  height: var(--cf-ntl-node-size);
+  box-sizing: border-box;
+  border: 1.5px dashed var(--background-modifier-border-hover);
+  border-radius: 50%;
+  background: var(--background-primary);
+}
+.cf-ntl-add:hover {
+  color: var(--text-muted);
+  border-color: var(--background-modifier-border-hover);
+}
+.cf-ntl-add:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+/* ─ Reading view: the list is the rail, each item a card ─ */
+ul.cf-ntl-list {
+  position: relative;
+  list-style: none;
+  padding: 0;
+  background: linear-gradient(var(--cf-ntl-rail), var(--cf-ntl-rail)) no-repeat calc(var(--cf-ntl-rail-c) - 1px)
+    var(--cf-ntl-row-c) / 2px calc(100% - 2 * var(--cf-ntl-row-c));
+}
+ul.cf-ntl-list > li.cf-ntl-item {
+  position: relative;
+  margin: var(--cf-ntl-band, 0px) 0 0 var(--cf-ntl-indent);
+  padding: 9px 13px;
+  background-color: var(--cf-ntl-fill);
+  border-radius: 8px;
+  box-shadow:
+    var(--cf-ntl-bar),
+    inset 0 0 0 1px var(--cf-ntl-edge);
+  overflow-wrap: anywhere;
+}
+ul.cf-ntl-list > li.cf-ntl-item + li.cf-ntl-item {
+  --cf-ntl-band: var(--cf-ntl-band-h);
+}
+ul.cf-ntl-list > li.cf-ntl-gap-long,
+ul.cf-ntl-list > li.cf-ntl-day {
+  --cf-ntl-band: var(--cf-ntl-band-long-h);
+}
+ul.cf-ntl-list > li.cf-ntl-item:hover {
+  --cf-ntl-edge: color-mix(in srgb, var(--cf-ntl-kc) 55%, var(--background-modifier-border));
+}
+ul.cf-ntl-list > li.cf-ntl-item > .list-bullet,
+ul.cf-ntl-list > li.cf-ntl-item > .list-collapse-indicator {
+  display: none;
+}
+ul.cf-ntl-list > li.cf-ntl-item > p {
+  margin: 0;
+}
+ul.cf-ntl-list > li.cf-ntl-item > ul,
+ul.cf-ntl-list > li.cf-ntl-item > ol {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.93em;
+}
+ul.cf-ntl-list > li.cf-ntl-item > ul::before,
+ul.cf-ntl-list > li.cf-ntl-item > ol::before {
+  display: none;
+}
+ul.cf-ntl-list li.cf-ntl-detail {
+  margin-inline-start: 1.1em;
+}
+ul.cf-ntl-list li.cf-ntl-source {
+  margin: 8px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed var(--background-modifier-border-hover);
+  font-size: 12.5px;
+}
+ul.cf-ntl-list li.cf-ntl-source > .list-bullet,
+ul.cf-ntl-list li.cf-ntl-source > .list-collapse-indicator {
+  display: none;
+}
+.cf-ntl-source-icon {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-inline-end: 7px;
+  --icon-size: 13px;
+}
+
+/* ─ Live Preview: each decorated line paints its share of the card ─ */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-line:not(.cf-ntl-marker-line) {
+  position: relative;
+  border-left: var(--cf-ntl-indent) solid transparent;
+  border-top: var(--cf-ntl-band, 0px) solid transparent;
+  border-bottom: var(--cf-ntl-foot-h, 0px) solid transparent;
+  /* The rail: a 2px stripe in the left border, unclipped by the card's
+     corners. Its top and bottom image widths start it at the first node and
+     end it at the last card. */
+  border-image: linear-gradient(
+      90deg,
+      transparent calc(var(--cf-ntl-rail-c) - 1px),
+      var(--cf-ntl-rail) calc(var(--cf-ntl-rail-c) - 1px) calc(var(--cf-ntl-rail-c) + 1px),
+      transparent calc(var(--cf-ntl-rail-c) + 1px)
+    )
+    0 0 0 var(--cf-ntl-indent-n) / var(--cf-ntl-rail-top, 0px) 0 var(--cf-ntl-rail-bottom, 0px) var(--cf-ntl-indent);
+  background-color: var(--cf-ntl-fill);
+  background-clip: padding-box;
+  padding-inline-end: 13px;
+  /* Edges inside the padding box follow its rounded corners; the glow shows only on the active card. */
+  box-shadow:
+    var(--cf-ntl-bar),
+    inset 1px 0 0 var(--cf-ntl-edge),
+    inset -1px 0 0 var(--cf-ntl-edge),
+    var(--cf-ntl-edge-top, 0 0 #0000),
+    var(--cf-ntl-edge-bottom, 0 0 #0000),
+    inset 4px 0 0 var(--cf-ntl-glow, #0000),
+    inset -4px 0 0 var(--cf-ntl-glow, #0000),
+    var(--cf-ntl-glow-top, 0 0 #0000),
+    var(--cf-ntl-glow-bottom, 0 0 #0000);
+  overflow-wrap: anywhere;
+}
+/* Inner corner radius is the outer one less the border, so the outer one adds the border back. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-top {
+  padding-top: 9px;
+  border-top-left-radius: calc(var(--cf-ntl-indent) + 8px) calc(var(--cf-ntl-band, 0px) + 8px);
+  border-top-right-radius: 8px calc(var(--cf-ntl-band, 0px) + 8px);
+  --cf-ntl-edge-top: inset 0 1px 0 var(--cf-ntl-edge);
+  --cf-ntl-glow-top: inset 0 4px 0 var(--cf-ntl-glow, #0000);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-bottom {
+  padding-bottom: 9px;
+  border-bottom-left-radius: calc(var(--cf-ntl-indent) + 8px) calc(var(--cf-ntl-foot-h, 0px) + 8px);
+  border-bottom-right-radius: 8px calc(var(--cf-ntl-foot-h, 0px) + 8px);
+  --cf-ntl-edge-bottom: inset 0 -1px 0 var(--cf-ntl-edge);
+  --cf-ntl-glow-bottom: inset 0 -4px 0 var(--cf-ntl-glow, #0000);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-top:not(.cf-ntl-first) {
+  --cf-ntl-band: var(--cf-ntl-band-h);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-top.cf-ntl-gap-long,
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-top.cf-ntl-day {
+  --cf-ntl-band: var(--cf-ntl-band-long-h);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-first {
+  --cf-ntl-rail-top: var(--cf-ntl-row-c);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-last {
+  --cf-ntl-foot-h: var(--cf-ntl-foot);
+  --cf-ntl-rail-bottom: var(--cf-ntl-foot);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-active {
+  --cf-ntl-edge: var(--interactive-accent);
+  --cf-ntl-glow: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-detail {
+  color: var(--text-muted);
+}
+/* The node stands in for the bullet: hidden, its width kept so the caret does not move. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-ev .cm-formatting-list,
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-source .cm-formatting-list {
+  visibility: hidden;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-line .cm-fold-indicator .collapse-indicator,
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-line .cm-indent::before {
+  display: none;
+}
+/* A Source: detail line, when Live Preview marks it: a dashed hairline above. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-source {
+  padding-top: 7px;
+  font-size: 12.5px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--background-modifier-border-hover) 0 4px,
+    transparent 4px 7px
+  );
+  background-repeat: no-repeat;
+  background-origin: padding-box;
+  background-position: 13px 2px;
+  background-size: calc(100% - 26px) 1px;
+}
+
+/* ─ Light theme: kind and warning text mixed toward the text colour for 4.5:1 ─ */
+.theme-light .cf-ntl-tag {
+  color: color-mix(in srgb, var(--cf-ntl-kc) 65%, var(--text-normal));
+}
+.theme-light {
+  --cf-ntl-warn: color-mix(in srgb, var(--color-yellow) 55%, var(--text-normal));
+}
+
+/* ─ Narrow: a phone, or a window under 520px. Only the measures change ─ */
+@media (max-width: 520px) {
+  body {
+    --cf-ntl-indent: 24px;
+    --cf-ntl-indent-n: 24;
+    --cf-ntl-rail-c: 11px;
+    --cf-ntl-node-size: 18px;
+    --cf-ntl-add-h: 44px;
+    --cf-ntl-tap: 14px;
+    --cf-ntl-tap-size: 44px;
+    --cf-ntl-meta-basis: 100%;
+    --cf-ntl-wrap-order: 1;
+  }
+}
+body.is-mobile {
+  --cf-ntl-indent: 24px;
+  --cf-ntl-indent-n: 24;
+  --cf-ntl-rail-c: 11px;
+  --cf-ntl-node-size: 18px;
+  --cf-ntl-add-h: 44px;
+  --cf-ntl-tap: 14px;
+  --cf-ntl-tap-size: 44px;
+  --cf-ntl-meta-basis: 100%;
+  --cf-ntl-wrap-order: 1;
+}
+
+/* ─ Motion: the hover tint and the active card ease in, unless motion is reduced ─ */
+@media (prefers-reduced-motion: no-preference) {
+  ul.cf-ntl-list > li.cf-ntl-item,
+  .markdown-source-view.mod-cm6 .cm-line.cf-ntl-line,
+  .cf-ntl-node,
+  .cf-ntl-add {
+    transition:
+      box-shadow 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease;
+  }
+}
+
+/* ─ Print: cards stay whole and untinted; the controls are left off ─ */
+@media print {
+  ul.cf-ntl-list > li.cf-ntl-item,
+  .markdown-source-view.mod-cm6 .cm-line.cf-ntl-line {
+    --cf-ntl-fill: transparent;
+    break-inside: avoid;
+  }
+  .cf-ntl-menu,
+  .cf-ntl-defang,
+  .cf-ntl-add {
+    display: none;
+  }
+}

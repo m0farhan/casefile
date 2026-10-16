@@ -35,6 +35,7 @@ import {
 
 import { safeAsync, withUserResponse } from './utils'
 import { defangInPlace } from './ui/defangMenu'
+import { registerNoteTimeline } from './timeline/menu'
 import { categoryForTags, normalizeAlertCategories, suggestCategory } from './soc/alertCategory'
 import { tickAllSlaChips } from './soc/slaTicker'
 import { setAlertKindDerivation } from './ui/composites/issueMeta'
@@ -356,6 +357,10 @@ export default class PMPlugin extends Plugin {
         return true
       }
     })
+
+    // Findings bullets drawn as a timeline in the note: Live Preview, Reading
+    // view, the right-click items and their commands. Nothing touches the case.
+    registerNoteTimeline(this)
 
     this.addCommand({
       id: 'defang-selection',
