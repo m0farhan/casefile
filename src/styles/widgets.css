@@ -430,8 +430,13 @@ button.pm-comment-delete:hover {
   max-width: 100%;
   overflow-x: auto;
 }
+/* A blank line typed between paragraphs shows as a gap, the note's own;
+   none after the last, so the entry ends at its text. */
 .pm-comment-body p {
-  margin: 0.2em 0;
+  margin: 0 0 var(--p-spacing);
+}
+.pm-comment-body p:last-child {
+  margin-bottom: 0;
 }
 .pm-comment-composer {
   display: flex;

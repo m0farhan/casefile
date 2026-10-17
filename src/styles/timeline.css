@@ -69,6 +69,8 @@
   font-size: 12px;
   color: var(--gs-ink-muted);
   overflow-wrap: anywhere;
+  /* A comment's paragraphs and line breaks show as written. */
+  white-space: pre-line;
 }
 .pm-tl-event--minor .pm-tl-detail {
   font-size: 11px;

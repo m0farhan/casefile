@@ -123,6 +123,20 @@ describe('composeCaseReport', () => {
     expect(md).not.toMatch(/undefined|null/)
   })
 
+  it('keeps a journal entry of several paragraphs inside its own bullet', () => {
+    const task = makeTask({
+      title: 'Written up',
+      comments: [
+        { at: '2026-10-17 10:00', text: 'First paragraph.\n\nSecond paragraph.' },
+        { at: '2026-10-17 11:00', text: 'Next entry.' }
+      ]
+    })
+    const md = composeCaseReport(task, ctxFor([task]))
+    expect(md).toContain(
+      '- 2026-10-17 10:00 — First paragraph.\n\n  Second paragraph.\n- 2026-10-17 11:00 — Next entry.'
+    )
+  })
+
   it('says why an incident with a target has no clock, instead of "No target set."', () => {
     const noStamps = makeTask({ issueType: 'incident', severity: 'sev1', createdAt: '' })
     const md = composeCaseReport(noStamps, ctxFor([noStamps]))

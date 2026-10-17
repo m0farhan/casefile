@@ -242,7 +242,12 @@ export function composeCaseReport(task: Task, ctx: CaseReportContext): string {
       )
     }
     for (const c of comments) {
-      lines.push(c.at ? `- ${c.at} — ${c.text}` : `- ${c.text}`)
+      // An entry's later paragraphs indent under its bullet, or they end the list.
+      const text = c.text
+        .split('\n')
+        .map((l, i) => (i && l ? `  ${l}` : l))
+        .join('\n')
+      lines.push(c.at ? `- ${c.at} — ${text}` : `- ${text}`)
     }
   }
   lines.push('')

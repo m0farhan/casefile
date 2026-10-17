@@ -2466,6 +2466,20 @@ describe('comments persistence', () => {
     expect(rt.comments).toEqual([{ at: '2026-07-30 14:32', text: 'First finding' }])
   })
 
+  it('a comment of several paragraphs keeps the blank lines between them', async () => {
+    const { store, vault, app } = newStore()
+    const project = await store.createProject('Paras', 'Projects')
+    const t = await addNamed(store, project, 'Written up')
+    const text = 'First paragraph.\n\nSecond paragraph.\n\n\nThird, after two blank lines.\n- a list\n- under it'
+    await store.updateTask(project, t.id, { comments: [{ at: '2026-10-17 10:00', text }] })
+    const file = vault.getAbstractFileByPath(project.filePath)
+    if (!(file instanceof TFile)) throw new Error('missing file')
+    const reloaded = expectDefined(await new ProjectStore(app, () => SETTINGS).loadProject(file))
+    const rt = expectDefined(findTask(reloaded.tasks, t.id))
+    await new ProjectStore(app, () => SETTINGS).loadTaskBody(rt)
+    expect(rt.comments).toEqual([{ at: '2026-10-17 10:00', text }])
+  })
+
   it('a frontmatter-only save of an UNHYDRATED task leaves on-disk comments intact', async () => {
     const { store, vault, app } = newStore()
     const project = await store.createProject('Keep', 'Projects')
