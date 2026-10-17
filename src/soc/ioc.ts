@@ -306,7 +306,7 @@ const RE_EMAIL =
 const RE_DEFANGED_DOMAIN = /(?:^|[^\w-])-*\b([\w-]+(?:(?:\[(?:\.|dot)\]|\((?:\.|dot)\))[\w-]+)+)\b/gi
 // ponytail: bare (non-defanged) domains in prose need a TLD gate or every
 // "file.js" becomes an indicator; extend the list when a real miss shows up.
-const BARE_DOMAIN_TLDS = new Set([
+export const BARE_DOMAIN_TLDS = new Set([
   'com',
   'net',
   'org',
@@ -427,7 +427,7 @@ function ipv4Text(n: number): string {
  * 0:0:0:0:0:0:0:1 are the same eight numbers. A clock (12:34:56) and a MAC
  * (08:00:27:12:34:56) are neither compressed nor eight groups, so both are null.
  */
-function ipv6(value: string): number[] | null {
+export function ipv6(value: string): number[] | null {
   const v = value.toLowerCase()
   if (!v.includes(':') || !/^[0-9a-f:.]+$/.test(v)) return null
   let body = v
