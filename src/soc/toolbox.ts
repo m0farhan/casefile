@@ -240,7 +240,11 @@ const LINE_PREFIX = /^\s*(?:(?:[-*+]|\d{1,3}[.)])\s+)?(?:[\w.-][\w .-]{0,29}:\s+
  * or a value with a scheme of two or more letters (one letter is a drive).
  */
 function carriesIndicator(value: string): boolean {
-  return hasIocShape(value) || /^\\\\[^\s\\]/.test(value) || /^[a-z][a-z0-9+.-]+:\S/i.test(value)
+  // A line with spaces in it is prose to the host test, read token by token
+  // (defangText): read whole, hasIocShape took its first word for a host and
+  // bracketed every dot of the sentence while leaving a URL's scheme live. A
+  // UNC path, or a scheme URI with arguments (ms-msdt:/id …), may hold spaces.
+  return (!/\s/.test(value) && hasIocShape(value)) || /^\\\\[^\s\\]/.test(value) || /^[a-z][a-z0-9+.-]+:\S/i.test(value)
 }
 
 /** The defanged selection, and the values that changed. */

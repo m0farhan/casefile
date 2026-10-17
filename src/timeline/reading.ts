@@ -1,4 +1,4 @@
-import { setIcon, type MarkdownPostProcessorContext } from 'obsidian'
+import { MarkdownView, setIcon, type MarkdownPostProcessorContext, type Plugin, type TFile } from 'obsidian'
 import { defangText } from '../soc/toolbox'
 import type { IocType } from '../types'
 import { copyDefanged } from '../ui/defangMenu'
@@ -28,18 +28,73 @@ const SOURCE = /^\s*source:/i
 /** Obsidian's own list furniture, not the bullet's content. */
 const FURNITURE = ['list-bullet', 'list-collapse-indicator']
 
+/** The last note text read, so the sections of one render parse it once. */
+let parsed: { text: string; lines: string[]; blocks: TimelineBlock[] } | null = null
+
+function timelinesOf(text: string): { lines: string[]; blocks: TimelineBlock[] } {
+  if (parsed?.text !== text) {
+    const marked = text.includes(TIMELINE_MARKER)
+    const lines = marked ? text.split(/\r?\n/) : []
+    parsed = { text, lines, blocks: marked ? findTimelines(lines) : [] }
+  }
+  return parsed
+}
+
 /** The timeline whose list starts in a section's lines, with the note's lines. Null when there is none to draw. */
 export function sectionTimeline(
   text: string,
   lineStart: number,
   lineEnd: number
 ): { block: TimelineBlock; lines: string[] } | null {
-  if (!text.includes(TIMELINE_MARKER)) return null
-  const lines = text.split(/\r?\n/)
+  const { lines, blocks } = timelinesOf(text)
   // The marker is stripped from the rendered DOM; it sits just above the
   // list, in this section or the one before, so the list's first line decides.
-  const block = findTimelines(lines).find((b) => b.events.length && b.firstLine >= lineStart && b.firstLine <= lineEnd)
+  const block = blocks.find((b) => b.events.length && b.firstLine >= lineStart && b.firstLine <= lineEnd)
   return block ? { block, lines } : null
+}
+
+/**
+ * What Reading view draws from beyond each list's own text: which lists have
+ * a marker above them, and how far above. ponytail: a marker moved to another
+ * list in one edit keeps the shape and is missed; key each timeline by its
+ * list's text if that turns up.
+ */
+const shapeOf = (blocks: TimelineBlock[]): string =>
+  blocks
+    .filter((b) => b.events.length)
+    .map((b) => b.firstLine - b.markerLine)
+    .join()
+
+/**
+ * Per note, the shape Reading view was drawn from, kept for a note with no
+ * timeline too. The post-processor only seeds it: a change from outside
+ * reaches Reading view before the metadata cache reports it, and Obsidian
+ * redraws only the sections it touched, such as the marker's own. Recording
+ * the new shape then would leave the list drawn from the old one for good.
+ */
+const drawnShape = new Map<string, string>()
+
+/**
+ * Redraws Reading view when a note's timelines change but no list's own text
+ * does. Obsidian keeps a rendered section while its HTML is unchanged, and the
+ * marker renders to an empty paragraph of its own (or to nothing in the
+ * paragraph above), so adding or removing it, or the blank line under it,
+ * never reaches the post-processor. Editor changes arrive as 'quick-preview';
+ * changes from outside (sync, another app) as the metadata cache's 'changed'.
+ */
+export function redrawOnTimelineChange(plugin: Plugin): void {
+  const { workspace, metadataCache } = plugin.app
+  const check = (file: TFile, data: string) => {
+    const shape = shapeOf(timelinesOf(data).blocks)
+    if ((drawnShape.get(file.path) ?? '') === shape) return
+    drawnShape.set(file.path, shape)
+    for (const leaf of workspace.getLeavesOfType('markdown')) {
+      // A view in Live Preview redraws its hidden Reading half too, for when it is shown.
+      if (leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path) leaf.view.previewMode.rerender(true)
+    }
+  }
+  plugin.registerEvent(workspace.on('quick-preview', check))
+  plugin.registerEvent(metadataCache.on('changed', check))
 }
 
 /** A run of the bullet's leading text and the class it is drawn with; `sec` is the seconds inside a time. */
@@ -133,15 +188,40 @@ export function splitIndicators(text: string): Seg[] {
  */
 export function decorateTimelineSections(el: HTMLElement, ctx: MarkdownPostProcessorContext): void {
   const info = ctx.getSectionInfo(el)
-  const found = info && sectionTimeline(info.text, info.lineStart, info.lineEnd)
+  if (!info) return
+  if (!drawnShape.has(ctx.sourcePath)) drawnShape.set(ctx.sourcePath, shapeOf(timelinesOf(info.text).blocks))
+  const found = sectionTimeline(info.text, info.lineStart, info.lineEnd)
   if (!found) return
   const { block, lines } = found
   const lists = Array.from(el.children).filter((c): c is HTMLElement => c.tagName === 'UL')
   const items = lists.flatMap((l) => Array.from(l.children).filter((c): c is HTMLElement => c.tagName === 'LI'))
-  if (!items.length || items.length !== block.events.length || lists.some((l) => l.hasClass(CLS.list))) return
+  const extra = items.length - block.events.length
+  // Obsidian marks each item with its line in the section; an unmarked list
+  // can only be matched by its count.
+  const onItsLine = (event: TimelineEvent, i: number) => {
+    const at = items[i].getAttribute('data-line')
+    return at === null ? extra === 0 : info.lineStart + Number(at) === event.line
+  }
+  if (extra < 0 || !block.events.every(onItsLine) || lists.some((l) => l.hasClass(CLS.list))) return
+  if (extra) {
+    // Markdown runs the list on past the timeline (an unindented line
+    // continues the bullet above): the items after it stay a plain list
+    // below, as Live Preview shows them.
+    const last = lists[lists.length - 1]
+    const rest = last.cloneNode(false) as HTMLElement
+    last.after(rest)
+    rest.append(...items.slice(block.events.length))
+  }
   for (const list of lists) list.addClass(CLS.list)
   lists[0].before(renderHeader(el, block.summary, {}))
   block.events.forEach((event, i) => decorateItem(items[i], event, block.gaps[i], lines[event.line]))
+  // Obsidian loads an embedded note (![[…]]) into a card after the
+  // post-processors ran, and again when that note changes: what it adds is
+  // disarmed and defanged like the card's own text.
+  const observer = new MutationObserver((records) => {
+    for (const r of records) r.addedNodes.forEach(disarmAdded)
+  })
+  for (const list of lists) observer.observe(list, { childList: true, subtree: true })
 }
 
 function decorateItem(li: HTMLElement, event: TimelineEvent, gap: TimelineGap | null, line: string): void {
@@ -161,9 +241,7 @@ function decorateItem(li: HTMLElement, event: TimelineEvent, gap: TimelineGap | 
     if (code) node.data = defangText(node.data)
     else replaceText(node, splitIndicators(node.data))
   }
-  for (const a of Array.from(li.querySelectorAll('a'))) {
-    if (!a.hasClass('internal-link') && !a.hasClass('tag')) neutralise(a)
-  }
+  disarm(li)
   for (const sub of Array.from(li.children)) {
     if (sub.tagName !== 'UL' && sub.tagName !== 'OL') continue
     for (const d of Array.from(sub.children)) {
@@ -244,6 +322,42 @@ function segSpan(parent: HTMLElement, seg: Seg): HTMLElement {
   chip.appendText(seg.text)
   if (seg.live) chip.setAttr('title', 'Shown defanged: the note has it live')
   return chip
+}
+
+/** Content added to a card after it was drawn: its text defanged, its links and iframes disarmed. */
+function disarmAdded(node: Node): void {
+  if (node.nodeType === TEXT_NODE) defangNode(node as Text)
+  else if (node.nodeType === ELEMENT_NODE) {
+    for (const { node: text } of textNodes(node as Element, false)) defangNode(text)
+    disarm(node as HTMLElement)
+  }
+}
+
+function defangNode(node: Text): void {
+  const data = defangText(node.data)
+  if (data !== node.data) node.data = data
+}
+
+/**
+ * Every link under el (el included) neutralised, past internal links and
+ * tags, which still open. An iframe would load its page in the card: it
+ * becomes a link that copies the page defanged.
+ */
+function disarm(el: HTMLElement): void {
+  const within = (tag: string) => [
+    ...(el.matches(tag) ? [el] : []),
+    ...Array.from(el.querySelectorAll<HTMLElement>(tag))
+  ]
+  for (const frame of within('iframe')) {
+    const page = frame.getAttribute('src')
+    const link = page && frame.parentElement?.createEl('a', { text: defangText(page), attr: { href: page } })
+    if (!link) continue
+    neutralise(link)
+    frame.replaceWith(link)
+  }
+  for (const a of within('a')) {
+    if (!a.hasClass('internal-link') && !a.hasClass('tag') && !a.hasClass(CLS.link)) neutralise(a)
+  }
 }
 
 /** A link in a timeline never opens: it is a button that copies its target defanged. */

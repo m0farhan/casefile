@@ -64,7 +64,7 @@ export interface TimelineEvent {
   line: number
   lastLine: number
   indent: string
-  /** The bullet text after the list marker. */
+  /** The bullet text after the list marker and a task's box. */
   text: string
   /** Column where text starts. */
   textFrom: number
@@ -123,21 +123,39 @@ export interface TimelineBlock {
 // ─── The block ───────────────────────────────────────────────────────────────
 
 const BULLET = /^([ \t]*)[-*+](?:[ \t]+|$)/
+/** A task's box after the list marker, '[ ]', '[x]' or any one character as Obsidian reads it: part of the marker. */
+const TASK_BOX = /^\[.\](?:[ \t]+|$)/
 const HEADING = /^ {0,3}#{1,6}(?:\s|$)/
 const FENCE = /^ {0,3}(`{3,}|~{3,})/
+/** A fence opened in an event's detail, at any indent, after a sub-bullet's marker too. */
+const DETAIL_FENCE = /^\s*(?:(?:[-*+]|\d{1,3}[.)])[ \t]+)?(`{3,}|~{3,})/
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/
+/** A frontmatter fence: exactly '---', a CR allowed, as Obsidian reads it. */
+const FRONTMATTER_FENCE = /^---\r?$/
 const DETAIL_MARKER = /^(?:[-*+]|\d{1,3}[.)])[ \t]+/
 
 const isBlank = (s: string | undefined): boolean => !s?.trim()
 const indentOf = (s: string): number => s.length - s.trimStart().length
 
 /**
+ * The line that closes the note's YAML frontmatter, or -1 when it has none.
+ * Read as Obsidian reads it: '---' on the first line, closed by the next line
+ * that is exactly '---'.
+ */
+export function frontmatterEnd(lines: string[]): number {
+  if (!FRONTMATTER_FENCE.test(lines[0] ?? '')) return -1
+  return lines.findIndex((l, i) => i > 0 && FRONTMATTER_FENCE.test(l))
+}
+
+/**
  * Every timeline in a note, in order. A marker inside a fenced code block is
- * an example, not a timeline, so fences are skipped.
+ * an example, not a timeline, so fences are skipped; so is the frontmatter,
+ * where a marker would only break the note's properties.
  */
 export function findTimelines(lines: string[]): TimelineBlock[] {
   const blocks: TimelineBlock[] = []
   let fence = ''
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = frontmatterEnd(lines) + 1; i < lines.length; i++) {
     const f = FENCE.exec(lines[i])?.[1]
     if (fence) {
       if (f && f[0] === fence[0] && f.length >= fence.length) fence = ''
@@ -157,35 +175,73 @@ export function findTimelines(lines: string[]): TimelineBlock[] {
  * The list under one marker: top-level bullets are events, anything indented
  * under one is its detail. It runs on across one blank line followed by more
  * of the list, and ends at anything else: a heading, two blank lines, a
- * paragraph or a less indented line.
+ * paragraph or a less indented line. A fenced code block in an event, opened
+ * in a detail or on the bullet itself, is its detail to the closing fence, '#'
+ * lines and blank lines included; a line back at the list's indent ends it, as
+ * Markdown ends the list item.
  */
 function readBlock(lines: string[], markerLine: number): TimelineBlock {
   let i = markerLine + 1
   if (isBlank(lines[i]) && BULLET.test(lines[i + 1] ?? '')) i++
   const events: TimelineEvent[] = []
-  let detailLive = 0
+  // Changes Defang timeline would make that no event's indicators show: details, and what is not listed.
+  let live = 0
   const base = BULLET.exec(lines[i] ?? '')?.[1].length ?? -1
-  const atBase = (s: string) => BULLET.exec(s)?.[1].length === base
+  // A list keeps one bullet character: Markdown starts a new list where '-'
+  // turns to '*' or '+', so Reading view draws that as a second list. The
+  // timeline ends there too, and both views agree.
+  const markOf = (s: string) => s.trimStart()[0]
+  const baseMark = base < 0 ? '' : markOf(lines[i])
+  const atBase = (s: string) => BULLET.exec(s)?.[1].length === base && markOf(s) === baseMark
   let carry: Carry = { date: null, text: null }
+  let fence: { mark: string; indent: number } | null = null
+  const detail = (line: string, n: number, code: boolean) => {
+    const event = events[events.length - 1]
+    // Code keeps its indent under its fence, and a '- ' in it is code, not a marker.
+    const text = code
+      ? line.slice(Math.min(indentOf(line), fence?.indent ?? 0)).trimEnd()
+      : line.trim().replace(DETAIL_MARKER, '')
+    event.details.push({ line: n, text, source: !code && /^source:/i.test(text) })
+    event.lastLine = n
+    const found = readIndicators(line)
+    live += found.unlisted + found.iocs.filter((s) => s.live).length
+  }
   // A marker with no list under it is an empty timeline, drawn with its header.
   if (base < 0) i = lines.length
   for (; i < lines.length; i++) {
     const line = lines[i]
+    if (fence && (isBlank(line) || indentOf(line) > base)) {
+      if (isBlank(line)) continue
+      detail(line, i, true)
+      const close = FENCE_CLOSE.exec(line)?.[1]
+      if (close && close[0] === fence.mark[0] && close.length >= fence.mark.length) fence = null
+      continue
+    }
+    const unclosed = fence !== null
+    fence = null
     if (HEADING.test(line)) break
     const bullet = BULLET.exec(line)
     if (bullet && bullet[1].length === base) {
-      const event = readEvent(line, i, bullet[1], bullet[0].length, carry)
+      if (markOf(line) !== baseMark) break
+      // The blank lines an unclosed fence took in are its list item's, so its event's:
+      // delete and move take them with it rather than leave two that end the list.
+      if (unclosed) events[events.length - 1].lastLine = i - 1
+      const textFrom = bullet[0].length + (TASK_BOX.exec(line.slice(bullet[0].length))?.[0].length ?? 0)
+      const found = readIndicators(line, textFrom)
+      live += found.unlisted
+      const event = readEvent(line, i, bullet[1], textFrom, found.iocs, carry)
       if (event.time?.dateStated) carry = { date: event.time.date, text: event.time.dateText }
       events.push(event)
+      // '- ```' opens the fence on the bullet itself: its code sits at the text's column.
+      const open = FENCE.exec(line.slice(bullet[0].length))?.[1]
+      if (open) fence = { mark: open, indent: bullet[0].length }
     } else if (isBlank(line)) {
       const next = lines[i + 1] ?? ''
       if (isBlank(next) || HEADING.test(next) || (indentOf(next) <= base && !atBase(next))) break
     } else if (indentOf(line) > base) {
-      const event = events[events.length - 1]
-      const text = line.trim().replace(DETAIL_MARKER, '')
-      event.details.push({ line: i, text, source: /^source:/i.test(text) })
-      event.lastLine = i
-      detailLive += indicatorSpans(line).filter((s) => s.live).length
+      const open = DETAIL_FENCE.exec(line)?.[1]
+      detail(line, i, false)
+      if (open) fence = { mark: open, indent: indentOf(line) }
     } else break
   }
   return {
@@ -194,7 +250,7 @@ function readBlock(lines: string[], markerLine: number): TimelineBlock {
     lastLine: events.at(-1)?.lastLine ?? markerLine,
     events,
     gaps: events.map((e, n) => (n === 0 ? null : gapBetween(events[n - 1].time, e.time))),
-    summary: summarise(events, detailLive)
+    summary: summarise(events, live)
   }
 }
 
@@ -239,13 +295,19 @@ const EXE_EXT = /\.(?:exe|ps1|hta|dll|bat|vbs|js|scr)(?![\w-])/i
 // word start; a one-segment /tmp is missed. Widen it when a real miss shows up.
 const PATH = /(?:^|[\s"'`(=])(?:[a-z]:\\|%\w+%\\|\\\\\w|~?\/[\w.-]+\/[\w.-])/i
 
-function readEvent(line: string, lineNo: number, indent: string, textFrom: number, carried: Carry): TimelineEvent {
+function readEvent(
+  line: string,
+  lineNo: number,
+  indent: string,
+  textFrom: number,
+  iocs: TimelineIoc[],
+  carried: Carry
+): TimelineEvent {
   const text = line.slice(textFrom)
   const head = readHead(text, carried)
   const shift = (s: Span | null): Span | null => s && { from: s.from + textFrom, to: s.to + textFrom }
   const kindMatch = KIND.exec(text.slice(head.rest))
   const body = text.slice(head.rest + (kindMatch?.[0].length ?? 0))
-  const iocs = indicatorSpans(line, textFrom)
   return {
     line: lineNo,
     lastLine: lineNo,
@@ -312,10 +374,14 @@ const ISO_DATE_TIME_SEP = /^(?:T|,?[ \t]+)/
 const LEAD = /^(?:(?:on|at|around|about|approximately|approx\.?|by)[ \t]+|~[ \t]*)+/i
 const APPROX_LEAD = /around|about|approx|~/i
 const CLOCK = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?/
-const MERIDIEM = /^ ?([ap]m)(?![a-z\d])/i
+// 'a.m.' with its dots; a full stop after 'AM' ends a sentence, not the time.
+const MERIDIEM = /^ ?([ap](?:m|\.m\.?))(?![a-z\d])/i
 const RANGE_END = /^[–-](\d{1,2}):(\d{2})(?::(\d{2}))?/
 // A minus offset is read only after an ISO 'T' time: elsewhere 11:06-11:08 is a range.
-const ZONE = /^(?: ?(?:UTC|GMT)(?:[+-]\d{1,2}(?::?\d{2})?)?| ?Z| ?\+\d{2}:?\d{2})(?![a-z\d])/i
+// The US zones are the ones the toolbox reads too.
+const ZONE = /^(?: ?(?:UTC|GMT)(?:[+-]\d{1,2}(?::?\d{2})?)?| ?\+\d{2}:?\d{2}| ?[ECMP][SD]T)(?![a-z\d])/i
+/** Zulu, a capital Z only: '11:06 z' and '09:00 Z-score' are text, not a zone. */
+const ZULU = /^ ?Z(?![A-Za-z\d-])/
 const ISO_ZONE = /^(?: ?(?:UTC|GMT)(?:[+-]\d{1,2}(?::?\d{2})?)?| ?Z|[+-]\d{2}:?\d{2})(?![a-z\d])/i
 /** What may follow a time phrase: the end, a comma, a space, or a colon and space. */
 const PHRASE_END = /^(?:$|,|[ \t]|:(?:[ \t]|$))/
@@ -496,7 +562,7 @@ function readClock(s: string, isoT: boolean): Clock | 'invalid' | null {
     end = { minutes: endMinutes, seconds: endSeconds }
   }
   if (minutes === null || (seconds ?? 0) > 59) return 'invalid'
-  const z = (isoT ? ISO_ZONE : ZONE).exec(s.slice(i))
+  const z = isoT ? ISO_ZONE.exec(s.slice(i)) : (ZONE.exec(s.slice(i)) ?? ZULU.exec(s.slice(i)))
   if (z) i += z[0].length
   const secondsFrom = a[1].length + 3
   return {
@@ -560,6 +626,15 @@ function writtenAs(value: string): RegExp {
  * domain in prose, which defangText leaves as written, is not live.
  */
 export function indicatorSpans(line: string, from = 0): TimelineIoc[] {
+  return readIndicators(line, from).iocs
+}
+
+/**
+ * indicatorSpans, and how many changes defangText makes on the line outside
+ * every span: a file:// or ms-msdt: link, or anything else the extractor does
+ * not list. Together they are what Defang timeline changes on the line.
+ */
+function readIndicators(line: string, from = 0): { iocs: TimelineIoc[]; unlisted: number } {
   const text = line.slice(from)
   const found: { span: Span; type: IocType }[] = []
   for (const { value } of extractIocsFromText(text, [])) {
@@ -571,19 +646,53 @@ export function indicatorSpans(line: string, from = 0): TimelineIoc[] {
     }
   }
   found.sort((a, b) => a.span.from - b.span.from || b.span.to - a.span.to)
-  const kept: typeof found = []
-  for (const f of found) if (f.span.from >= (kept.at(-1)?.span.to ?? 0)) kept.push(f)
-  if (!kept.length) return []
+  const iocs: TimelineIoc[] = []
+  for (const f of found) if (f.span.from >= (iocs.at(-1)?.span.to ?? 0)) iocs.push({ ...f, live: false })
+  const out = defangText(line)
+  if (out === line) return { iocs, unlisted: 0 }
+  const alone = (i: TimelineIoc) => {
+    const written = line.slice(i.span.from, i.span.to)
+    return defangText(written) !== written
+  }
   // defangText rewrites token by token and never adds whitespace, so token n
   // of its output is token n of the line, defanged.
   const tokens = [...line.matchAll(/\S+/g)]
-  const defanged = defangText(line).match(/\S+/g) ?? []
-  return kept.map(({ span, type }) => {
-    const n = tokens.findIndex((t) => t.index <= span.from && span.from < t.index + t[0].length)
-    const written = line.slice(span.from, span.to)
-    const live = defanged.length === tokens.length ? defanged[n] !== tokens[n][0] : defangText(written) !== written
-    return { span, type, live }
+  const defanged = out.match(/\S+/g) ?? []
+  if (defanged.length !== tokens.length) {
+    for (const i of iocs) i.live = alone(i)
+    return { iocs, unlisted: 0 }
+  }
+  let unlisted = 0
+  tokens.forEach((t, n) => {
+    const d = defanged[n]
+    if (d === t[0]) return
+    // A changed token is walked piece by piece, the text between indicators
+    // and each indicator: defangText leaves a piece as written or, for a live
+    // indicator, writes it as it defangs it alone. Judged per indicator, so
+    // the domain in '1.2.3.4,evil.com' is not live because the address is.
+    const end = t.index + t[0].length
+    const inToken = iocs.filter((i) => i.span.from >= t.index && i.span.from < end)
+    let at = t.index
+    let pos = 0
+    for (const [k, i] of inToken.entries()) {
+      const gap = line.slice(at, i.span.from)
+      const written = line.slice(i.span.from, i.span.to)
+      const shown = defangText(written)
+      const p = pos + gap.length
+      if (!d.startsWith(gap, pos) || !(d.startsWith(written, p) || d.startsWith(shown, p))) {
+        // ponytail: the walk lost its place, so the rest of the token's
+        // indicators are judged alone; a changed gap counts once.
+        if (!d.startsWith(gap, pos)) unlisted++
+        for (const j of inToken.slice(k)) j.live = alone(j)
+        return
+      }
+      i.live = !d.startsWith(written, p)
+      pos = p + (i.live ? shown : written).length
+      at = i.span.to
+    }
+    if (d.slice(pos) !== line.slice(at, end)) unlisted++
   })
+  return { iocs, unlisted }
 }
 
 // ─── Gaps and summary ────────────────────────────────────────────────────────
@@ -613,10 +722,21 @@ function duration(s: number, exact: boolean): string {
 }
 
 /**
- * Times can be ordered only when all know their day, or none does and all sit
- * under the same date as written (10/9/26 is one day, whichever way it reads).
+ * Clocks written in one zone: the same zone on every time, or none on any.
+ * Zones are never converted, so 11:04 UTC and 13:10 +02:00 have no order here,
+ * and neither do UTC and Z, or a zone and none.
  */
-function comparable(times: EventTime[]): boolean {
+export function oneZone(times: EventTime[]): boolean {
+  return times.every((t) => t.zone?.toUpperCase() === times[0].zone?.toUpperCase())
+}
+
+/**
+ * Times can be ordered only when they are in one zone and all know their day,
+ * or none does and all sit under the same date as written (10/9/26 is one day,
+ * whichever way it reads).
+ */
+export function comparable(times: EventTime[]): boolean {
+  if (!oneZone(times)) return false
   if (times.every((t) => t.date !== null)) return true
   return times.every((t) => t.date === null && t.dateText === times[0].dateText)
 }
@@ -658,7 +778,7 @@ function gapBetween(a: EventTime | null, b: EventTime | null): TimelineGap | nul
 }
 
 /** First and last are the earliest and latest times when they can be ordered, else the first and last written. */
-function summarise(events: TimelineEvent[], detailLive: number): TimelineSummary {
+function summarise(events: TimelineEvent[], otherLive: number): TimelineSummary {
   const timed = events.flatMap((e) => (!e.time || e.time.minutes === null ? [] : [e.time]))
   let first = timed[0]
   let last = timed.at(-1)
@@ -678,7 +798,7 @@ function summarise(events: TimelineEvent[], detailLive: number): TimelineSummary
     last: last ? timeLabel(last) : null,
     span,
     untimed: events.length - timed.length,
-    live: events.reduce((n, e) => n + e.iocs.filter((i) => i.live).length, detailLive)
+    live: events.reduce((n, e) => n + e.iocs.filter((i) => i.live).length, otherLive)
   }
 }
 
@@ -687,26 +807,24 @@ function summarise(events: TimelineEvent[], detailLive: number): TimelineSummary
 /**
  * The timeline as plain text for a ticket: a time column as written, then the
  * bullet without its lead word and time phrase; details indent under it and
- * Source: lines join the event line. Not defanged here: the caller passes it
- * through copyDefanged.
+ * Source: lines join the event line. A date line goes above each event whose
+ * date, stated or carried, differs from the one above it; a time with no date
+ * comes before any. Not defanged here: copyText reads the block from the note
+ * lines as Defang timeline leaves them.
  */
 export function copyForTicket(block: TimelineBlock): string {
-  const { events, summary } = block
+  const { events } = block
   const labels = events.map((e) => (!e.time || e.time.minutes === null ? '--:--' : timeLabel(e.time)))
   const width = Math.max(8, ...labels.map((l) => l.length)) + 3
   const count = `${events.length} event${events.length === 1 ? '' : 's'}`
-  const day0 = summary.date ? formatDay(summary.date) : summary.dateText
-  const out = [`Timeline${day0 ? `, ${day0}` : ''} (${count})`]
-  let day = summary.date
-  let dayText = summary.date ? null : summary.dateText
+  const dayOf = (t: EventTime | null) => (t?.date ? formatDay(t.date) : (t?.dateText ?? null))
+  // An untimed event says nothing about the day; the first one that has a time does.
+  let day = dayOf(events.find((e) => e.time)?.time ?? null)
+  const out = [`Timeline${day ? `, ${day}` : ''} (${count})`]
   events.forEach((e, n) => {
-    const date = e.time?.date ?? null
-    if (date && day && dayNumber(date) !== dayNumber(day)) out.push(formatDay(date))
+    const date = dayOf(e.time)
+    if (date && date !== day) out.push(date)
     if (date) day = date
-    // A date written as numbers goes on a line of its own, as written, when it changes.
-    const text = e.time?.dateStated ? e.time.dateText : null
-    if (text && text !== dayText) out.push(text)
-    if (e.time?.dateStated) dayText = text
     const kind = e.kindSpan ? e.text.slice(e.kindSpan.from - e.textFrom, e.kindSpan.to - e.textFrom) : ''
     const sources = e.details.filter((d) => d.source).map((d) => d.text)
     const untimed = labels[n] === '--:--' ? ' (time not recorded)' : ''

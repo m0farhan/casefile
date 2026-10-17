@@ -45,6 +45,17 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.45.0] - 2026-10-17
+
+### Added
+
+- **A timeline for the events in a note.** Select or right-click the bullets you write your findings in and pick **Make timeline**: the list is drawn as an event timeline right in the note, in Live Preview while you type and in Reading view. Your note stays a plain bullet list (one hidden `%% timeline %%` line turns the drawing on), so it reads the same without Responder, and nothing goes into the case's fields
+  - Each bullet is an event. The time it starts with (`On 3 May 2025, 11:04`, `At 11:05:40`, `10/9/26, 2:29 AM`, `2:29 PM`, `11:06–11:08`, `~11:48`) shows as a time chip; a time in the middle of a sentence is never taken for the event's time, and a bullet without one says "time not recorded". A date written as numbers (10/9/26) is kept exactly as written, never turned into a day
+  - Gaps between events (`+32 s`, `+1 min`, `25 min later` for a quiet stretch), a day line when the date changes, and the span in the header are worked out from your times and marked derived. No gap is drawn across an event without a time, across two different numeric dates, or across times written in different zones
+  - A coloured dot per event: Detection (red), Response (green), Execution, Web, File and Email. Type the word after the time (`Execution: …`) or click the dot or the word to pick one; without one, a muted outline shows what the text suggests
+  - Indicators show as chips with their type icon, ATT&CK IDs as pills, and a `Source:` detail line as a footer. Indicators that are not defanged yet are counted in the header with a one-click **Defang**; in a timeline, a click on a link never opens it (Cmd/Ctrl-click copies it defanged)
+  - Edit the cards directly: Enter adds the next event, Tab makes a detail line, and **+ Add event** sits under the last one. Right-click an event to add one below, move it up or down, set its kind, sort by time (only when that can be done honestly), delete it, defang the timeline, **Copy timeline for ticket** (plain text, defanged, time first) or turn it back into a plain list. Every item is also a command, for hotkeys and the mobile toolbar
+
 ## [2.44.1] - 2026-10-16
 
 ### Changed

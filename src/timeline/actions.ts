@@ -5,8 +5,11 @@ import {
   type EventKind,
   type TimelineBlock,
   type TimelineEvent,
+  comparable,
   copyForTicket,
   findTimelines,
+  frontmatterEnd,
+  oneZone,
   timelineAt
 } from './parse'
 
@@ -30,6 +33,10 @@ export interface TimelineEdit {
 // As parse.ts reads them.
 const BULLET = /^([ \t]*)[-*+](?:[ \t]+|$)/
 const HEADING = /^ {0,3}#{1,6}(?:\s|$)/
+const FENCE_OPEN = /^\s*(?:(?:[-*+]|\d{1,3}[.)])[ \t]+)?(`{3,}|~{3,})/
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/
+/** Lines that end a list rather than join it as events: a code fence, a divider ('---', '* * *'), a numbered item. */
+const NOT_AN_EVENT = /^\s*(?:`{3,}|~{3,}|\d{1,9}[.)](?:[ \t]|$))|^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/
 
 const isBlank = (s: string | undefined): boolean => !s?.trim()
 const indentOf = (s: string): number => s.length - s.trimStart().length
@@ -49,17 +56,48 @@ function removeLines(lines: string[], from: number, to: number, cursor?: Timelin
   return replace(from, to, [''], cursor)
 }
 
-/** The first bullet of the list `line` is in, walking up as parse.ts walks down; -1 when it is in none. */
+/** Which lines are fenced code, fences included. A fence in a list item ends with the item. */
+function codeLines(lines: string[]): boolean[] {
+  let fence: { mark: string; indent: number } | null = null
+  return lines.map((l) => {
+    if (fence && (isBlank(l) || indentOf(l) >= fence.indent)) {
+      const close = FENCE_CLOSE.exec(l)?.[1]
+      if (close && close[0] === fence.mark[0] && close.length >= fence.mark.length) fence = null
+      return true
+    }
+    const open = FENCE_OPEN.exec(l)?.[1]
+    fence = open ? { mark: open, indent: indentOf(l) } : null
+    return open !== undefined
+  })
+}
+
+/**
+ * The first bullet of the list `line` is in, walking up as parse.ts walks
+ * down; -1 when it is in none. Blank lines in an event's code block are code,
+ * so two of them do not end the list.
+ */
 function listStart(lines: string[], line: number): number {
+  const code = codeLines(lines)
   let start = -1
   for (let i = line; i >= 0; i--) {
     const l = lines[i]
     if (BULLET.test(l)) start = i
     else if (isBlank(l)) {
-      if (i === line || isBlank(lines[i - 1])) break
+      if (!code[i] && (i === line || (isBlank(lines[i - 1]) && !code[i - 1]))) break
     } else if (indentOf(l) === 0) break
   }
   return start
+}
+
+/**
+ * The lines a selection covers, for Make timeline. One that ends at column 0
+ * (a triple-click, Shift+Down) stops at the line above: nothing of the line it
+ * ends on is selected.
+ */
+export function selectedLines(editor: Editor): [number, number] {
+  const from = editor.getCursor('from')
+  const to = editor.getCursor('to')
+  return [from.line, to.ch === 0 && to.line > from.line ? to.line - 1 : to.line]
 }
 
 /**
@@ -67,15 +105,17 @@ function listStart(lines: string[], line: number): number {
  * Over a selection of two or more lines, its plain lines become events first:
  * '- ' goes in front of each at the selection's least indent, a deeper one
  * stays the detail of the line above, and blank lines and leading headings are
- * left alone. Null when there is no list, the lines are in a timeline already,
- * or they would not all become one timeline (a heading or two blank lines
- * inside the selection, a code block).
+ * left alone. Null when there is no list, the lines are in a timeline already
+ * or in the frontmatter, or they would not all become one timeline (a heading
+ * or two blank lines inside the selection; a code fence, a divider or a
+ * numbered item where '- ' would go).
  */
 export function makeTimeline(lines: string[], fromLine: number, toLine: number): TimelineEdit | null {
   let first = fromLine
   let last = toLine
   while (first < last && (isBlank(lines[first]) || HEADING.test(lines[first]))) first++
   while (last > first && isBlank(lines[last])) last--
+  if (first <= frontmatterEnd(lines)) return null
   const blocks = findTimelines(lines)
   for (let i = first; i <= last; i++) if (timelineAt(blocks, i)) return null
   const out = lines.slice()
@@ -83,9 +123,11 @@ export function makeTimeline(lines: string[], fromLine: number, toLine: number):
     const base = Math.min(...lines.slice(first, last + 1).flatMap((l) => (isBlank(l) ? [] : [indentOf(l)])))
     for (let i = first; i <= last; i++) {
       const l = lines[i]
-      if (!isBlank(l) && !HEADING.test(l) && !BULLET.test(l) && indentOf(l) === base) {
-        out[i] = `${l.slice(0, base)}- ${l.slice(base)}`
-      }
+      if (isBlank(l) || HEADING.test(l)) continue
+      // ponytail: an item's text starts 2 columns in ('- '); left of that, a
+      // fence, a divider or a number ends the list. Deeper, it is an event's.
+      if (indentOf(l) < base + 2 && NOT_AN_EVENT.test(l)) return null
+      if (indentOf(l) === base && !BULLET.test(l)) out[i] = `${l.slice(0, base)}- ${l.slice(base)}`
     }
   }
   const start = listStart(out, first)
@@ -156,19 +198,20 @@ const KIND_WORD: Record<Exclude<EventKind, 'observed'>, string> = {
  * and its separator (at the start when untimed), or the one there replaced;
  * Auto takes it out and leaves the kind to the text. A word that already
  * means the kind (Download for file, Alert for detection) is the analyst's
- * and stays: null. Observed has no word: null.
+ * and stays: null. Observed has no word: null, and neither has a bullet that
+ * opens a code fence: a word in front would turn the code into text.
  */
 export function setEventKind(lines: string[], line: number, kind: EventKind | 'auto'): TimelineEdit | null {
   const e = here(lines, line)?.event
-  if (!e || kind === 'observed') return null
+  if (!e || kind === 'observed' || FENCE_OPEN.test(lines[e.line])) return null
   if (kind === 'auto' ? !e.kindExplicit : e.kindExplicit && e.kind === kind) return null
   const text = lines[e.line]
   // body is the line's tail after the time phrase, its separator and any kind word.
   const end = text.length - e.body.length
   const from = e.kindSpan?.from ?? end
   let word = kind === 'auto' ? '' : `${KIND_WORD[kind]}: `
-  // 'At 11:05' and 'At 11:06,' end the text with no space to write after.
-  if (word && from > e.textFrom && !/\s/.test(text[from - 1])) word = ` ${word}`
+  // 'At 11:05', 'At 11:06,', a bare '-' and '[x]' end with no space to write after.
+  if (word && !/\s/.test(text[from - 1])) word = ` ${word}`
   return replace(e.line, e.line, [text.slice(0, from) + word + text.slice(end)])
 }
 
@@ -196,24 +239,23 @@ function byTime(events: TimelineEvent[]): TimelineEvent[] {
 /**
  * Sort events by time: null (item hidden) when the timeline is in order or
  * the line is not in one; a reason (item disabled) when an event has no time,
- * the day order is unknown, or sorting would put a time-only event under
- * another day's date; else the edit. Details go with their event and blank
- * lines between events stay where they are.
+ * the times are in different zones, the day order is unknown, or sorting would
+ * put a time-only event under another day's date; else the edit. Details go
+ * with their event and blank lines between events stay where they are.
  */
 export function sortEventsByTime(lines: string[], line: number): { edit: TimelineEdit } | { reason: string } | null {
   const at = here(lines, line)
   if (!at) return null
   const { block } = at
   const timed = block.events.filter((e) => e.time?.minutes != null)
-  const dated = timed.filter((e) => e.time?.date).length
-  // Dateless times order only under one date as written (10/9/26 is one day either way).
-  const oneWrittenDay = timed.every((e) => e.time?.dateText === timed[0]?.time?.dateText)
-  const comparable = (dated === 0 && oneWrittenDay) || dated === timed.length
-  const order = comparable ? byTime(timed) : timed
+  const times = timed.flatMap((e) => (e.time ? [e.time] : []))
+  const ordered = comparable(times)
+  const order = ordered ? byTime(timed) : timed
   if (!block.gaps.some((g) => g?.outOfOrder) && order.every((e, i) => e === timed[i])) return null
   const untimed = block.events.length - timed.length
   if (untimed) return { reason: untimed === 1 ? '1 event has no time' : `${untimed} events have no time` }
-  if (!comparable) return { reason: 'Not every event has a date, so the day order is unknown' }
+  if (!oneZone(times)) return { reason: 'The times are written in different zones, so their order is unknown' }
+  if (!ordered) return { reason: 'Not every event has a date, so the day order is unknown' }
   const { events } = block
   const out: string[] = []
   let cursor: TimelineEdit['cursor']
@@ -225,20 +267,28 @@ export function sortEventsByTime(lines: string[], line: number): { edit: Timelin
     out.push(...lines.slice(e.line, e.lastLine + 1))
     if (i + 1 < events.length) out.push(...lines.slice(events[i].lastLine + 1, events[i + 1].line))
   })
-  // A time-only event takes its date from the event above it, so moving it can change its day.
+  // A time-only event takes its date from the event above it, so moving it can
+  // change its day, or the date as written (10/9/26) it sits under.
   const after = findTimelines([...lines.slice(0, block.firstLine), ...out, ...lines.slice(block.lastLine + 1)])
   const moved = after.find((b) => b.markerLine === block.markerLine)?.events ?? []
-  if (moved.length !== order.length || moved.some((e, i) => secondsOf(e, true) !== secondsOf(order[i], true))) {
+  const same = (a: TimelineEvent, b: TimelineEvent) =>
+    secondsOf(a, true) === secondsOf(b, true) && a.time?.dateText === b.time?.dateText
+  if (moved.length !== order.length || moved.some((e, i) => !same(e, order[i]))) {
     return { reason: 'Sorting would move an event onto another day: write its date on it first' }
   }
   return { edit: replace(block.firstLine, block.lastLine, out, cursor) }
 }
 
-/** Delete event: the event and its details, whole lines; the caret goes to the line above. */
+/**
+ * Delete event: the event and its details, whole lines; the caret goes to the
+ * line above. Between two blank lines (a loose list) one of them goes too:
+ * two would end the timeline there.
+ */
 export function deleteEvent(lines: string[], line: number): TimelineEdit | null {
   const e = here(lines, line)?.event
   if (!e) return null
-  return removeLines(lines, e.line, e.lastLine, { line: e.line - 1, ch: lines[e.line - 1].length })
+  const loose = isBlank(lines[e.line - 1]) && e.lastLine + 1 < lines.length && isBlank(lines[e.lastLine + 1])
+  return removeLines(lines, e.line, e.lastLine + (loose ? 1 : 0), { line: e.line - 1, ch: lines[e.line - 1].length })
 }
 
 /**
@@ -262,9 +312,20 @@ export function backToPlainList(lines: string[], line: number): TimelineEdit | n
   return block ? removeLines(lines, block.markerLine, block.markerLine) : null
 }
 
-/** Copy timeline for ticket: the text, not yet defanged; the caller copies it with copyDefanged. */
+/**
+ * Copy timeline for ticket: the text, defanged as Defang timeline defangs the
+ * note, line by line, before it is laid out for the ticket: a bare domain that
+ * is the whole of its note line is defanged there, and would be left as prose
+ * once moved onto the event line. Copy it as it is; whether anything was
+ * defanged is defangTimeline's `changed`.
+ */
 export function copyText(lines: string[], line: number): string | null {
-  const block = here(lines, line)?.block
+  const edit = defangTimeline(lines, line)?.edit
+  if (!edit) return null
+  // Defanging keeps every line where it was, so `line` is still in the timeline.
+  const out = lines.slice()
+  out.splice(edit.fromLine, edit.toLine - edit.fromLine + 1, ...edit.text.split('\n'))
+  const block = here(out, line)?.block
   return block ? copyForTicket(block) : null
 }
 

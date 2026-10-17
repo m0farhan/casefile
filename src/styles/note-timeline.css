@@ -161,9 +161,19 @@ body {
 .cf-ntl-header + ul.cf-ntl-list {
   margin-top: 12px;
 }
-/* Live Preview: the header widget replaces the marker line's text. */
+/* Live Preview: the header widget replaces the marker line's text. CodeMirror
+   puts an inline buffer image on each side of a widget; next to a block they
+   took a blank row each, where a click put the caret in the marker. Inline,
+   full width and unwrapped, the header and both buffers share one row. */
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-marker-line {
   padding-bottom: 12px;
+  white-space: nowrap;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-marker-line .cf-ntl-header {
+  display: inline-flex;
+  width: 100%;
+  box-sizing: border-box;
+  vertical-align: top;
 }
 
 /* ─ Rail node ─ */
@@ -379,8 +389,13 @@ ul.cf-ntl-list .cf-ntl-ioc-icon {
 /* Indicators are evidence, not links. In a timeline, Obsidian's link colour
    and underline come off bare URLs, emails and links, and a click never opens
    one (menu.ts, guardTimelineLinks): it places the caret, and Mod-click copies
-   the value defanged. */
-.markdown-source-view.mod-cm6 .cf-ntl-line :is(.cm-url, .cm-link, .cm-underline, .cm-hmd-barelink, .external-link) {
+   the value defanged. A note link stays in the vault and opens as anywhere. */
+.markdown-source-view.mod-cm6
+  .cf-ntl-line
+  :is(.cm-url, .cm-link, .cm-underline, .cm-hmd-barelink, .external-link):not(
+    .cm-hmd-internal-link,
+    .cm-hmd-internal-link *
+  ) {
   color: inherit;
   text-decoration: none;
   cursor: text;
@@ -589,7 +604,8 @@ ul.cf-ntl-list li.cf-ntl-source > .list-collapse-indicator {
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-source .cm-formatting-list {
   visibility: hidden;
 }
-.markdown-source-view.mod-cm6 .cm-line.cf-ntl-line .cm-fold-indicator .collapse-indicator,
+/* A folded card keeps its fold arrow: it says details are hidden, and a click opens them. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-line .cm-fold-indicator:not(.is-collapsed) .collapse-indicator,
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-line .cm-indent::before {
   display: none;
 }

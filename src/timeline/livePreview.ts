@@ -58,6 +58,23 @@ const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.str
 // handles its own clicks (ignoreEvent true) and keeps mousedown from moving
 // the caret; a display-only widget lets the click through to the editor.
 
+/**
+ * A widget is not text: a right-click on one leaves the caret where it was,
+ * maybe in another event or another timeline, and Obsidian builds its editor
+ * menu at the caret. The caret moves onto the widget first; the menu is built
+ * after this listener, as the event bubbles up to the editor.
+ */
+function menuHere(el: HTMLElement, view: EditorView): HTMLElement {
+  el.addEventListener('contextmenu', () => view.dispatch({ selection: { anchor: view.posAtDOM(el) } }))
+  return el
+}
+
+/** A control also keeps a press from moving the caret: its click acts instead. */
+function control(el: HTMLElement, view: EditorView): HTMLElement {
+  el.addEventListener('mousedown', (e) => e.preventDefault())
+  return menuHere(el, view)
+}
+
 class HeaderWidget extends WidgetType {
   constructor(
     readonly summary: TimelineSummary,
@@ -72,11 +89,19 @@ class HeaderWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    const onMenu = (evt: MouseEvent) => this.handlers.onHeaderMenu(view, this.markerLine, evt)
     const header = renderHeader(createDiv(), this.summary, {
-      onMenu: (evt) => this.handlers.onHeaderMenu(view, this.markerLine, evt),
+      onMenu,
       onDefang: () => this.handlers.onDefang(view, this.markerLine)
     })
     header.addEventListener('mousedown', (e) => e.preventDefault())
+    // A right-click opens the header's own menu. Obsidian's, built at the
+    // caret, would need the caret on the marker, and its Insert items would
+    // then write onto the marker line and end the timeline.
+    header.addEventListener('contextmenu', (evt) => {
+      evt.preventDefault()
+      onMenu(evt)
+    })
     return header
   }
 
@@ -109,7 +134,7 @@ class NodeWidget extends WidgetType {
     node.setAttr('tabindex', '0')
     node.setAttr('aria-label', `${node.getAttribute('aria-label') ?? ''} (set event kind)`)
     const open = (evt: MouseEvent) => this.handlers.onKindClick(view, this.line, evt)
-    node.addEventListener('mousedown', (e) => e.preventDefault())
+    control(node, view)
     node.addEventListener('click', open)
     node.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return
@@ -135,8 +160,8 @@ class BandWidget extends WidgetType {
     return same(other.gap, this.gap)
   }
 
-  toDOM(): HTMLElement {
-    return renderGap(createDiv(), this.gap)
+  toDOM(view: EditorView): HTMLElement {
+    return menuHere(renderGap(createDiv(), this.gap), view)
   }
 
   ignoreEvent(): boolean {
@@ -153,8 +178,8 @@ class UntimedWidget extends WidgetType {
     return other.unread === this.unread
   }
 
-  toDOM(): HTMLElement {
-    return renderUntimedChip(createSpan(), this.unread)
+  toDOM(view: EditorView): HTMLElement {
+    return menuHere(renderUntimedChip(createSpan(), this.unread), view)
   }
 
   ignoreEvent(): boolean {
@@ -168,9 +193,10 @@ class GhostWidget extends WidgetType {
     return true
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     // CodeMirror's own placeholder class, so the theme draws it faint and unselectable.
-    return createSpan({ cls: ['cm-placeholder', 'cf-ntl-ghost'], text: GHOST, attr: { 'aria-hidden': 'true' } })
+    const ghost = createSpan({ cls: ['cm-placeholder', 'cf-ntl-ghost'], text: GHOST, attr: { 'aria-hidden': 'true' } })
+    return menuHere(ghost, view)
   }
 
   ignoreEvent(): boolean {
@@ -191,9 +217,13 @@ class AddWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const row = renderAddEvent(createDiv(), () => this.handlers.onAddEvent(view, this.markerLine))
-    row.addEventListener('mousedown', (e) => e.preventDefault())
-    return row
+    // The row keeps the editor from taking focus on the press, so it is given
+    // focus after the edit, with the caret on the new bullet, for typing.
+    const row = renderAddEvent(createDiv(), () => {
+      this.handlers.onAddEvent(view, this.markerLine)
+      view.focus()
+    })
+    return control(row, view)
   }
 
   ignoreEvent(): boolean {
@@ -214,10 +244,10 @@ class IconWidget extends WidgetType {
     return other.icon === this.icon && other.cls === this.cls
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const el = createSpan({ cls: this.cls, attr: { 'aria-hidden': 'true' } })
     setIcon(el, this.icon)
-    return el
+    return menuHere(el, view)
   }
 
   ignoreEvent(): boolean {
@@ -258,13 +288,17 @@ function indicatorMarks(out: Range<Decoration>[], from: number, iocs: TimelineIo
   }
 }
 
+/** Where the visual line holding a position starts; a fold makes one of several lines. */
+type LineStart = (pos: number) => number
+
 /** One card: its line classes, the widgets around it and the marks on its text. */
 function decorateEvent(
   out: Range<Decoration>[],
   state: EditorState,
   block: TimelineBlock,
   i: number,
-  handlers: NoteTimelineCallbacks
+  handlers: NoteTimelineCallbacks,
+  lineStart: LineStart
 ): void {
   const doc = state.doc
   const event = block.events[i]
@@ -272,7 +306,13 @@ function decorateEvent(
   // A blank line before the next event stays on this card, as timelineAt reads it.
   const endLine = next ? next.line - 1 : block.lastLine
   const top = doc.line(event.line + 1)
+  // Folded away with a heading or a list item above it, the card is not
+  // drawn, but a widget at its end would show after that fold's "…".
+  if (lineStart(top.from) < top.from) return
   const bottom = doc.line(endLine + 1)
+  // Folded details join the bullet line, and a joined line is drawn with the
+  // first line's classes only: the card closes on the last line still drawn.
+  const shownEnd = Math.max(event.line, doc.lineAt(lineStart(bottom.from)).number - 1)
   const sel = state.selection.main
   const card: string[] = [CLS.line, kindClass(event.kind)]
   if (event.kindExplicit) card.push(CLS.explicit)
@@ -301,8 +341,8 @@ function decorateEvent(
         indicatorMarks(out, line.from, indicatorSpans(line.text), attack)
       }
     }
-    if (n === endLine) cls.push(CLS.cardBottom)
-    if (n === endLine && !next) cls.push(CLS.last)
+    if (n === shownEnd) cls.push(CLS.cardBottom)
+    if (n === shownEnd && !next) cls.push(CLS.last)
     out.push(Decoration.line({ class: cls.join(' ') }).range(line.from))
   }
 
@@ -327,13 +367,15 @@ function decorateEvent(
 /**
  * The decorations for the timelines in view, and the atomic marker ranges for
  * all of them (a jump or a search can land on one off screen). Exported for
- * tests; the view plugin passes its state, cached blocks and visible ranges.
+ * tests; the view plugin passes its state, cached blocks, visible ranges and
+ * its line blocks, which know Obsidian's folds.
  */
 export function buildTimelineDecorations(
   state: EditorState,
   blocks: TimelineBlock[],
   visible: readonly { from: number; to: number }[],
-  handlers: NoteTimelineCallbacks
+  handlers: NoteTimelineCallbacks,
+  lineStart: LineStart = (pos) => state.doc.lineAt(pos).from
 ): { decorations: DecorationSet; atomic: DecorationSet } {
   const doc = state.doc
   const out: Range<Decoration>[] = []
@@ -348,7 +390,7 @@ export function buildTimelineDecorations(
     const end = doc.line(block.lastLine + 1).to
     if (!visible.some((r) => r.from <= end && r.to >= marker.from)) continue
     out.push(Decoration.line({ class: `${CLS.line} ${CLS.markerLine}` }).range(marker.from), header)
-    for (let i = 0; i < block.events.length; i++) decorateEvent(out, state, block, i, handlers)
+    for (let i = 0; i < block.events.length; i++) decorateEvent(out, state, block, i, handlers, lineStart)
   }
   return { decorations: Decoration.set(out, true), atomic: Decoration.set(atomic) }
 }
@@ -380,19 +422,72 @@ export class NoteTimelinePlugin implements PluginValue {
       update.docChanged ||
       update.selectionSet ||
       update.viewportChanged ||
+      // Obsidian folds and unfolds with an effect, which moves a card's end.
+      update.transactions.some((tr) => tr.effects.length > 0) ||
       livePreview(update.startState) !== livePreview(update.state)
     ) {
       this.build(update.view)
     }
   }
 
-  /** A click on a kind word opens the kind picker, as the node does. */
-  mousedown(evt: MouseEvent, view: EditorView): boolean {
+  /** The kind word under a left-button event, if any. */
+  private tagAt(evt: MouseEvent): Element | null {
     const target = evt.target as HTMLElement | null
-    const tag = evt.button === 0 ? target?.closest?.(`.${CLS.tag}`) : null
+    return evt.button === 0 ? (target?.closest?.(`.${CLS.tag}`) ?? null) : null
+  }
+
+  /** A press on a kind word is claimed, so the caret stays; the click opens the picker. */
+  mousedown(evt: MouseEvent): boolean {
+    return this.tagAt(evt) !== null
+  }
+
+  /**
+   * A click on a kind word opens the kind picker, as the node does. Opened on
+   * the press, Obsidian's menu took the click that ends it for a click
+   * outside the menu, and closed at once.
+   */
+  click(evt: MouseEvent, view: EditorView): boolean {
+    const tag = this.tagAt(evt)
     if (!tag) return false
     this.handlers.onKindClick(view, view.state.doc.lineAt(view.posAtDOM(tag)).number - 1, evt)
     return true
+  }
+
+  /**
+   * Text typed with the caret at an edge of a marker would join the marker
+   * and turn the timeline back into a plain list. It goes on a line of its
+   * own above the marker instead.
+   */
+  typed(view: EditorView, from: number, to: number, text: string): boolean {
+    // A deletion read off the DOM comes here with no text: that is not typing.
+    // Text an IME is still composing stays where the IME has it: moved, it
+    // would be written again by the next update, as Obsidian's own handlers know.
+    if (!text || view.compositionStarted) return false
+    const marker = this.markerAt(from, to)
+    if (marker < 0) return false
+    view.dispatch({
+      changes: { from: marker, insert: `${text}\n` },
+      selection: { anchor: marker + text.length },
+      userEvent: 'input.type'
+    })
+    return true
+  }
+
+  /** A paste at an edge of a marker would join it too: a line is opened above the marker, and the editor pastes there. */
+  paste(view: EditorView): boolean {
+    const { from, to } = view.state.selection.main
+    const marker = this.markerAt(from, to)
+    if (marker >= 0) view.dispatch({ changes: { from: marker, insert: '\n' }, selection: { anchor: marker } })
+    return false
+  }
+
+  /** The start of the marker that from..to lies at an edge of (or across), or -1. */
+  private markerAt(from: number, to: number): number {
+    let marker = -1
+    this.atomic.between(from, to, (start, end) => {
+      if (start <= from && to <= end) marker = start
+    })
+    return marker
   }
 
   private build(view: EditorView): void {
@@ -405,7 +500,13 @@ export class NoteTimelinePlugin implements PluginValue {
       this.doc = view.state.doc
       this.blocks = readTimelines(this.doc)
     }
-    const built = buildTimelineDecorations(view.state, this.blocks, view.visibleRanges, this.handlers)
+    const built = buildTimelineDecorations(
+      view.state,
+      this.blocks,
+      view.visibleRanges,
+      this.handlers,
+      (pos) => view.lineBlockAt(pos).from
+    )
     this.decorations = built.decorations
     this.atomic = built.atomic
   }
@@ -416,10 +517,19 @@ export function noteTimelineExtension(callbacks: NoteTimelineCallbacks): Extensi
   return ViewPlugin.define((view) => new NoteTimelinePlugin(view, callbacks), {
     decorations: (p) => p.decorations,
     eventHandlers: {
-      mousedown(evt, view) {
-        return this.mousedown(evt, view)
+      mousedown(evt) {
+        return this.mousedown(evt)
+      },
+      click(evt, view) {
+        return this.click(evt, view)
+      },
+      paste(_evt, view) {
+        return this.paste(view)
       }
     },
-    provide: (p) => EditorView.atomicRanges.of((view) => view.plugin(p)?.atomic ?? Decoration.none)
+    provide: (p) => [
+      EditorView.atomicRanges.of((view) => view.plugin(p)?.atomic ?? Decoration.none),
+      EditorView.inputHandler.of((view, from, to, text) => view.plugin(p)?.typed(view, from, to, text) ?? false)
+    ]
   })
 }

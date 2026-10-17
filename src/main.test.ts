@@ -130,6 +130,7 @@ describe('onload commands and listeners', () => {
       }
     })
     Object.assign(app.workspace as object, { onLayoutReady: () => {}, on: () => ({}) })
+    Object.assign(app.metadataCache as object, { on: () => ({}) })
     Object.assign(plugin, {
       loadSettings: async () => {},
       registerView: () => {},

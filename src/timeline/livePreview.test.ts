@@ -1,4 +1,4 @@
-import { EditorSelection, EditorState, type Extension } from '@codemirror/state'
+import { EditorSelection, EditorState, StateEffect, type Extension, type TransactionSpec } from '@codemirror/state'
 import { EditorView, type DecorationSet, type ViewUpdate, type WidgetType } from '@codemirror/view'
 import { editorLivePreviewField } from 'obsidian'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -330,10 +330,80 @@ describe('noteTimelineExtension: widgets', () => {
     expect(down.defaultPrevented).toBe(true)
   })
 
-  it('adds an event from the row under the last card', () => {
+  it('adds an event from the row under the last card, and gives the editor focus so typing goes into it', () => {
+    for (const press of [
+      (row: FakeEl) => row.click(),
+      (row: FakeEl) => row.dispatchEvent(fakeEvent('keydown', { key: 'Enter' }))
+    ]) {
+      const cb = callbacks()
+      const focus = vi.fn<() => void>()
+      const focusable = { focus } as unknown as EditorView
+      press(widgetOf(stateOf(CLICKFIX), cb, 'AddWidget', 9).toDOM(focusable) as unknown as FakeEl)
+      expect(cb.onAddEvent).toHaveBeenCalledExactlyOnceWith(focusable, 1)
+      // After the edit, which put the caret on the new bullet.
+      expect(focus).toHaveBeenCalledOnce()
+      expect(focus.mock.invocationCallOrder[0]).toBeGreaterThan(vi.mocked(cb.onAddEvent).mock.invocationCallOrder[0])
+    }
+  })
+
+  it('moves the caret onto a right-clicked node or add row, so the menu is built for what was clicked', () => {
+    // The caret sits in the Detection event; Obsidian builds its menu at the caret.
+    const state = stateOf(CLICKFIX, [8, 3])
+    for (const [name, line, at] of [
+      ['NodeWidget', 5, pos(state, 5, 2)],
+      ['AddWidget', 9, pos(state, 9, CLICKFIX[9].length)]
+    ] as const) {
+      const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+      const posAtDOM = vi.fn<(el: unknown) => number>(() => at)
+      const right = { dispatch, posAtDOM } as unknown as EditorView
+      const el = widgetOf(state, callbacks(), name, line).toDOM(right) as unknown as FakeEl
+      el.dispatchEvent(fakeEvent('contextmenu'))
+      expect(posAtDOM).toHaveBeenCalledWith(el)
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith({ selection: { anchor: at } })
+    }
+  })
+
+  it("opens the header's own menu on a right-click, and leaves the caret off the marker", () => {
+    // Obsidian's editor menu, built at the caret, has Insert items that write
+    // there: on the marker, they would join it and end the timeline.
+    const state = stateOf(CLICKFIX, [8, 3])
     const cb = callbacks()
-    dom(widgetOf(stateOf(CLICKFIX), cb, 'AddWidget', 9)).click()
-    expect(cb.onAddEvent).toHaveBeenCalledExactlyOnceWith(view, 1)
+    const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+    const right = { dispatch, posAtDOM: () => pos(state, 1) } as unknown as EditorView
+    const header = widgetOf(state, cb, 'HeaderWidget', 1).toDOM(right) as unknown as FakeEl
+    const menu = fakeEvent('contextmenu')
+    header.dispatchEvent(menu)
+    expect(cb.onHeaderMenu).toHaveBeenCalledExactlyOnceWith(right, 1, menu)
+    // Obsidian's editor menu leaves a handled right-click alone.
+    expect(menu.defaultPrevented).toBe(true)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it("moves the caret onto a right-clicked band, chip, icon or ghost, which the browser's own right-click does not", () => {
+    // Display only, they let a left click through to the editor; a right-click
+    // on one leaves the caret where it was, maybe in another event.
+    const lines = ['%% timeline %%', '- 11:04 a', '- 11:05 b', '    - Source: EDR process tree', '- ']
+    const state = stateOf(lines, [1, 3])
+    for (const [name, line, at] of [
+      ['BandWidget', 2, pos(state, 2, 2)],
+      ['IconWidget', 3, pos(state, 3, 6)],
+      ['GhostWidget', 4, pos(state, 4, 2)]
+    ] as const) {
+      const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+      const posAtDOM = vi.fn<(el: unknown) => number>(() => at)
+      const right = { dispatch, posAtDOM } as unknown as EditorView
+      const el = widgetOf(state, callbacks(), name, line).toDOM(right) as unknown as FakeEl
+      el.dispatchEvent(fakeEvent('contextmenu'))
+      expect(posAtDOM).toHaveBeenCalledWith(el)
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith({ selection: { anchor: at } })
+    }
+    const untimed = stateOf(CLICKFIX, [2, 3])
+    const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+    const right = { dispatch, posAtDOM: () => pos(untimed, 9, 2) } as unknown as EditorView
+    ;(widgetOf(untimed, callbacks(), 'UntimedWidget', 9).toDOM(right) as unknown as FakeEl).dispatchEvent(
+      fakeEvent('contextmenu')
+    )
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ selection: { anchor: pos(untimed, 9, 2) } })
   })
 
   it('lets clicks on display-only widgets through to the editor, and keeps them for the controls', () => {
@@ -379,7 +449,9 @@ describe('NoteTimelinePlugin', () => {
       state,
       visibleRanges: [{ from: 0, to: state.doc.length }],
       dom: { closest: (sel: string) => (inDescription && sel === '.pm-modal-description' ? {} : null) },
-      posAtDOM
+      posAtDOM,
+      // Nothing folded: every line is a visual line of its own.
+      lineBlockAt: (at: number) => state.doc.lineAt(at)
     }) as unknown as EditorView
 
   it('draws in a note editor in Live Preview', () => {
@@ -409,9 +481,14 @@ describe('NoteTimelinePlugin', () => {
       [0, 0],
       editorLivePreviewField.init(() => true)
     )
-    plugin.update({ startState: source, state: live, view: fakeView(live) } as unknown as ViewUpdate)
+    plugin.update({ startState: source, state: live, view: fakeView(live), transactions: [] } as unknown as ViewUpdate)
     expect(plugin.decorations.size).toBeGreaterThan(0)
-    plugin.update({ startState: live, state: source, view: fakeView(source) } as unknown as ViewUpdate)
+    plugin.update({
+      startState: live,
+      state: source,
+      view: fakeView(source),
+      transactions: []
+    } as unknown as ViewUpdate)
     expect(plugin.decorations.size).toBe(0)
   })
 
@@ -419,7 +496,13 @@ describe('NoteTimelinePlugin', () => {
     const a = stateOf(CLICKFIX, [2, 3])
     const plugin = new NoteTimelinePlugin(fakeView(a), callbacks())
     const b = stateOf(CLICKFIX, [8, 3])
-    plugin.update({ selectionSet: true, startState: a, state: b, view: fakeView(b) } as unknown as ViewUpdate)
+    plugin.update({
+      selectionSet: true,
+      startState: a,
+      state: b,
+      view: fakeView(b),
+      transactions: []
+    } as unknown as ViewUpdate)
     const active = [...lineClasses(b, plugin.decorations)].filter(([, c]) => c.includes(CLS.active))
     expect(active.map(([l]) => l)).toEqual([8])
   })
@@ -431,14 +514,178 @@ describe('NoteTimelinePlugin', () => {
     const plugin = new NoteTimelinePlugin(view, cb)
     const tag = new FakeEl('span', { cls: CLS.tag })
     const word = tag.createSpan({ text: 'Download' })
-    const evt = fakeEvent('mousedown', { target: word, button: 0 }) as unknown as MouseEvent
-    expect(plugin.mousedown(evt, view)).toBe(true)
-    expect(cb.onKindClick).toHaveBeenCalledExactlyOnceWith(view, 6, evt)
-    const prose = fakeEvent('mousedown', { target: new FakeEl('span'), button: 0 }) as unknown as MouseEvent
-    expect(plugin.mousedown(prose, view)).toBe(false)
-    const right = fakeEvent('mousedown', { target: word, button: 2 }) as unknown as MouseEvent
-    expect(plugin.mousedown(right, view)).toBe(false)
+    const mouse = (type: string, target: FakeEl, button = 0) =>
+      fakeEvent(type, { target, button }) as unknown as MouseEvent
+    // The press is claimed, so the caret stays; the menu opens on the click.
+    // Opened on the press, Obsidian's menu would take the click that follows
+    // for a click outside it and close at once.
+    expect(plugin.mousedown(mouse('mousedown', word))).toBe(true)
+    expect(cb.onKindClick).not.toHaveBeenCalled()
+    const click = mouse('click', word)
+    expect(plugin.click(click, view)).toBe(true)
+    expect(cb.onKindClick).toHaveBeenCalledExactlyOnceWith(view, 6, click)
+    const prose = new FakeEl('span')
+    expect(plugin.mousedown(mouse('mousedown', prose))).toBe(false)
+    expect(plugin.click(mouse('click', prose), view)).toBe(false)
+    expect(plugin.mousedown(mouse('mousedown', word, 2))).toBe(false)
+    expect(plugin.click(mouse('auxclick', word, 1), view)).toBe(false)
     expect(cb.onKindClick).toHaveBeenCalledOnce()
+  })
+
+  it('puts text typed at either edge of the marker on a line above it, so the marker stays whole', () => {
+    const lines = ['Intro', '%% timeline %%', '- 11:04 a']
+    const state = stateOf(lines)
+    const plugin = new NoteTimelinePlugin(fakeView(state), callbacks())
+    for (const ch of [0, lines[1].length]) {
+      const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+      const view = { state, dispatch } as unknown as EditorView
+      expect(plugin.typed(view, pos(state, 1, ch), pos(state, 1, ch), 'x')).toBe(true)
+      const next = state.update(dispatch.mock.calls[0][0]).state
+      expect(next.doc.toString()).toBe(['Intro', 'x', ...lines.slice(1)].join('\n'))
+      expect(next.selection.main.head).toBe(pos(state, 1, 1))
+      expect(readTimelines(next.doc)).toHaveLength(1)
+    }
+    // Typing anywhere else, or in source mode, is the editor's.
+    const view = { state, dispatch: vi.fn<(spec: TransactionSpec) => void>() } as unknown as EditorView
+    expect(plugin.typed(view, pos(state, 0, 5), pos(state, 0, 5), 'x')).toBe(false)
+    expect(plugin.typed(view, pos(state, 2), pos(state, 2), 'x')).toBe(false)
+    // A deletion read off the DOM (Android's backspace) comes as empty text: not typing.
+    expect(plugin.typed(view, pos(state, 1, 13), pos(state, 1, 14), '')).toBe(false)
+    const source = stateOf(
+      lines,
+      [1, 0],
+      [1, 0],
+      editorLivePreviewField.init(() => false)
+    )
+    expect(new NoteTimelinePlugin(fakeView(source), callbacks()).typed(view, pos(state, 1), pos(state, 1), 'x')).toBe(
+      false
+    )
+  })
+
+  it("leaves an IME's text to the editor while it composes there", () => {
+    // Moving text the IME is still composing would split it from the IME's
+    // own node: the next update writes it again. Obsidian's input handlers
+    // leave composition alone too.
+    const state = stateOf(['%% timeline %%', '- 11:04 a'])
+    const plugin = new NoteTimelinePlugin(fakeView(state), callbacks())
+    const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+    const view = { state, dispatch, compositionStarted: true } as unknown as EditorView
+    expect(plugin.typed(view, 0, 0, 'に')).toBe(false)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('opens a line above the marker for a paste at either edge of it, so the paste lands there', () => {
+    const lines = ['Intro', '%% timeline %%', '- 11:04 a']
+    for (const ch of [0, lines[1].length]) {
+      const state = stateOf(lines, [1, ch])
+      const plugin = new NoteTimelinePlugin(fakeView(state), callbacks())
+      const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+      // The editor pastes after this handler, at the caret it leaves.
+      expect(plugin.paste({ state, dispatch } as unknown as EditorView)).toBe(false)
+      const opened = state.update(dispatch.mock.calls[0][0]).state
+      const pasted = opened.update(opened.replaceSelection('https://evil.example/x')).state
+      expect(pasted.doc.toString()).toBe(['Intro', 'https://evil.example/x', ...lines.slice(1)].join('\n'))
+      expect(readTimelines(pasted.doc)).toHaveLength(1)
+    }
+    // A paste anywhere else is the editor's alone.
+    for (const at of [
+      [0, 5],
+      [2, 0]
+    ] as [number, number][]) {
+      const state = stateOf(lines, at)
+      const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+      expect(
+        new NoteTimelinePlugin(fakeView(state), callbacks()).paste({ state, dispatch } as unknown as EditorView)
+      ).toBe(false)
+      expect(dispatch).not.toHaveBeenCalled()
+    }
+  })
+
+  it('hands the editor its input guard through the extension', () => {
+    const lines = ['%% timeline %%', '- 11:04 a']
+    const state = EditorState.create({ doc: lines.join('\n'), extensions: noteTimelineExtension(callbacks()) })
+    const plugin = new NoteTimelinePlugin(fakeView(state), callbacks())
+    const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+    const view = { state, dispatch, plugin: () => plugin } as unknown as EditorView
+    const handlers = state.facet(EditorView.inputHandler)
+    expect(handlers.some((h) => h(view, 0, 0, 'x', () => state.update({})))).toBe(true)
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('closes a card on its last line drawn when Obsidian folds its details into the bullet line', () => {
+    const lines = ['%% timeline %%', '- 11:04 a', '    - seen first', '- 11:05 b', '    - Source: EDR process tree']
+    const state = stateOf(lines)
+    // A fold joins a bullet line and its details into one visual line, which
+    // carries the bullet line's classes; the classes of the lines under the
+    // fold are never drawn.
+    const folded =
+      (...bullets: number[]) =>
+      (at: number) => {
+        const n = state.doc.lineAt(at).number - 1
+        return pos(state, bullets.includes(n - 1) ? n - 1 : n)
+      }
+    const drawn = (lineStart: (at: number) => number) =>
+      lineClasses(
+        state,
+        buildTimelineDecorations(
+          state,
+          readTimelines(state.doc),
+          [{ from: 0, to: state.doc.length }],
+          callbacks(),
+          lineStart
+        ).decorations
+      )
+    const last = drawn(folded(3))
+    expect(last.get(3)).toEqual(expect.arrayContaining([CLS.cardTop, CLS.cardBottom, CLS.last]))
+    expect(last.get(1)).not.toContain(CLS.cardBottom)
+    const first = drawn(folded(1))
+    expect(first.get(1)).toEqual(expect.arrayContaining([CLS.cardTop, CLS.cardBottom, CLS.first]))
+    expect(first.get(4)).toEqual(expect.arrayContaining([CLS.cardBottom, CLS.last]))
+    // Nothing folded: each card still ends on its own last line.
+    const open = drawn((at) => state.doc.lineAt(at).from)
+    expect(open.get(1)).not.toContain(CLS.cardBottom)
+    expect(open.get(2)).toContain(CLS.cardBottom)
+  })
+
+  it('draws nothing at the end of a timeline folded away with its heading', () => {
+    // Obsidian folds a heading down to the next heading of its level. With no
+    // blank line before that one, the fold ends where the last card does, and
+    // a widget there would show on the heading's line, after its "…".
+    const lines = ['## Findings', '%% timeline %%', '- 11:04 a', '- ', '## Summary']
+    const state = stateOf(lines)
+    const edges = (lineStart?: (at: number) => number) =>
+      widgets(
+        state,
+        buildTimelineDecorations(
+          state,
+          readTimelines(state.doc),
+          [{ from: 0, to: state.doc.length }],
+          callbacks(),
+          lineStart
+        ).decorations
+      )
+        .filter((w) => w.name === 'AddWidget' || w.name === 'GhostWidget')
+        .map((w) => w.name)
+    expect(edges()).toEqual(['GhostWidget', 'AddWidget'])
+    const foldEnd = pos(state, 3, 2)
+    expect(edges((at) => (at <= foldEnd ? 0 : state.doc.lineAt(at).from))).toEqual([])
+  })
+
+  it('reads the folds off the view, and redraws when a fold opens or closes', () => {
+    const lines = ['%% timeline %%', '- 11:04 a', '- 11:05 b', '    - Source: EDR process tree']
+    const state = stateOf(lines)
+    let fold = false
+    const view = {
+      ...fakeView(state),
+      lineBlockAt: (at: number) => ({ from: fold && at >= pos(state, 3) ? pos(state, 2) : state.doc.lineAt(at).from })
+    } as unknown as EditorView
+    const plugin = new NoteTimelinePlugin(view, callbacks())
+    expect(lineClasses(state, plugin.decorations).get(3)).toContain(CLS.last)
+    fold = true
+    // Obsidian folds with an effect: no change to the text or the selection.
+    const tr = state.update({ effects: StateEffect.define<null>().of(null) })
+    plugin.update({ startState: state, state, view, transactions: [tr] } as unknown as ViewUpdate)
+    expect(lineClasses(state, plugin.decorations).get(2)).toContain(CLS.last)
   })
 
   it('gives the editor its atomic ranges through the extension', () => {

@@ -1,6 +1,17 @@
-import { Menu, Notice, SuggestModal, editorInfoField, type App, type Editor, type Plugin } from 'obsidian'
-import type { EditorView } from '@codemirror/view'
-import { copyDefanged } from '../ui/defangMenu'
+import {
+  Menu,
+  Notice,
+  Platform,
+  SuggestModal,
+  editorInfoField,
+  type App,
+  type Editor,
+  type EditorPosition,
+  type Plugin
+} from 'obsidian'
+import { EditorView } from '@codemirror/view'
+import { defangText } from '../soc/toolbox'
+import { copyDefanged, copyText as copyToClipboard } from '../ui/defangMenu'
 import {
   addEventAtEnd,
   addEventBelow,
@@ -11,6 +22,7 @@ import {
   deleteEvent,
   makeTimeline,
   moveEvent,
+  selectedLines,
   setEventKind,
   sortEventsByTime,
   type TimelineEdit
@@ -18,7 +30,7 @@ import {
 import { kindLabel } from './dom'
 import { noteTimelineExtension } from './livePreview'
 import { findTimelines, timelineAt, type EventKind } from './parse'
-import { decorateTimelineSections } from './reading'
+import { decorateTimelineSections, redrawOnTimelineChange } from './reading'
 
 type KindChoice = EventKind | 'auto'
 
@@ -115,9 +127,14 @@ function defang(editor: Editor, line: number): void {
   applyEdit(editor, result.edit)
 }
 
+/** Copy for ticket. The text comes back defanged already, so the notice says
+ * whether the timeline itself held anything live, not whether the copy did. */
 function copy(editor: Editor, line: number): void {
-  const text = copyText(noteLines(editor), line)
-  if (text !== null) copyDefanged(text)
+  const lines = noteLines(editor)
+  const text = copyText(lines, line)
+  if (text === null) return
+  const live = defangTimeline(lines, line)?.changed ?? false
+  copyToClipboard(defangText(text), live ? 'Copied, defanged' : 'Copied (nothing to defang)')
 }
 
 /**
@@ -130,8 +147,7 @@ export function addTimelineItems(menu: Menu, editor: Editor, line: number, app: 
   const lines = noteLines(editor)
   const at = timelineAt(findTimelines(lines), line)
   if (!at) {
-    const from = editor.getCursor('from').line
-    const to = editor.getCursor('to').line
+    const [from, to] = selectedLines(editor)
     if (!makeTimeline(lines, from, to)) return
     menu.addItem((item) =>
       item
@@ -195,38 +211,97 @@ export function addTimelineItems(menu: Menu, editor: Editor, line: number, app: 
 
 /** What Obsidian's Live Preview opens on a click: a bare URL, an email or a link. */
 const LINK_TARGET = '.cm-url, .cm-link, .cm-underline, .cm-hmd-barelink, .external-link, a'
+/** Links that stay in the vault, a note or a tag: they open as anywhere else. */
+const VAULT_LINK = '.cm-hmd-internal-link, .cm-hashtag, a.internal-link, a.tag'
+/** Rendered HTML rather than editor text: an embed's links, or the icon after a link to a site. */
+const RENDERED = 'a, .external-link'
+/** Obsidian's names for a link that leaves the vault. */
+const EXTERNAL = new Set(['external-link', 'external-ref-link'])
 
 /**
- * Whether a click lands on a link inside a timeline. Such a click must not
- * open it: the text is pasted evidence, and its URL may be the attacker's.
+ * Whether a click lands on a link inside a timeline that would leave the
+ * vault: a URL, an email or a link to a site. Such a click must not open it:
+ * the text is pasted evidence, and its URL may be the attacker's. A markdown
+ * link's text reads the same whether it points at a note or at a site, so
+ * for editor text Obsidian's own reading of the link decides (`tokenType`);
+ * when it cannot say, the link is kept from opening.
  */
-export function timelineLinkAt(target: EventTarget | null): HTMLElement | null {
+export function timelineLinkAt(
+  target: EventTarget | null,
+  tokenType: () => string | null = () => null
+): HTMLElement | null {
   // A text node or the window has no closest(); only an element can be a link.
   const el = target as HTMLElement | null
   if (typeof el?.closest !== 'function' || !el.closest('.cf-ntl-line')) return null
-  return el.closest<HTMLElement>(LINK_TARGET)
+  const link = el.closest<HTMLElement>(LINK_TARGET)
+  if (!link || link.closest(VAULT_LINK)) return null
+  // Inside an embed, Obsidian's reading is of the embed's own link, not this one.
+  if (link.closest(RENDERED)) return link
+  const type = tokenType()
+  return type !== null && !EXTERNAL.has(type) ? null : link
+}
+
+/** The Obsidian editor behind a CodeMirror view, when it is a note's editor. */
+function editorOf(view: EditorView): Editor | null {
+  return view.state.field(editorInfoField, false)?.editor ?? null
+}
+
+/** Obsidian's editor reads the link under the pointer with this before it opens one. Not in its typings. */
+interface ClickableTokens {
+  getClickableTokenAt(pos: EditorPosition): { type: string } | null
+}
+
+function readsTokens(editor: Editor): editor is Editor & ClickableTokens {
+  return 'getClickableTokenAt' in editor && typeof editor.getClickableTokenAt === 'function'
+}
+
+/** What Obsidian takes the link under the pointer for ('internal-link', 'external-link', 'tag'…), or null. */
+function clickableType(evt: { clientX: number; clientY: number }, el: HTMLElement): string | null {
+  const dom = el.closest<HTMLElement>('.cm-editor')
+  const view = dom ? EditorView.findFromDOM(dom) : null
+  const editor = view ? editorOf(view) : null
+  const at = view?.posAtCoords({ x: evt.clientX, y: evt.clientY }) ?? null
+  if (!editor || !readsTokens(editor) || at === null) return null
+  return editor.getClickableTokenAt(editor.offsetToPos(at))?.type ?? null
 }
 
 /**
  * Stops a click on a timeline link before Obsidian opens it. The caret was
  * already placed on mousedown, so a plain click still edits the chip; a
  * Mod-click, Obsidian's open gesture, copies the value defanged instead. The
- * middle button (auxclick) is stopped the same way.
+ * middle button (auxclick) is stopped the same way. Obsidian's editor also
+ * opens a link on mousedown, for the middle button and for any tap on
+ * Android: that press is stopped too, and a tap still places the caret.
  */
 function guardTimelineLinks(evt: MouseEvent): void {
-  const link = timelineLinkAt(evt.target)
+  const press = evt.type === 'mousedown'
+  if (press && evt.button !== 1 && !Platform.isAndroidApp) return
+  const target = evt.target as HTMLElement | null
+  const link = timelineLinkAt(target, () => (target ? clickableType(evt, target) : null))
   if (!link) return
-  evt.preventDefault()
   evt.stopPropagation()
+  if (!press || evt.button === 1) evt.preventDefault()
   if (evt.type === 'click' && (evt.metaKey || evt.ctrlKey)) {
     const value = link.closest('.cf-ntl-ioc')?.textContent ?? link.textContent ?? ''
     if (value.trim()) copyDefanged(value.trim())
   }
 }
 
-/** The Obsidian editor behind a CodeMirror view, when it is a note's editor. */
-function editorOf(view: EditorView): Editor | null {
-  return view.state.field(editorInfoField, false)?.editor ?? null
+/**
+ * On iOS, Obsidian's editor opens a link from a tap of its own: each touch
+ * adds a touchend listener to the window, which at the end of a tap calls the
+ * click handler directly, with no click event for the guard above to stop.
+ * This listener is added once, at load, so it runs before that one and keeps
+ * it from running for a tap on a timeline link. Every other listener has had
+ * the touch by then, the tap still places the caret, and the click the
+ * browser fires after it is stopped above.
+ */
+function guardTimelineTaps(evt: TouchEvent): void {
+  const touch = evt.changedTouches[0]
+  const target = evt.target as HTMLElement | null
+  if (touch && timelineLinkAt(target, () => (target ? clickableType(touch, target) : null))) {
+    evt.stopImmediatePropagation()
+  }
 }
 
 /**
@@ -260,10 +335,25 @@ export function registerNoteTimeline(plugin: Plugin): void {
     })
   )
   plugin.registerMarkdownPostProcessor((el, ctx) => decorateTimelineSections(el, ctx))
-  // Capture phase on the document, so it runs before Obsidian's own handler opens the link.
-  for (const type of ['click', 'auxclick'] as const) {
-    plugin.registerDomEvent(activeDocument, type, guardTimelineLinks, { capture: true })
+  // Obsidian keeps a rendered section while its text is unchanged, and the
+  // marker is the line above the list: adding or removing it alone redraws nothing.
+  redrawOnTimelineChange(plugin)
+  // Capture phase on each window's document, so it runs before Obsidian's own
+  // handlers open the link; a popout window has a document of its own.
+  const guarded = new WeakSet<Document>()
+  const guard = (doc: Document) => {
+    if (guarded.has(doc)) return
+    guarded.add(doc)
+    for (const type of ['click', 'auxclick', 'mousedown'] as const) {
+      plugin.registerDomEvent(doc, type, guardTimelineLinks, { capture: true })
+    }
   }
+  guard(activeDocument)
+  // Popouts come back with the layout, after the plugin loads; one opened later says so.
+  app.workspace.onLayoutReady(() => app.workspace.iterateAllLeaves((leaf) => guard(leaf.getContainer().doc)))
+  plugin.registerEvent(app.workspace.on('window-open', (win) => guard(win.doc)))
+  // iOS has the one window, and Obsidian's tap listener goes on it.
+  if (Platform.isIosApp) plugin.registerDomEvent(window, 'touchend', guardTimelineTaps)
   plugin.registerEvent(
     app.workspace.on('editor-menu', (menu, editor) => addTimelineItems(menu, editor, editor.getCursor().line, app))
   )
@@ -280,9 +370,7 @@ export function registerNoteTimeline(plugin: Plugin): void {
         return true
       }
     })
-  command('timeline-make', 'Make timeline', (editor) =>
-    makeTimeline(noteLines(editor), editor.getCursor('from').line, editor.getCursor('to').line)
-  )
+  command('timeline-make', 'Make timeline', (editor) => makeTimeline(noteLines(editor), ...selectedLines(editor)))
   command('timeline-add-event', 'Add timeline event below', (editor, line) => addEventBelow(noteLines(editor), line))
   command('timeline-move-up', 'Move timeline event up', (editor, line) => moveEvent(noteLines(editor), line, 'up'))
   command('timeline-move-down', 'Move timeline event down', (editor, line) =>

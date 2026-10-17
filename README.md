@@ -93,6 +93,11 @@ trail, hand over cleanly.
   never opened or rendered, and anything it could not read is reported as
   unread rather than absent. It states what the message says and never
   reaches a verdict; that stays with you, on the case it can create.
+- Note timeline: right-click the bullets you write findings in and pick
+  Make timeline to draw them as an event timeline in the note (times,
+  derived gaps, event kinds, defanged indicators), in Live Preview and
+  Reading view. The note stays a plain bullet list, and Copy timeline for
+  ticket gives a defanged, time-first plain-text version
 - Analyst toolbox on a selection (defang, refang, decode, read a timestamp,
   hash), entirely offline
 

