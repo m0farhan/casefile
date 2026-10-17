@@ -45,6 +45,18 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.45.1] - 2026-10-17
+
+### Changed
+
+- **The case sidebar makes way for the board.** Bringing a board or the boards list to the front shuts the sidebar the case panel is showing in, and coming back to the case note opens it again. It follows what is actually in front: a tab chosen, a case note's tab closed, a board opened into the tab you are on, stacked and split tab groups. A sidebar you opened or shut yourself is left as you set it, and so is the panel when boards are set to open cases in it (Settings › Open tasks in: Side panel). Boards now open as the active tab whatever "Always focus new tabs" says
+- **Details name what you paste.** Paste or type a value with the field box empty and the field is filled in: Email (also `Name <address>`), Message-ID, IP (with a port, a range or IPv6), URL (with or without `https://`), Domain, Hash (MD5 to SHA-512), File path, Registry key, User (`DOMAIN\user`) and Command line. A value is kept exactly as pasted; only an indicator copied in a bullet, backticks or quotes is unwrapped, in sight before you add it. A field name you typed is never replaced, and a name filled in for you is replaced as you type over it. A value pasted into the field box moves to the value box when it cannot be a name, and pasted lines of bare values become rows named by their kind (or by the name you typed for them)
+
+### Fixed
+
+- Comments show the blank lines between their paragraphs: in the comments list, in the case timeline, and in the case report, where an entry's later paragraphs now stay under its bullet. The text was always saved with them
+- A table row pasted into Details keeps an escaped pipe (`\|`) and inline code or bold inside a cell, and `__main__` is no longer read as bold
+
 ## [2.45.0] - 2026-10-17
 
 ### Added
