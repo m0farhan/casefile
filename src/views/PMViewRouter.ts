@@ -9,14 +9,15 @@ export class PMViewRouter {
   async openDashboard(): Promise<void> {
     const ws = this.plugin.app.workspace
     const leaf = ws.getLeaf('tab')
-    await leaf.setViewState({ type: PM_DASHBOARD_VIEW_TYPE, state: {} })
+    // Active whatever 'Always focus new tabs' says: a board opened is the tab worked in next.
+    await leaf.setViewState({ type: PM_DASHBOARD_VIEW_TYPE, state: {}, active: true })
     await ws.revealLeaf(leaf)
   }
 
   async openProject(file: TFile): Promise<void> {
     const ws = this.plugin.app.workspace
     const leaf = ws.getLeaf('tab')
-    await leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: file.path } })
+    await leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: file.path }, active: true })
     await ws.revealLeaf(leaf)
   }
 
@@ -27,7 +28,7 @@ export class PMViewRouter {
    * Every other route to a board still opens a tab.
    */
   async switchToBoard(leaf: WorkspaceLeaf, file: TFile): Promise<void> {
-    await leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: file.path } })
+    await leaf.setViewState({ type: PM_PROJECT_VIEW_TYPE, state: { filePath: file.path }, active: true })
     await this.plugin.app.workspace.revealLeaf(leaf)
   }
 

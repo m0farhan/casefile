@@ -1,4 +1,4 @@
-import { ItemView, Notice, WorkspaceLeaf, TFile, setIcon } from 'obsidian'
+import { ItemView, Notice, Platform, WorkspaceLeaf, TFile, setIcon, type View, type WorkspaceSidedock } from 'obsidian'
 import { activityValue, sightingsIndex } from '../soc/ioc'
 import type PMPlugin from '../main'
 import type { Project, Task } from '../types'
@@ -24,8 +24,17 @@ import { CollapseToggle } from '../ui/primitives/CollapseToggle'
 import { isTerminalStatus } from '../utils'
 import { today } from '../dates'
 import { TASK_FRONTMATTER_KEY } from '../store/YamlParser'
+import { PM_PROJECT_VIEW_TYPE } from './ProjectView'
+import { PM_DASHBOARD_VIEW_TYPE } from './DashboardView'
 
 export const CASEFILE_TASK_DETAIL_VIEW_TYPE = 'casefile-task-detail'
+
+/** What the main pane has in front: its view, the file it shows, and the tab group it sits in. */
+interface Front {
+  view: View
+  file: string | undefined
+  group: WorkspaceLeaf['parent'] | null
+}
 
 /**
  * Read-only audit timeline rendered from task.activity (store-stamped field
@@ -153,6 +162,12 @@ export class TaskDetailView extends ItemView {
   private fitTitle: (() => void) | null = null
   /** Counts case notes brought to the front; only the latest one is followed. */
   private followSeq = 0
+  /** What the main pane last had in front, and its tab group: a click back into it is not a change. */
+  private front: Front | null = null
+  /** The panel sat in a sidebar at the last look: moved into one, it takes what is in front as it finds it. */
+  private wasDocked = false
+  /** The panel shut its sidebar for a board, so the case note back in front opens it again. */
+  private shutForBoard = false
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -196,6 +211,20 @@ export class TaskDetailView extends ItemView {
     )
     // The panel shows whichever case note is in front: opened, or its tab chosen.
     this.registerEvent(this.app.workspace.on('file-open', (file) => void this.followFile(file)))
+    // The panel goes with the case note, not the board: a board in front shuts its sidebar.
+    // Opened from the board (Open in sidebar), that board is already in front, so it stays.
+    // A tab closed, or a board loaded into the tab in front, changes no active leaf: the layout.
+    const inFront = this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit)
+    this.front = inFront === this.leaf ? null : this.frontOf(inFront)
+    this.wasDocked = this.dock() !== null
+    this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => this.fitToFront(leaf)))
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.fitToFront(null)))
+    // The sidebar opened again, by hand or onto another tab: a later shut is the analyst's.
+    this.registerEvent(
+      this.app.workspace.on('resize', () => {
+        if (this.dock()?.collapsed === false) this.shutForBoard = false
+      })
+    )
     this.registerDomEvent(this.contentEl, 'focusout', (e) => {
       if (this.syncOnBlur && !(e.relatedTarget instanceof Node && this.contentEl.contains(e.relatedTarget))) {
         this.queueSync()
@@ -212,9 +241,8 @@ export class TaskDetailView extends ItemView {
    */
   private async followFile(file: TFile | null): Promise<void> {
     if (!file || file.path === this.task?.filePath) return
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter
-    const id: unknown = fm?.[TASK_FRONTMATTER_KEY] === true ? fm.id : null
-    if (typeof id !== 'string' || !id) return
+    const id = this.caseIdOf(file)
+    if (!id) return
     const seq = ++this.followSeq
     const projects = await this.plugin.store.loadAllProjects(this.plugin.settings.projectsFolder)
     // A later note came to the front while the boards loaded: that one is followed.
@@ -226,6 +254,93 @@ export class TaskDetailView extends ItemView {
       state: { projectPath: project.filePath, taskId: id },
       active: false
     })
+  }
+
+  /** The case id a note carries in its frontmatter, or null for any other note. */
+  private caseIdOf(file: TFile | null | undefined): string | null {
+    const fm = file ? this.app.metadataCache.getFileCache(file)?.frontmatter : null
+    const id: unknown = fm?.[TASK_FRONTMATTER_KEY] === true ? fm.id : null
+    return typeof id === 'string' && id ? id : null
+  }
+
+  /** The sidebar the panel sits in, or null when it sits in the main pane. */
+  private dock(): WorkspaceSidedock | null {
+    const { workspace } = this.app
+    const root = this.leaf.getRoot()
+    return root === workspace.leftSplit || root === workspace.rightSplit ? (root as WorkspaceSidedock) : null
+  }
+
+  private frontOf(leaf: WorkspaceLeaf | null): Front | null {
+    return leaf
+      ? { view: leaf.view, file: (leaf.view as { file?: TFile | null }).file?.path, group: leaf.parent }
+      : null
+  }
+
+  /**
+   * What is in front now where the last front was: that tab while it still
+   * shows it (stacked tabs all show, so the group's first is not it), else the
+   * tab its group moved to after it closed or a view replaced it.
+   */
+  private shownWhereFrontWas(): WorkspaceLeaf | null {
+    const front = this.front
+    if (!front) return null
+    const { view } = front
+    if (view.leaf.view === view && view.containerEl.isShown()) {
+      // Dragged into another group, it is looked for there from now on.
+      if (view.leaf.getRoot() === this.app.workspace.rootSplit) front.group = view.leaf.parent
+      return view.leaf
+    }
+    // ponytail: the group's current tab is internal (children, currentTab); the newest shown tab stands in without it.
+    const tabs = front.group as unknown as { children?: WorkspaceLeaf[]; currentTab?: number } | null
+    const current = tabs?.children?.[tabs.currentTab ?? -1]
+    if (current?.view.containerEl.isShown()) return current
+    return front.group ? this.app.workspace.getMostRecentLeaf(front.group) : null
+  }
+
+  /**
+   * Something new came to the front of the main pane. A board or the boards
+   * list shuts the sidebar the panel is showing in, unless a case note is
+   * still on screen in another pane or the sidebar; the case note back in front opens it
+   * again. A sidebar opened or shut by hand since, or showing another tab, is
+   * left as it is, and so is a panel that boards open cases in.
+   * ponytail: the shut is remembered in memory only; after a restart the case note does not reopen it.
+   */
+  private fitToFront(leaf: WorkspaceLeaf | null): void {
+    const { workspace } = this.app
+    // On a phone the sidebar is a drawer over the note, never left open beside it.
+    if (Platform.isPhone) return
+    const side = this.dock()
+    const justDocked = side !== null && !this.wasDocked
+    this.wasDocked = side !== null
+    // A sidebar leaf, another window, or a layout change: the main pane's tab in front.
+    if (leaf?.getRoot() !== workspace.rootSplit) {
+      leaf = this.shownWhereFrontWas() ?? workspace.getMostRecentLeaf(workspace.rootSplit)
+    }
+    // The panel itself in the main pane is never what it makes way for.
+    const front = leaf === this.leaf ? null : this.frontOf(leaf)
+    if (!leaf || !front || (front.view === this.front?.view && front.file === this.front.file)) return
+    // Kept while the panel sits in the main pane too, and taken as found when it is docked.
+    this.front = front
+    if (!side || justDocked) return
+    const type = leaf.view.getViewType()
+    if (type === PM_PROJECT_VIEW_TYPE || type === PM_DASHBOARD_VIEW_TYPE) {
+      if (this.plugin.settings.openTaskIn === 'panel' || side.collapsed || !this.containerEl.isShown()) return
+      // A note in the board's own tab group is behind it, or stacked under it: not beside it.
+      const caseBeside = workspace
+        .getLeavesOfType('markdown')
+        .some(
+          (l) =>
+            l.parent !== leaf.parent &&
+            l.view.containerEl.isShown() &&
+            this.caseIdOf((l.view as { file?: TFile | null }).file) !== null
+        )
+      if (caseBeside) return
+      side.collapse()
+      this.shutForBoard = true
+    } else if (this.shutForBoard && this.caseIdOf((leaf.view as { file?: TFile | null }).file)) {
+      this.shutForBoard = false
+      side.expand()
+    }
   }
 
   onResize(): void {

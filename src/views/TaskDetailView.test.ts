@@ -149,6 +149,8 @@ interface Panel {
   persistTitle(input: { value: string }): Promise<void>
   syncExternal(): Promise<void>
   followFile(file: { path: string } | null): Promise<void>
+  fitToFront(leaf: unknown): void
+  onResize(): void
   leaf: { setViewState(state: unknown): Promise<void> }
   contentEl: { isConnected: boolean }
 }
@@ -500,5 +502,339 @@ describe('TaskDetailView follows the case note in front', () => {
     const again = panel.followFile({ path: second.filePath ?? '' })
     await Promise.all([first, last, again])
     expect(shown).toHaveLength(1)
+  })
+})
+
+describe('TaskDetailView shuts its sidebar when a board comes to the front', () => {
+  type Tab = {
+    getRoot: () => object
+    parent: object
+    view: {
+      getViewType: () => string
+      file: { path: string } | null
+      containerEl: { isShown: () => boolean }
+      leaf?: Tab
+    }
+  }
+  async function docked(settings: Partial<typeof DEFAULT_SETTINGS> = {}) {
+    const ctx = await setup()
+    const rootSplit = {}
+    const rightSplit = { collapsed: false, collapse: vi.fn<() => void>(), expand: vi.fn<() => void>() }
+    rightSplit.collapse.mockImplementation(() => void (rightSplit.collapsed = true))
+    rightSplit.expand.mockImplementation(() => void (rightSplit.collapsed = false))
+    const group = {}
+    const view = (type: string, path?: string) => ({
+      getViewType: () => type,
+      file: path ? { path } : null,
+      containerEl: { isShown: () => false }
+    })
+    const tab = (v: Tab['view'], parent = group): Tab => {
+      const t: Tab = { getRoot: () => rootSplit, parent, view: v }
+      v.leaf = t
+      return t
+    }
+    const casePath = ctx.panel.task.filePath ?? ''
+    const note = tab(view('markdown', casePath))
+    const plain = tab(view('markdown', 'Notes/plain.md'))
+    const board = tab(view('casefile-project'))
+    const boards = tab(view('casefile-dashboard'))
+    const open = [note, plain, board, boards]
+    // The tab in front of the main pane, as Obsidian's getMostRecentLeaf(rootSplit) gives it.
+    let inFront: Tab = note
+    const handlers = new Map<string, (leaf?: unknown) => void>()
+    const panel = ctx.panel as Panel & Record<string, unknown>
+    panel.plugin = { ...(panel.plugin as object), settings: { ...DEFAULT_SETTINGS, ...settings } }
+    panel.leaf = { ...ctx.panel.leaf, getRoot: () => rightSplit } as Panel['leaf']
+    panel.containerEl = { isShown: () => !rightSplit.collapsed }
+    panel.registerEvent = () => {}
+    panel.registerDomEvent = () => {}
+    const app = panel.app as unknown as Record<string, Record<string, unknown>>
+    app.workspace = {
+      rootSplit,
+      rightSplit,
+      leftSplit: {},
+      // The main pane's newest tab, or a tab group's newest shown one.
+      getMostRecentLeaf: (root: unknown) =>
+        root === rootSplit
+          ? inFront
+          : (open.find((l) => l.parent === root && l === inFront) ??
+            open.find((l) => l.parent === root && l.view.containerEl.isShown()) ??
+            null),
+      getLeavesOfType: (type: string) => open.filter((l) => l.view.getViewType() === type),
+      iterateRootLeaves: (fn: (l: Tab) => void) => open.forEach(fn),
+      on: (name: string, fn: (leaf?: unknown) => void) => void handlers.set(name, fn)
+    }
+    app.vault.on = () => ({})
+    app.metadataCache.on = () => ({})
+    const notes = new Map<string, Record<string, unknown>>([
+      [casePath, { 'pm-task': true, id: ctx.panel.task.id }],
+      ['Notes/plain.md', { tags: ['reading'] }]
+    ])
+    app.metadataCache.getFileCache = (f: { path: string }) => ({ frontmatter: notes.get(f.path) })
+    /** A tab brought to the front by a click on it: only that tab is shown in its group, unless stacked. */
+    let stacked = false
+    const stack = () => void (stacked = true)
+    const show = (t: Tab) => {
+      inFront = t
+      for (const l of open) if (l.parent === t.parent) l.view.containerEl.isShown = () => stacked || l === t
+      handlers.get('active-leaf-change')?.(t)
+    }
+    /** The layout changed with no leaf made active: a tab closed, a view loaded into the tab in front. */
+    const relayout = (t: Tab, closed?: Tab) => {
+      if (closed) {
+        open.splice(open.indexOf(closed), 1)
+        closed.view.containerEl.isShown = () => false // detached: out of the page
+      }
+      for (const l of open) if (l.parent === t.parent) l.view.containerEl.isShown = () => stacked || l === t
+      handlers.get('layout-change')?.()
+    }
+    /** Obsidian's workspace 'resize', fired once a sidebar has opened or shut, whichever tab it shows. */
+    const resized = () => handlers.get('resize')?.()
+    // Open as note: the case note in front, the board behind it.
+    note.view.containerEl.isShown = () => true
+    await (panel as unknown as { onOpen(): Promise<void> }).onOpen()
+    return {
+      ...ctx,
+      panel,
+      rightSplit,
+      casePath,
+      note,
+      plain,
+      board,
+      boards,
+      open,
+      view,
+      tab,
+      show,
+      relayout,
+      stack,
+      resized,
+      handlers
+    }
+  }
+
+  it('the board or the boards list in front shuts the sidebar; the case note back in front opens it', async () => {
+    const { rightSplit, note, board, boards, show } = await docked()
+    show(board)
+    expect(rightSplit.collapsed).toBe(true)
+    show(note)
+    expect(rightSplit.collapsed).toBe(false)
+    show(boards)
+    expect(rightSplit.collapsed).toBe(true)
+  })
+
+  it('opened from the board, or opened again by hand there, a click back into the board leaves it open', async () => {
+    const ctx = await docked()
+    ctx.show(ctx.board)
+    ctx.rightSplit.expand() // by hand, or Open in sidebar from the card menu
+    ctx.resized()
+    ctx.show(ctx.board)
+    expect(ctx.rightSplit.collapsed).toBe(false)
+  })
+
+  it('closing the case note tab, with the panel in use, shuts it for the board left in front', async () => {
+    const { rightSplit, note, board, relayout } = await docked()
+    relayout(board, note)
+    expect(rightSplit.collapsed).toBe(true)
+  })
+
+  it('in a split main pane, the board left where the closed case note was is what counts', async () => {
+    const { rightSplit, note, board, open, tab, view, relayout, ...ctx } = await docked()
+    const other = tab(view('markdown', 'Notes/other.md'), {})
+    other.view.containerEl.isShown = () => true
+    open.push(other)
+    ctx.show(note) // the case note in front on the left; the other pane was clicked in more recently
+    const app = ctx.panel.app as unknown as {
+      workspace: { rootSplit: object; getMostRecentLeaf: (root: unknown) => Tab | null }
+    }
+    const byGroup = app.workspace.getMostRecentLeaf
+    app.workspace.getMostRecentLeaf = (root) => (root === app.workspace.rootSplit ? other : byGroup(root))
+    relayout(board, note)
+    expect(rightSplit.collapsed).toBe(true)
+  })
+
+  it('a board loaded into the tab in front shuts it, with no tab change', async () => {
+    const { rightSplit, plain, view, show, relayout } = await docked()
+    show(plain)
+    plain.view = view('casefile-dashboard') // Open boards pane into this tab, or Open current file as a board
+    plain.view.leaf = plain
+    relayout(plain)
+    expect(rightSplit.collapsed).toBe(true)
+  })
+
+  it('a case note opened in place in the tab in front opens it again', async () => {
+    const { rightSplit, plain, board, casePath, show } = await docked()
+    show(board)
+    show(plain)
+    expect(rightSplit.collapsed).toBe(true)
+    plain.view.file = { path: casePath } // a link to the case clicked in the plain note: the same view loads it
+    show(plain)
+    expect(rightSplit.collapsed).toBe(false)
+  })
+
+  it('another note in front neither shuts nor opens it', async () => {
+    const { rightSplit, plain, board, show } = await docked()
+    show(plain)
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
+    show(board)
+    show(plain)
+    expect(rightSplit.collapsed).toBe(true)
+  })
+
+  it('a sidebar shut by hand stays shut when the case note comes to the front', async () => {
+    const { rightSplit, note, plain, show } = await docked()
+    rightSplit.collapse()
+    show(plain)
+    show(note)
+    expect(rightSplit.expand).not.toHaveBeenCalled()
+  })
+
+  it('opened again on the board, even onto another sidebar tab, then shut by hand: it stays shut for the case note', async () => {
+    const { panel, rightSplit, note, board, show, resized } = await docked()
+    show(board)
+    panel.containerEl = { isShown: () => false } // Open case timeline: the sidebar opens on its tab
+    rightSplit.expand()
+    resized()
+    rightSplit.collapse()
+    show(note)
+    expect(rightSplit.expand).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves it open while a case note shows in another pane beside the board', async () => {
+    const { rightSplit, board, open, tab, view, casePath, show } = await docked()
+    const beside = tab(view('markdown', casePath), {})
+    beside.view.containerEl.isShown = () => true
+    open.push(beside)
+    show(board)
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
+  })
+
+  it('a case note stacked under the board in its own tab group does not keep it open', async () => {
+    const { rightSplit, board, show, stack } = await docked()
+    stack() // Stack tabs: every tab in the group stays displayed, the case note too
+    show(board)
+    expect(rightSplit.collapsed).toBe(true)
+  })
+
+  it('a case note moved into the sidebar beside the panel keeps it open', async () => {
+    const { rightSplit, board, open, tab, view, casePath, show } = await docked()
+    const inSidebar = tab(view('markdown', casePath), {})
+    inSidebar.getRoot = () => rightSplit
+    inSidebar.view.containerEl.isShown = () => true
+    open.push(inSidebar)
+    show(board)
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
+  })
+
+  it('docking the panel in the sidebar with a board already in front does not shut it on the drop', async () => {
+    const { panel, rightSplit, board, show, relayout } = await docked()
+    const app = panel.app as unknown as { workspace: { rootSplit: object } }
+    const docked_ = panel.leaf
+    panel.leaf = { ...docked_, getRoot: () => app.workspace.rootSplit } as Panel['leaf']
+    show(board) // the panel sits in the main pane while the board comes to the front
+    panel.leaf = docked_
+    relayout(board)
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
+  })
+
+  it('opened in the main pane and docked later, it takes the board already in front as found', async () => {
+    const { panel, rightSplit, note, board, relayout } = await docked()
+    const app = panel.app as unknown as { workspace: { rootSplit: object; getMostRecentLeaf: () => unknown } }
+    // One leaf, dragged from the main pane into the sidebar: only its root changes.
+    let root: object = app.workspace.rootSplit
+    const leaf = { ...panel.leaf, getRoot: () => root } as Panel['leaf']
+    panel.leaf = leaf
+    app.workspace.getMostRecentLeaf = () => (root === app.workspace.rootSplit ? leaf : board)
+    await (panel as unknown as { onOpen(): Promise<void> }).onOpen() // restored with the panel in front
+    relayout(board, note) // the board comes up while nothing is recorded for it
+    root = rightSplit
+    relayout(board) // dropped into the open sidebar
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
+  })
+
+  it('the panel itself in the main pane is never taken for what is in front', async () => {
+    const { panel, rightSplit, board, show, relayout, resized } = await docked()
+    show(board)
+    rightSplit.expand()
+    resized()
+    const app = panel.app as unknown as { workspace: { rootSplit: object } }
+    const inSidebar = panel.leaf
+    panel.leaf = { ...inSidebar, getRoot: () => app.workspace.rootSplit } as Panel['leaf']
+    panel.fitToFront(panel.leaf) // dragged into the main pane and clicked there
+    panel.leaf = inSidebar
+    relayout(board) // docked again, the board still in front
+    expect(rightSplit.collapse).toHaveBeenCalledTimes(1)
+  })
+
+  it("in a stacked group, the case note in front is what counts, not the group's first tab", async () => {
+    const { rightSplit, note, board, open, show, stack, handlers, panel } = await docked()
+    open.splice(open.indexOf(board), 1)
+    open.unshift(board) // the board is the group's first tab
+    stack()
+    show(board)
+    expect(rightSplit.collapsed).toBe(true)
+    show(note)
+    expect(rightSplit.collapsed).toBe(false)
+    handlers.get('layout-change')?.() // any layout change, or a click into the panel
+    handlers.get('active-leaf-change')?.(panel.leaf)
+    expect(rightSplit.collapse).toHaveBeenCalledTimes(1)
+  })
+
+  it('in a stacked group, closing the case note in front goes by the tab the group shows next', async () => {
+    const { rightSplit, note, board, open, tab, view, casePath, show, stack, relayout } = await docked()
+    stack()
+    const second = tab(view('markdown', casePath)) // a second case note, opened after the board
+    open.splice(open.indexOf(board), 1)
+    open.unshift(board, second) // [board, second, note]: the board newest after the close
+    show(board)
+    show(second)
+    expect(rightSplit.collapsed).toBe(false)
+    const group = board.parent as { children?: unknown[]; currentTab?: number }
+    group.children = [board, note]
+    group.currentTab = 1 // Obsidian moves to the case note beside the closed tab
+    relayout(note, second)
+    expect(rightSplit.collapse).toHaveBeenCalledTimes(1)
+  })
+
+  it('a case note dragged into another pane is looked for there when it closes', async () => {
+    const { rightSplit, note, plain, board, open, show, relayout, handlers } = await docked()
+    const right = {}
+    plain.parent = right
+    show(plain)
+    show(note)
+    note.parent = right // dragged onto the right pane, in front there
+    board.view.containerEl.isShown = () => true // the left pane shows the board again
+    handlers.get('layout-change')?.()
+    relayout(plain, note) // closed: the right pane shows the plain note, not a board
+    expect([open.includes(note), rightSplit.collapse.mock.calls.length]).toEqual([false, 0])
+  })
+
+  it('leaves it alone when boards open cases in the side panel', async () => {
+    const { rightSplit, board, show } = await docked({ openTaskIn: 'panel' })
+    show(board)
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
+  })
+
+  it('leaves it alone when it shows another tab, or the panel sits in the main pane', async () => {
+    const { panel, rightSplit, board, boards, show } = await docked()
+    panel.containerEl = { isShown: () => false }
+    show(board)
+    panel.containerEl = { isShown: () => true }
+    const app = panel.app as unknown as { workspace: { rootSplit: object } }
+    panel.leaf = { ...panel.leaf, getRoot: () => app.workspace.rootSplit } as Panel['leaf']
+    show(boards)
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
+  })
+
+  it('a sidebar tab or another window coming to the front changes nothing', async () => {
+    const { panel, rightSplit, tab, view } = await docked()
+    const inSidebar = tab(view('casefile-project'))
+    inSidebar.getRoot = () => rightSplit
+    const inPopout = tab(view('casefile-dashboard'))
+    inPopout.getRoot = () => ({})
+    panel.fitToFront(inSidebar)
+    panel.fitToFront(inPopout)
+    panel.fitToFront(null)
+    expect(rightSplit.collapse).not.toHaveBeenCalled()
   })
 })
