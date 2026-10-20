@@ -1164,6 +1164,35 @@ describe('defangTimelineText: a file or an internal host named by itself is no l
     expect(defangTimelineText('- a: cmd.exe\n- b: 10.0.0.5')).toBe(`- a: cmd.exe\n${defangText('- b: 10.0.0.5')}`)
   })
 
+  it('leaves a dotted name as written when its label names a user, a host or a process, and nothing on the network', () => {
+    for (const line of [
+      '- User: anita.garcia',
+      '- Logon account: maya.chen',
+      '    - Service: Chrome.Updater',
+      '- Host: srv01.acme'
+    ]) {
+      expect(defangText(line), line).not.toBe(line)
+      expect(defangTimelineText(line), line).toBe(line)
+    }
+    for (const line of ['- 21:34 User: anita.garcia', '- At 21:34, User: anita.garcia']) {
+      expect(defangTimelineText(line), line).toBe(line)
+    }
+    // A value shaped like a place on the network is defanged, whatever its label says.
+    for (const line of ['- Process: evil.com', '- User: amelia.hart@lawson-rowe-review.com', '- Host: 185.91.69.119']) {
+      expect(defangTimelineText(line), line).toBe(defangText(line))
+      expect(defangTimelineText(line), line).not.toBe(line)
+    }
+    // A network label keeps defangText's reading of the value as a host.
+    expect(defangTimelineText('- Beacon: anita.garcia')).toBe(defangText('- Beacon: anita.garcia'))
+    const steps = findTimelines([
+      '%% timeline steps %%',
+      '- User: anita.garcia',
+      '- Host: WS01',
+      '- Beacon: c2.evil.com'
+    ])[0]
+    expect(steps.summary.live).toBe(1)
+  })
+
   it('counts no file and no internal host as a live indicator, in steps and chains', () => {
     const steps = findTimelines([
       '%% timeline steps %%',

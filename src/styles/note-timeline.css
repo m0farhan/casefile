@@ -827,6 +827,16 @@ ul.cf-ntl-list.cf-ntl-chain .cf-ntl-head {
   font-weight: 400;
   color: var(--text-muted);
 }
+/* A link's label row ends after its role, not after the label: Obsidian
+   splits the label's mark around a URL or an email it marks, and each part
+   ended in its own break, the role alone on a row. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-chain .cf-ntl-head::after {
+  content: none;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-chain .cf-ntl-role:not(.cf-ntl-role-alone)::after {
+  content: '\A';
+  white-space: pre;
+}
 /* A link with no label: the role just before the value, on its row. */
 .cf-ntl-role.cf-ntl-role-alone {
   margin-inline: 0 10px;

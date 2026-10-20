@@ -354,6 +354,48 @@ export function timelineAt(
 
 // ─── Steps and chains ────────────────────────────────────────────────────────
 
+/** What a step or link is: named by its label, else by its value's shape. */
+export type LinkKind =
+  | 'process'
+  | 'user'
+  | 'host'
+  | 'network'
+  | 'file'
+  | 'registry'
+  | 'hash'
+  | 'email'
+  | 'service'
+  | 'task'
+
+/** The words a label names a kind with, as an analyst writes them. */
+const LABEL_WORDS: Record<LinkKind, string> = {
+  process:
+    'process proc parent child image executable exe program binary launch launched spawned ran executed execution exec command cmd cmdline commandline script pid',
+  user: 'user username account logon login identity principal owner',
+  host: 'host hostname workstation endpoint server device computer machine asset laptop dc',
+  network:
+    'network connection ip address destination remote c2 beacon port domain url site website visited callback dns traffic',
+  file: 'file filename dropped drop path artifact payload download downloaded attachment dll document library archive',
+  registry: 'registry key hive regkey',
+  hash: 'hash md5 sha1 sha256 sha imphash',
+  email: 'email mail sender recipient message',
+  service: 'service svc driver',
+  task: 'task scheduled schtask cron job'
+}
+const LABEL_KIND = new Map(
+  Object.entries(LABEL_WORDS).flatMap(([kind, words]) => words.split(' ').map((w) => [w, kind as LinkKind]))
+)
+
+/** The kind a label names, read from its last word back so the head noun decides; null when it names none. */
+export function labelKind(label: string | null): LinkKind | null {
+  const words = (label ?? '').toLowerCase().split(/[^a-z0-9]+/)
+  for (let i = words.length - 1; i >= 0; i--) {
+    const named = LABEL_KIND.get(words[i])
+    if (named) return named
+  }
+  return null
+}
+
 /** The closing bullet that holds a steps list's facts. */
 const FACTS = /^(?:details|facts):?$/i
 
@@ -830,27 +872,41 @@ const TLD_EXTENSION = /\.(?:zip|sh|py|one)\W*$/i
 /** Stands in for the dots of a token kept as written while defangText reads the text; no note holds it. */
 const MASK = '\u0000'
 
+/** The shapes of a place on the network: defanged whatever a label calls them. */
+const NETWORK_SHAPES = new Set(['Domain', 'URL', 'IP', 'Email', 'Message-ID'])
+
 /**
  * A token shaped like a host that reaches no one outside: a file named by
- * itself, as Details reads one (cmd.exe, invoice.pdf), or an internal host
- * (DESKTOP1.domain.local).
+ * itself, as Details reads one (cmd.exe, invoice.pdf), an internal host
+ * (DESKTOP1.domain.local), or, after a label that names something off the
+ * network (`named`: a user, a host, a process…), any dotted name not shaped
+ * like a place on the network (User: anita.garcia).
  */
-const keepsItsDots = (token: string): boolean => {
+const keepsItsDots = (token: string, named: boolean): boolean => {
   if (!token.includes('.')) return false
   const kind = detectDetailField(token)
-  return kind === 'Hostname' || (kind === 'File path' && !/[\\/]/.test(token) && !TLD_EXTENSION.test(token))
+  if (kind === 'Hostname' || (kind === 'File path' && !/[\\/]/.test(token) && !TLD_EXTENSION.test(token))) return true
+  return named && !NETWORK_SHAPES.has(kind ?? '')
+}
+
+/** A line with the dots it keeps masked: the value after a label is read by what the label names. */
+function maskLine(line: string): string {
+  const colon = line.indexOf(': ')
+  const kind = colon > 0 ? labelKind(line.slice(0, colon)) : null
+  const named = kind !== null && kind !== 'network'
+  return line.replace(/\S+/g, (t, at: number) => (keepsItsDots(t, named && at > colon) ? t.replaceAll('.', MASK) : t))
 }
 
 /**
- * defangText for the timeline's text, a file or an internal host named by
- * itself left as written. defangText reads the value after 'Label: ' as a
+ * defangText for the timeline's text, a file, an internal host or a name a
+ * label says is off the network left as written. defangText reads the value after 'Label: ' as a
  * host when it has a host's shape, and labelled lines are how steps and
  * chains are written: cmd.exe would be cmd[.]exe. Every count, edit, copy
  * and drawing of a timeline defangs with this, so they agree.
  */
 export function defangTimelineText(text: string): string {
   if (text.includes(MASK)) return defangText(text)
-  const masked = text.replace(/\S+/g, (t) => (keepsItsDots(t) ? t.replaceAll('.', MASK) : t))
+  const masked = text.split('\n').map(maskLine).join('\n')
   return masked === text ? defangText(text) : defangText(masked).replaceAll(MASK, '.')
 }
 

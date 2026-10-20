@@ -4,6 +4,9 @@ import {
   formatDay,
   type ChainLink,
   type EventKind,
+  labelKind,
+  type Labelled,
+  type LinkKind,
   type TimelineBlock,
   type TimelineGap,
   type TimelineStyle,
@@ -141,20 +144,54 @@ export const iocIcon = (type: IocType): string => (type === 'hash' ? 'hash' : ty
 /** A program a link runs, by its file name: what Details calls a File path, but a process here. */
 const PROGRAM_FILE = /\.(?:exe|bat|cmd|com|ps1|vbs|hta|msi|scr)$/i
 
+/** The kind a value's shape names, as Details reads it. */
+const SHAPE_KIND: Record<string, LinkKind> = {
+  'Command line': 'process',
+  User: 'user',
+  Hostname: 'host',
+  URL: 'network',
+  Domain: 'network',
+  IP: 'network',
+  'File path': 'file',
+  'Registry key': 'registry',
+  Hash: 'hash',
+  Email: 'email',
+  'Message-ID': 'email'
+}
+
 /**
- * A chain link's value icon, by what the value names: a program run is the
- * root's terminal or a child's activity, then a user, a host, a place on the
- * web, a file; anything else a dot.
+ * What a step or link is. The label says first, read from its last word
+ * back, so the head noun decides ('Process path' is a file, 'User context' a
+ * user); else the value's shape, a program's file name a process.
  */
-export function linkIcon(link: Pick<ChainLink, 'valueKind' | 'valueText' | 'depth'>): string {
-  const kind = link.valueKind
-  if (kind === 'Command line' || (kind === 'File path' && PROGRAM_FILE.test(link.valueText.replace(/["']/g, '')))) {
-    return link.depth === 0 ? 'terminal' : 'activity'
-  }
-  if (kind === 'User') return 'user'
-  if (kind === 'Hostname') return 'monitor'
-  if (kind === 'URL' || kind === 'Domain' || kind === 'IP') return 'globe'
-  return kind === 'File path' ? 'file' : 'circle-dot'
+export function linkKind(l: Pick<Labelled, 'labelText' | 'valueKind' | 'valueText'>): LinkKind | null {
+  const named = labelKind(l.labelText)
+  if (named) return named
+  if (l.valueKind === 'File path' && PROGRAM_FILE.test(l.valueText.replace(/["']/g, ''))) return 'process'
+  return l.valueKind ? (SHAPE_KIND[l.valueKind] ?? null) : null
+}
+
+const KIND_ICON: Record<Exclude<LinkKind, 'process'>, string> = {
+  user: 'user',
+  host: 'monitor',
+  network: 'globe',
+  file: 'file',
+  registry: 'key-round',
+  hash: 'hash',
+  email: 'mail',
+  service: 'cog',
+  task: 'calendar-clock'
+}
+
+/**
+ * A chain link's value icon, by what it is: a process is the root's terminal
+ * or a child's activity; a user, a host, the network, a file, a registry key,
+ * a hash, an address, a service or a task its own; anything else a dot.
+ */
+export function linkIcon(link: Pick<ChainLink, 'labelText' | 'valueKind' | 'valueText' | 'depth'>): string {
+  const kind = linkKind(link)
+  if (kind === 'process') return link.depth === 0 ? 'terminal' : 'activity'
+  return kind ? KIND_ICON[kind] : 'circle-dot'
 }
 
 const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`

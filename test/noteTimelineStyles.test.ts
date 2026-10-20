@@ -86,6 +86,15 @@ describe('note-timeline.css for every style', () => {
     expect(body('.markdown-rendered ul.cf-ntl-chain li > ul::before')).toContain('display: none;')
   })
 
+  it("ends a chain link's label row after its role, so a split label row breaks once", () => {
+    // Obsidian splits the label's mark around a URL or an email it marks:
+    // each part ended in its own break, and the role sat alone on a row.
+    expect(body('.markdown-source-view.mod-cm6 .cm-line.cf-ntl-chain .cf-ntl-head::after')).toContain('content: none;')
+    const end = body('.markdown-source-view.mod-cm6 .cm-line.cf-ntl-chain .cf-ntl-role:not(.cf-ntl-role-alone)::after')
+    expect(end).toContain(String.raw`content: '\A';`)
+    expect(end).toContain('white-space: pre;')
+  })
+
   it("bars a chain's root orange and its spawned children red", () => {
     expect(body('.cf-ntl-root')).toContain('--cf-ntl-kc: var(--color-orange);')
     expect(body('.cf-ntl-child')).toContain('--cf-ntl-kc: var(--color-red);')

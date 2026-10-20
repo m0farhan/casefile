@@ -874,6 +874,16 @@ describe('noteTimelineExtension: steps', () => {
     expect(value(3)).toEqual({ line: 3, text: 'DESKTOP1.domain.local', cls: `${CLS.value} ${CLS.mono}` })
   })
 
+  it('sets a value in monospace when its label names a host, a user or a process', () => {
+    const s = stateOf(['%% timeline steps %%', '- On host: WS01', '- User: anita.garcia', '- Alert fired: Recon'])
+    const m = marks(s, build(s).decorations).filter((x) => x.cls.startsWith(CLS.value))
+    expect(m.map((x) => [x.text, x.cls])).toEqual([
+      ['WS01', `${CLS.value} ${CLS.mono}`],
+      ['anita.garcia', `${CLS.value} ${CLS.mono}`],
+      ['Recon', CLS.value]
+    ])
+  })
+
   it('reads a step with no label as all value, and a time with no label as its own row', () => {
     const s = stateOf(['%% timeline steps %%', '- the analyst closed the alert', '- 21:40 escalated to tier 2'])
     const m = marks(s, build(s).decorations)

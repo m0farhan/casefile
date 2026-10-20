@@ -7,6 +7,7 @@ import {
   kindClass,
   kindLabel,
   linkIcon,
+  linkKind,
   renderAddEvent,
   renderGap,
   renderHeader,
@@ -356,6 +357,56 @@ describe('linkIcon', () => {
   it('draws a host as a monitor', () => {
     const links = findTimelines(['%% timeline chain %%', '- On host: WS01.corp.local'])[0].links
     expect(links.map(linkIcon)).toEqual(['monitor'])
+  })
+
+  it('draws a link as its label names it, whatever the value looks like', () => {
+    const icon = (line: string) =>
+      findTimelines(['%% timeline chain %%', '- Root: cmd.exe', `    - ${line}`])[0].links[1]
+    const cases: [string, string][] = [
+      ['User: anita.garcia', 'user'],
+      ['Logon account: svc_backup', 'user'],
+      ['Host: WS01', 'monitor'],
+      ['Workstation: corp-wks-102', 'monitor'],
+      ['Process: rundll32', 'activity'],
+      ['Process: regasm.exe (PID 4120)', 'activity'],
+      ['Parent process: svchost.exe', 'activity'],
+      ['Network connection: cleanuploader.exe -> 185.147.124.40:443', 'globe'],
+      ['Host IP: 10.0.1.135', 'globe'],
+      // A dropped program is a file here: the label says what it is.
+      ['Dropped: l6E.ps1', 'file'],
+      ['File: C:\\Users\\anita\\AppData\\Local\\Temp\\l6E.exe', 'file'],
+      ['Run key: ChromeUpdater', 'key-round'],
+      ['MD5: 44d88612fea8a8f36de82e1278abb02f', 'hash'],
+      ['Sender: amelia.hart', 'mail'],
+      ['Service: ChromeUpdater', 'cog'],
+      ['Scheduled task: \\Microsoft\\Windows\\Update', 'calendar-clock'],
+      ['Alert ID: SEC-1', 'circle-dot']
+    ]
+    for (const [line, want] of cases) expect(linkIcon(icon(line)), line).toBe(want)
+  })
+
+  it('falls back on the value for a registry key, a hash or an address', () => {
+    const icons = (values: string[]) =>
+      findTimelines(['%% timeline chain %%', ...values.map((v) => `- Link: ${v}`)])[0].links.map(linkIcon)
+    expect(
+      icons([
+        'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\ChromeUpdater',
+        '44d88612fea8a8f36de82e1278abb02f',
+        'amelia.hart@lawson-rowe-review.com'
+      ])
+    ).toEqual(['key-round', 'hash', 'mail'])
+  })
+})
+
+describe('linkKind', () => {
+  it('reads the label from its last word back, so the head noun decides', () => {
+    const kind = (line: string) => linkKind(findTimelines(['%% timeline steps %%', `- ${line}`])[0].steps[0])
+    expect(kind('Process path: C:\\x.exe')).toBe('file')
+    expect(kind('User context: domain\\user1')).toBe('user')
+    expect(kind('On host: WS01')).toBe('host')
+    expect(kind('Command executed: nltest /domain_trusts')).toBe('process')
+    expect(kind('Alert fired: Potential Recon Activity')).toBeNull()
+    expect(kind('the analyst closed the alert')).toBeNull()
   })
 })
 

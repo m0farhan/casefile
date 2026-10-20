@@ -15,6 +15,7 @@ import {
   iocIcon,
   kindClass,
   linkIcon,
+  linkKind,
   renderAddEvent,
   renderGap,
   renderHeader,
@@ -604,7 +605,7 @@ function decorateStep(
     if (t) mark(out, event.time?.approx ? `${CLS.time} ${CLS.approx}` : CLS.time, at + t.from, at + t.to)
     const sec = event.secondsSpan
     if (sec) mark(out, CLS.sec, at + sec.from, at + sec.to)
-    labelledMarks(out, at, step, event.textFrom, CLS.head, valueClass(step.valueKind))
+    labelledMarks(out, at, step, event.textFrom, CLS.head, valueClass(linkKind(step)))
   }
   if (!next) out.push(widget(new AddWidget(block.markerLine, handlers, 'steps'), 1, bottom.to))
 }

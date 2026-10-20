@@ -8,6 +8,7 @@ import {
   iocIcon,
   kindClass,
   linkIcon,
+  linkKind,
   renderGap,
   renderHeader,
   renderNode,
@@ -399,7 +400,7 @@ function decorateStep(li: HTMLElement, step: TimelineStep, line: string): void {
           if (time) pieceSpan(row, time)
         }
       : null,
-    step.valueKind ? [CLS.mono] : [],
+    linkKind(step) ? [CLS.mono] : [],
     CLS.detail
   )
   disarm(li)
