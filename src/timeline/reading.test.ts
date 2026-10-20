@@ -1,4 +1,10 @@
-import { MarkdownView, type MarkdownPostProcessorContext, type MarkdownSectionInformation, type Plugin } from 'obsidian'
+import {
+  MarkdownView,
+  setIcon,
+  type MarkdownPostProcessorContext,
+  type MarkdownSectionInformation,
+  type Plugin
+} from 'obsidian'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeEl, fakeEvent } from '../../test/fakeDom'
 import { copyDefanged } from '../ui/defangMenu'
@@ -231,6 +237,11 @@ describe('sectionTimeline', () => {
 
   it('reads CRLF text by the same lines', () => {
     expect(sectionTimeline(NOTE.join('\r\n'), 2, 9)?.lines[2]).toBe(NOTE[2])
+  })
+
+  it('finds a timeline of every style', () => {
+    expect(sectionTimeline('%% timeline steps %%\n- a', 1, 1)?.block.style).toBe('steps')
+    expect(sectionTimeline('%% timeline chain %%\n- a', 1, 1)?.block.style).toBe('chain')
   })
 
   it('has nothing for a section that holds no timeline list', () => {
@@ -628,6 +639,17 @@ describe('redrawOnTimelineChange', () => {
     expect(rerendered(shown)).toEqual([[true]])
   })
 
+  it("redraws it when the marker's style changes, the list as it was", () => {
+    const shown = view()
+    const fire = watch(shown)
+    drawn(renderedList())
+    fire(
+      'quick-preview',
+      NOTE.map((l) => (l === '%% timeline %%' ? '%% timeline steps %%' : l))
+    )
+    expect(rerendered(shown)).toEqual([[true]])
+  })
+
   it('leaves it alone while an event is edited', () => {
     const shown = view()
     const fire = watch(shown)
@@ -637,5 +659,279 @@ describe('redrawOnTimelineChange', () => {
       NOTE.map((l) => l.replace('Microsoft Edge', 'Edge'))
     )
     expect(rerendered(shown)).toEqual([])
+  })
+})
+
+const iconOf = (el: FakeEl): string | undefined =>
+  vi.mocked(setIcon).mock.calls.find(([target]) => (target as unknown) === el)?.[1]
+const onLine = (item: FakeEl, n: number): FakeEl => {
+  item.setAttr('data-line', String(n))
+  return item
+}
+
+/** The steps sample from the styles spec, and its list section as Obsidian renders it. */
+const STEPS = [
+  '## Alert story',
+  '%% timeline steps %%',
+  '- 21:34 Alert fired: Potential Recon Activity Via Nltest.EXE',
+  '- On host: DESKTOP1.domain.local',
+  '- User context: domain\\user1',
+  '- Process launch: nltest.exe',
+  '- Command executed: nltest /domain_trusts',
+  '- Artifact path: C:\\Users\\user1\\Downloads\\',
+  '- Details',
+  '    - Alert ID: SEC-2023-0704-0001',
+  '    - Time: 2023-07-04 21:34 UTC',
+  '    - Host: DESKTOP1.domain.local',
+  '      192.168.56.95'
+]
+const stepsInfo = (text = STEPS): MarkdownSectionInformation => ({ text: text.join('\n'), lineStart: 2, lineEnd: 12 })
+
+function renderedSteps(): FakeEl {
+  const el = FakeEl.root()
+  const ul = el.createEl('ul', { cls: 'has-list-bullet' })
+  STEPS.slice(2, 8).forEach((t, n) => onLine(li(ul, t.slice(2)), n))
+  const details = li(ul, 'Details', (item) => {
+    const facts = item.createEl('ul')
+    onLine(li(facts, 'Alert ID: SEC-2023-0704-0001'), 7)
+    onLine(li(facts, 'Time: 2023-07-04 21:34 UTC'), 8)
+    const host = li(facts, 'Host: DESKTOP1.domain.local', (h) => {
+      h.createEl('br')
+      h.appendText('192.168.56.95')
+    })
+    onLine(host, 9)
+  })
+  onLine(details, 6)
+  return el
+}
+
+/** The steps section drawn: its header, the steps list and the facts list below it. */
+function drawnSteps() {
+  const el = decorate(renderedSteps(), stepsInfo())
+  const [header, list, factsList] = el.children
+  return { header, list, factsList, steps: (list?.children ?? []).filter((c) => c.tagName === 'LI') }
+}
+
+describe('decorateTimelineSections: steps', () => {
+  it('heads the list as steps, and counts the steps above the details', () => {
+    const { header, list, steps } = drawnSteps()
+    expect(header.find(`.${CLS.title}`).getText()).toBe('Steps')
+    expect(header.find(`.${CLS.meta}`).getText()).toBe('6 steps · details below')
+    expect([list.hasClass(CLS.list), list.hasClass(CLS.steps)]).toEqual([true, true])
+    expect(steps).toHaveLength(6)
+  })
+
+  it('numbers each step, then draws its label and time over its value', () => {
+    const { steps } = drawnSteps()
+    expect(
+      steps.map((s) => [s.hasClass(CLS.step), s.children[0].hasClass(CLS.stepNode), s.children[0].getText()])
+    ).toEqual([1, 2, 3, 4, 5, 6].map((n) => [true, true, String(n)]))
+    const head = steps[0].find(`.${CLS.head}`)
+    expect(head.find(`.${CLS.label}`).getText()).toBe('Alert fired')
+    expect(head.find(`.${CLS.time}`).getText()).toBe('21:34')
+    // Label first, then the chip, as the mockup has it.
+    expect(head.children.map((c) => c.getText())).toEqual(['Alert fired', '21:34'])
+    const value = steps[0].find(`.${CLS.value}`)
+    expect([value.getText(), value.hasClass(CLS.mono)]).toEqual(['Potential Recon Activity Via Nltest.EXE', false])
+    // No time written, no chip.
+    expect(steps[1].find(`.${CLS.head}`).findAll(`.${CLS.time}`)).toHaveLength(0)
+  })
+
+  it('sets a value in monospace when its shape names it', () => {
+    const { steps } = drawnSteps()
+    const value = (i: number) => steps[i].find(`.${CLS.value}`)
+    expect([value(2).getText(), value(2).hasClass(CLS.mono)]).toEqual(['domain\\user1', true])
+    expect(value(4).hasClass(CLS.mono)).toBe(true)
+    // A program's file name is no host: shown as written, as Defang leaves it.
+    expect([value(3).getText(), value(3).hasClass(CLS.mono)]).toEqual(['nltest.exe', true])
+  })
+
+  it('moves the details out of the steps into a grid of facts below them', () => {
+    const { factsList } = drawnSteps()
+    expect(factsList.tagName).toBe('UL')
+    expect([factsList.hasClass(CLS.factsList), factsList.hasClass(CLS.list)]).toEqual([true, false])
+    const details = factsList.find('li')
+    expect(details.hasClass(CLS.facts)).toBe(true)
+    expect(details.find(`.${CLS.factsTitle}`).getText()).toBe('Details')
+    const facts = details.findAll(`li.${CLS.fact}`)
+    expect(facts.map((f) => [f.find(`.${CLS.factKey}`).getText(), f.find(`.${CLS.value}`).getText()])).toEqual([
+      ['Alert ID', 'SEC-2023-0704-0001'],
+      ['Time', '2023-07-04 21:34 UTC'],
+      // An internal host reaches no one outside: shown as written, as Defang timeline leaves it.
+      ['Host', 'DESKTOP1.domain.local']
+    ])
+    // A fact's value is an identifier: monospace.
+    expect(facts.map((f) => f.find(`.${CLS.value}`).hasClass(CLS.mono))).toEqual([true, true, true])
+    // The plain line under Host is more of its value, on a line of its own.
+    expect(facts[2].find(`.${CLS.factMore}`).getText()).toBe('192[.]168[.]56[.]95')
+    expect(facts[2].findAll('br')).toHaveLength(0)
+  })
+
+  it('matches facts to their items in order when Obsidian does not mark their lines', () => {
+    // A plain first line is more of the Details bullet's own text, not an item of its own.
+    const lines = [
+      '%% timeline steps %%',
+      '- a: x',
+      '- Details',
+      '    seen in the console',
+      '    - Host: x',
+      '    - User: y'
+    ]
+    const e = FakeEl.root()
+    const ul = e.createEl('ul')
+    li(ul, 'a: x')
+    li(ul, 'Details\nseen in the console', nested('Host: x', 'User: y'))
+    decorate(e, { text: lines.join('\n'), lineStart: 1, lineEnd: 5 })
+    const facts = e.findAll(`li.${CLS.fact}`)
+    expect(facts.map((f) => f.find(`.${CLS.factKey}`).getText())).toEqual(['Host', 'User'])
+  })
+
+  it('reads a step with no label as all value', () => {
+    const lines = ['%% timeline steps %%', '- the analyst closed the alert']
+    const e = FakeEl.root()
+    li(e.createEl('ul'), 'the analyst closed the alert')
+    decorate(e, { text: lines.join('\n'), lineStart: 1, lineEnd: 1 })
+    const step = e.find(`li.${CLS.step}`)
+    expect(step.findAll(`.${CLS.head}`)).toHaveLength(0)
+    expect(step.find(`.${CLS.value}`).getText()).toBe('the analyst closed the alert')
+  })
+
+  it('shows indicators defanged as plain text, never as chips, and disarms links', () => {
+    const lines = ['%% timeline steps %%', '- Fetched: https://promptcraft.online/a.ps1 from', '- Next: x']
+    const e = FakeEl.root()
+    const ul = e.createEl('ul')
+    li(ul, 'Fetched: ', (item) =>
+      item.createEl('a', { cls: 'external-link', text: PAYLOAD, attr: { href: PAYLOAD } })
+    ).appendText(' from')
+    li(ul, 'Next: x')
+    decorate(e, { text: lines.join('\n'), lineStart: 1, lineEnd: 2 })
+    const step = e.find(`li.${CLS.step}`)
+    expect(step.findAll(`.${CLS.ioc}`)).toHaveLength(0)
+    expect(step.find(`.${CLS.value}`).getText()).toBe('hxxps://evil[.]example/payload from')
+    expect(step.find('a').hasAttribute('href')).toBe(false)
+    step.find('a').dispatchEvent(fakeEvent('click'))
+    expect(copyDefanged).toHaveBeenCalledWith(PAYLOAD)
+  })
+
+  it('leaves the rendered text alone where it does not start as written', () => {
+    const e = renderedSteps()
+    e.find('ul').children[0].children[1].data = 'Alert fired at 21:34: rendered differently'
+    decorate(e, stepsInfo())
+    const first = e.find(`li.${CLS.step}`)
+    expect(first.findAll(`.${CLS.head}`)).toHaveLength(0)
+    expect(first.children[0].getText()).toBe('1')
+  })
+})
+
+/** The chain sample from the styles spec, and its section as Obsidian renders the nested list. */
+const CHAIN = [
+  '## Process chain',
+  '%% timeline chain %%',
+  '- Initial process: cmd.exe',
+  '    - Terminal process: nltest.exe',
+  '        - User context: domain\\user1',
+  '            - Execution: nltest /domain_trusts'
+]
+const chainInfo = (): MarkdownSectionInformation => ({ text: CHAIN.join('\n'), lineStart: 2, lineEnd: 5 })
+
+function renderedChain(lines = [0, 1, 2, 3]): FakeEl {
+  const el = FakeEl.root()
+  let parent = el.createEl('ul', { cls: 'has-list-bullet' })
+  CHAIN.slice(2).forEach((t, n) => {
+    const item = onLine(li(parent, t.trim().slice(2)), lines[n])
+    parent = item.createEl('ul')
+  })
+  return el
+}
+
+function drawnChain() {
+  const el = decorate(renderedChain(), chainInfo())
+  return { el, all: el.findAll('li') }
+}
+
+describe('decorateTimelineSections: process chain', () => {
+  it('heads the list as a process chain, counting links and spawns', () => {
+    const { el } = drawnChain()
+    const header = el.children[0]
+    expect(header.find(`.${CLS.title}`).getText()).toBe('Process chain')
+    expect(header.find(`.${CLS.meta}`).getText()).toBe('4 links · 3 spawns')
+    // cmd.exe and nltest.exe are programs, not live indicators.
+    expect(header.findAll(`.${CLS.defang}`)).toHaveLength(0)
+    const list = el.children[1]
+    expect([list.hasClass(CLS.list), list.hasClass(CLS.chain)]).toEqual([true, true])
+  })
+
+  it('draws every link as a card, the root apart from the children it spawned', () => {
+    const { all } = drawnChain()
+    expect(all.map((l) => [l.hasClass(CLS.root), l.hasClass(CLS.child)])).toEqual([
+      [true, false],
+      [false, true],
+      [false, true],
+      [false, true]
+    ])
+    // A child's connector comes first, then its card; the links it spawned stay under it, outside the card.
+    expect(all[0].children[0].hasClass(CLS.card)).toBe(true)
+    expect(all.slice(1).map((l) => [l.children[0].getText(), l.children[1].hasClass(CLS.card)])).toEqual([
+      ['Spawns', true],
+      ['Spawns', true],
+      ['Spawns', true]
+    ])
+    expect(all[0].find(`.${CLS.card}`).findAll('li')).toHaveLength(0)
+    expect(all[1].parent?.parent).toBe(all[0])
+  })
+
+  it('puts the label and role over the value, which is monospace after its icon', () => {
+    const { all } = drawnChain()
+    const card = all[0].children[0]
+    const head = card.find(`.${CLS.head}`)
+    expect([head.find(`.${CLS.label}`).getText(), head.find(`.${CLS.role}`).getText()]).toEqual([
+      'Initial process',
+      'Root process'
+    ])
+    const value = card.find(`.${CLS.value}`)
+    // A program's file name is no host: Defang leaves it, and the header does not count it.
+    expect([value.getText(), value.hasClass(CLS.mono)]).toEqual(['cmd.exe', true])
+    expect(all[1].find(`.${CLS.value}`).getText()).toBe('nltest.exe')
+    expect(iconOf(value.find(`.${CLS.valueIcon}`))).toBe('terminal')
+    expect(all.map((l) => iconOf(l.find(`.${CLS.valueIcon}`)))).toEqual(['terminal', 'activity', 'user', 'activity'])
+    expect(all[3].find(`.${CLS.role}`).getText()).toBe('Spawned child')
+  })
+
+  it('disarms a link in a card, which copies it defanged and never opens it', () => {
+    const lines = ['%% timeline chain %%', `- Fetched: ${PAYLOAD}`]
+    const e = FakeEl.root()
+    li(e.createEl('ul'), 'Fetched: ', (item) =>
+      item.createEl('a', { cls: 'external-link', text: PAYLOAD, attr: { href: PAYLOAD } })
+    )
+    decorate(e, { text: lines.join('\n'), lineStart: 1, lineEnd: 1 })
+    const link = e.find(`.${CLS.card}`).find('a')
+    expect([link.hasAttribute('href'), link.hasClass(CLS.link), link.getText()]).toEqual([
+      false,
+      true,
+      'hxxps://evil[.]example/payload'
+    ])
+    link.dispatchEvent(fakeEvent('click'))
+    expect(copyDefanged).toHaveBeenCalledWith(PAYLOAD)
+  })
+
+  it('leaves the list alone when its nesting is not the chain the note reads', () => {
+    // A link Markdown nests where the parser does not: the lines disagree.
+    const e = decorate(renderedChain([0, 1, 3, 2]), chainInfo())
+    expect(e.findAll(`.${CLS.header}`)).toHaveLength(0)
+    expect(e.findAll(`.${CLS.card}`)).toHaveLength(0)
+  })
+})
+
+describe('decorateTimelineSections: User and Host kinds', () => {
+  it('colours a user or host event by its kind', () => {
+    const lines = ['%% timeline %%', '- 21:34 Host: DESKTOP1', '- 21:35 the account VANTARA\\maya.chen was disabled']
+    const e = FakeEl.root()
+    const ul = e.createEl('ul')
+    li(ul, '21:34 Host: DESKTOP1')
+    li(ul, '21:35 the account VANTARA\\maya.chen was disabled')
+    decorate(e, { text: lines.join('\n'), lineStart: 1, lineEnd: 2 })
+    const [host, user] = e.findAll(`li.${CLS.item}`)
+    expect([host.hasClass('cf-ntl-k-host'), host.find(`.${CLS.tag}`).getText()]).toEqual([true, 'Host'])
+    expect(user.hasClass('cf-ntl-k-user')).toBe(true)
   })
 })

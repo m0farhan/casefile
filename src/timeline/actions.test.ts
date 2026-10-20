@@ -2,6 +2,7 @@ import type { Editor, EditorPosition, EditorTransaction } from 'obsidian'
 import { describe, expect, it } from 'vitest'
 import {
   type TimelineEdit,
+  addChild,
   addEventAtEnd,
   addEventBelow,
   applyEdit,
@@ -9,14 +10,16 @@ import {
   copyText,
   defangTimeline,
   deleteEvent,
+  insertTimeline,
   makeTimeline,
   moveEvent,
   selectedLines,
   setEventKind,
+  setStyle,
   sortEventsByTime
 } from './actions'
 import { defangText } from '../soc/toolbox'
-import { TIMELINE_MARKER, copyForTicket, findTimelines } from './parse'
+import { TIMELINE_MARKER, copyForTicket, findTimelines, markerFor } from './parse'
 
 /** The ClickFix sample from the design spec, as it sits in a case note. */
 const CLICKFIX = [
@@ -653,9 +656,261 @@ describe('edits', () => {
       setEventKind(CLICKFIX, 3, 'web'),
       deleteEvent(CLICKFIX, 3),
       defangTimeline(CLICKFIX, 3)?.edit ?? null,
-      backToPlainList(CLICKFIX, 3)
+      backToPlainList(CLICKFIX, 3),
+      insertTimeline(['Para.', 'Next.'], 0, 'steps'),
+      setStyle(CLICKFIX, 3, 'chain'),
+      addChild(CHAIN, 2)
     ]
     for (const edit of edits) expect(edit?.text).not.toMatch(/\r/)
+  })
+})
+
+const STEPS = markerFor('steps')
+const CHAINED = markerFor('chain')
+
+/** A process chain with siblings, notes and a link with no children. */
+const CHAIN = [
+  CHAINED,
+  '- explorer.exe',
+  '  - cmd.exe /c a.bat',
+  '    started from the Run box',
+  '    - whoami',
+  '  - powershell -enc AAA',
+  '    - conhost.exe',
+  '- services.exe'
+]
+
+describe('setEventKind: user and host', () => {
+  it('writes User and Host, and keeps a word that already means them', () => {
+    expect(apply(CLICKFIX, setEventKind(CLICKFIX, 3, 'user'))[3]).toBe(
+      '- At 11:05:40, User: the user was observed visiting hxxps://eemmbryequo[.]shop/ (…).'
+    )
+    expect(apply(CLICKFIX, setEventKind(CLICKFIX, 9, 'host'))[9]).toBe(
+      '- Host: the SOC isolated corp-wks-102 from the network.'
+    )
+    expect(setEventKind([TIMELINE_MARKER, '- At 11:00, Account: x'], 1, 'user')).toBeNull()
+    expect(setEventKind([TIMELINE_MARKER, '- At 11:00, Workstation: x'], 1, 'host')).toBeNull()
+  })
+})
+
+describe('insertTimeline', () => {
+  const caret = (lines: string[], line: number) => insertTimeline(lines, line, 'events')?.cursor
+
+  it('turns a blank line into the marker and one empty item, caret at its end', () => {
+    expect(apply([''], insertTimeline([''], 0, 'events'))).toEqual([TIMELINE_MARKER, '- '])
+    expect(caret([''], 0)).toEqual({ line: 1, ch: 2 })
+    const note = ['## Findings', '', 'After.']
+    expect(apply(note, insertTimeline(note, 1, 'events'))).toEqual(['## Findings', TIMELINE_MARKER, '- ', '', 'After.'])
+    expect(caret(note, 1)).toEqual({ line: 2, ch: 2 })
+  })
+
+  it('goes after a paragraph or a heading, a blank line before it only after a paragraph', () => {
+    const para = ['Para.', 'Next.']
+    expect(apply(para, insertTimeline(para, 0, 'events'))).toEqual(['Para.', '', TIMELINE_MARKER, '- ', '', 'Next.'])
+    expect(caret(para, 0)).toEqual({ line: 3, ch: 2 })
+    expect(apply(['## F', 'Para'], insertTimeline(['## F', 'Para'], 0, 'events'))).toEqual([
+      '## F',
+      TIMELINE_MARKER,
+      '- ',
+      '',
+      'Para'
+    ])
+    expect(apply(['## F'], insertTimeline(['## F'], 0, 'events'))).toEqual(['## F', TIMELINE_MARKER, '- '])
+    // A blank line under a paragraph stays one, so the empty item is not read as more of the paragraph.
+    const blank = ['Para.', '', 'Next.']
+    expect(apply(blank, insertTimeline(blank, 1, 'events'))).toEqual(['Para.', '', TIMELINE_MARKER, '- ', '', 'Next.'])
+  })
+
+  it('writes the marker of the style asked for', () => {
+    expect(apply([''], insertTimeline([''], 0, 'steps'))).toEqual(['%% timeline steps %%', '- '])
+    expect(apply(['x'], insertTimeline(['x'], 0, 'chain'))).toEqual(['x', '', '%% timeline chain %%', '- '])
+  })
+
+  it('keeps a list below out of the new timeline with a second blank line', () => {
+    const heading = ['## F', '', '- a']
+    const out = apply(heading, insertTimeline(heading, 1, 'events'))
+    expect(out).toEqual(['## F', TIMELINE_MARKER, '- ', '', '', '- a'])
+    expect(findTimelines(out)[0].events).toHaveLength(1)
+    const para = ['Para', '', '- a']
+    expect(apply(para, insertTimeline(para, 0, 'events'))).toEqual(['Para', '', TIMELINE_MARKER, '- ', '', '', '- a'])
+    const indented = ['Para', '    more of it']
+    const kept = apply(indented, insertTimeline(indented, 0, 'events'))
+    expect(findTimelines(kept)[0]).toMatchObject({ lastLine: 3, events: [{ text: '', details: [] }] })
+  })
+
+  it('goes after a timeline that ends above it, leaving that one whole', () => {
+    const note = [TIMELINE_MARKER, '- a', '', 'After.']
+    const out = apply(note, insertTimeline(note, 2, 'steps'))
+    expect(out).toEqual([TIMELINE_MARKER, '- a', '', '%% timeline steps %%', '- ', '', 'After.'])
+    expect(findTimelines(out).map((b) => [b.style, b.events.length])).toEqual([
+      ['events', 1],
+      ['steps', 1]
+    ])
+  })
+
+  it('offers nothing in a timeline, the frontmatter or a code block', () => {
+    for (let line = 1; line < CLICKFIX.length; line++) expect(insertTimeline(CLICKFIX, line, 'events')).toBeNull()
+    expect(insertTimeline([TIMELINE_MARKER, '', '- a'], 1, 'events')).toBeNull()
+    const front = ['---', 'a: 1', '---', '']
+    for (const line of [0, 1, 2]) expect(insertTimeline(front, line, 'events')).toBeNull()
+    expect(apply(front, insertTimeline(front, 3, 'events')).slice(3)).toEqual(['', TIMELINE_MARKER, '- '])
+    const code = ['```', '', '```']
+    for (const line of [0, 1, 2]) expect(insertTimeline(code, line, 'events')).toBeNull()
+  })
+
+  it('offers nothing in a callout or quote, a table, a comment or a math block, which it would split', () => {
+    const callout = ['> [!note] Triage', '> first line', '>', '> second line']
+    for (let line = 0; line < callout.length; line++) expect(insertTimeline(callout, line, 'steps')).toBeNull()
+    const table = ['| IOC | Type |', '| --- | --- |', '| 1.2.3.4 | IP |', 'After.']
+    for (const line of [0, 1, 2]) expect(insertTimeline(table, line, 'events')).toBeNull()
+    expect(apply(table, insertTimeline(table, 3, 'events')).slice(0, 4)).toEqual(table)
+    const comment = ['%% hidden', '', 'still hidden %%', 'After.']
+    for (const line of [0, 1]) expect(insertTimeline(comment, line, 'events')).toBeNull()
+    const math = ['$$', 'x^2', '$$']
+    for (const line of [0, 1]) expect(insertTimeline(math, line, 'events')).toBeNull()
+    // On the line that closes one, the timeline goes after it.
+    expect(apply(comment, insertTimeline(comment, 2, 'events'))).toEqual([
+      ...comment.slice(0, 3),
+      '',
+      TIMELINE_MARKER,
+      '- ',
+      '',
+      'After.'
+    ])
+    expect(apply(math, insertTimeline(math, 2, 'events'))).toEqual([...math, '', TIMELINE_MARKER, '- '])
+  })
+
+  it('still goes after a closed comment, a line of math or a paragraph with a pipe in it', () => {
+    for (const text of ['%% note to self %%', '$$x^2$$', 'Ran `a | b` then', '| not a table |']) {
+      expect(apply([text], insertTimeline([text], 0, 'events'))).toEqual([text, '', TIMELINE_MARKER, '- '])
+    }
+    expect(apply(['%% a %%', ''], insertTimeline(['%% a %%', ''], 1, 'events'))).toEqual([
+      '%% a %%',
+      '',
+      TIMELINE_MARKER,
+      '- '
+    ])
+  })
+})
+
+describe('setStyle', () => {
+  it('rewrites the marker for the style, indent kept', () => {
+    const out = apply(CLICKFIX, setStyle(CLICKFIX, 5, 'steps'))
+    expect(out).toEqual([CLICKFIX[0], '%% timeline steps %%', ...CLICKFIX.slice(2)])
+    expect(findTimelines(out)[0].style).toBe('steps')
+    const indented = ['  %% timeline chain %%', '  - a']
+    expect(apply(indented, setStyle(indented, 1, 'events'))).toEqual([`  ${TIMELINE_MARKER}`, '  - a'])
+  })
+
+  it('offers nothing for the style it has, or outside a timeline', () => {
+    expect(setStyle(CLICKFIX, 1, 'events')).toBeNull()
+    expect(setStyle(CLICKFIX, 0, 'steps')).toBeNull()
+  })
+})
+
+describe('makeTimeline with a style', () => {
+  it("writes the style's marker", () => {
+    expect(apply(['- one', '- two'], makeTimeline(['- one', '- two'], 0, 0, 'chain'))).toEqual([
+      CHAINED,
+      '- one',
+      '- two'
+    ])
+    expect(apply(['a', 'b'], makeTimeline(['a', 'b'], 0, 1, 'steps'))).toEqual([STEPS, '- a', '- b'])
+  })
+})
+
+describe('chain: addChild', () => {
+  it('adds an empty child one indent deeper, after the link and everything under it', () => {
+    const edit = addChild(CHAIN, 2)
+    expect(apply(CHAIN, edit)).toEqual([...CHAIN.slice(0, 5), '    - ', ...CHAIN.slice(5)])
+    expect(edit?.cursor).toEqual({ line: 5, ch: 6 })
+    // From its note, the same link.
+    expect(addChild(CHAIN, 3)).toEqual(edit)
+    expect(apply(CHAIN, addChild(CHAIN, 1))).toEqual([...CHAIN.slice(0, 7), '  - ', CHAIN[7]])
+    expect(apply(CHAIN, addChild(CHAIN, 4))).toEqual([...CHAIN.slice(0, 5), '      - ', ...CHAIN.slice(5)])
+  })
+
+  it("takes the block's own indent unit and bullet, else a tab", () => {
+    expect(apply([CHAINED, '* a'], addChild([CHAINED, '* a'], 1))).toEqual([CHAINED, '* a', '\t* '])
+    expect(addChild([CHAINED, '* a'], 1)?.cursor).toEqual({ line: 2, ch: 3 })
+    const four = [CHAINED, '- a', '    * b', '- c']
+    expect(apply(four, addChild(four, 3))).toEqual([...four, '    * '])
+  })
+
+  it('offers nothing on the marker, outside, or in another style', () => {
+    expect(addChild(CHAIN, 0)).toBeNull()
+    expect(addChild(['x', ...CHAIN], 0)).toBeNull()
+    expect(addChild(CLICKFIX, 3)).toBeNull()
+  })
+})
+
+describe('chain: siblings, move and delete take the subtree', () => {
+  it('adds a sibling at the same depth after the link and its subtree', () => {
+    const edit = addEventBelow(CHAIN, 2)
+    expect(apply(CHAIN, edit)).toEqual([...CHAIN.slice(0, 5), '  - ', ...CHAIN.slice(5)])
+    expect(edit?.cursor).toEqual({ line: 5, ch: 4 })
+    expect(addEventBelow(CHAIN, 3)).toEqual(edit)
+    // A root, as an event.
+    expect(apply(CHAIN, addEventBelow(CHAIN, 1))).toEqual([...CHAIN.slice(0, 7), '- ', CHAIN[7]])
+  })
+
+  it('moves a link with its notes and children among its siblings, caret following', () => {
+    const swapped = [CHAIN[0], CHAIN[1], CHAIN[5], CHAIN[6], CHAIN[2], CHAIN[3], CHAIN[4], CHAIN[7]]
+    const down = moveEvent(CHAIN, 2, 'down')
+    expect(apply(CHAIN, down)).toEqual(swapped)
+    expect(down?.cursor).toEqual({ line: 4, ch: CHAIN[2].length })
+    expect(moveEvent(CHAIN, 3, 'down')?.cursor).toEqual({ line: 5, ch: CHAIN[3].length })
+    const up = moveEvent(CHAIN, 5, 'up')
+    expect(apply(CHAIN, up)).toEqual(swapped)
+    expect(up?.cursor).toEqual({ line: 2, ch: CHAIN[5].length })
+  })
+
+  it('moves no link past its first or last sibling, and a root as an event', () => {
+    expect(moveEvent(CHAIN, 4, 'up')).toBeNull()
+    expect(moveEvent(CHAIN, 4, 'down')).toBeNull()
+    expect(moveEvent(CHAIN, 2, 'up')).toBeNull()
+    expect(moveEvent(CHAIN, 6, 'down')).toBeNull()
+    expect(apply(CHAIN, moveEvent(CHAIN, 7, 'up'))).toEqual([CHAINED, CHAIN[7], ...CHAIN.slice(1, 7)])
+  })
+
+  it('leaves blank lines between siblings where they are', () => {
+    const loose = [CHAINED, '- a', '  - b', '', '  - c']
+    expect(apply(loose, moveEvent(loose, 4, 'up'))).toEqual([CHAINED, '- a', '  - c', '', '  - b'])
+  })
+
+  it('deletes a link with its subtree, caret on the line above', () => {
+    const edit = deleteEvent(CHAIN, 2)
+    expect(apply(CHAIN, edit)).toEqual([...CHAIN.slice(0, 2), ...CHAIN.slice(5)])
+    expect(edit?.cursor).toEqual({ line: 1, ch: CHAIN[1].length })
+    expect(apply(CHAIN, deleteEvent(CHAIN, 6))).toEqual([...CHAIN.slice(0, 6), CHAIN[7]])
+    expect(apply(CHAIN, deleteEvent(CHAIN, 1))).toEqual([CHAINED, CHAIN[7]])
+    const loose = [CHAINED, '- a', '  - b', '', '  - c', '', '  - d']
+    expect(apply(loose, deleteEvent(loose, 4))).toEqual([CHAINED, '- a', '  - b', '', '  - d'])
+  })
+})
+
+describe('the other styles', () => {
+  it('sorts by time only in events', () => {
+    for (const style of ['steps', 'chain'] as const) {
+      expect(sortEventsByTime([markerFor(style), '- 11:06 b', '- 11:04 a'], 1)).toBeNull()
+    }
+  })
+
+  it('defangs, goes back to a plain list and copies in every style', () => {
+    const note = [STEPS, '- Visited: https://evil.example/a', '- Details', '    - IP: 10.0.0.5']
+    expect(apply(note, defangTimeline(note, 1)?.edit ?? null).slice(1)).toEqual([
+      '- Visited: hxxps://evil[.]example/a',
+      '- Details',
+      '    - IP: 10[.]0[.]0[.]5'
+    ])
+    expect(copyText(note, 0)?.split('\n')).toEqual([
+      'Steps (1)',
+      '1. Visited: hxxps://evil[.]example/a',
+      '',
+      'IP: 10[.]0[.]0[.]5'
+    ])
+    expect(apply(CHAIN, backToPlainList(CHAIN, 4))).toEqual(CHAIN.slice(1))
+    expect(copyText(CHAIN, 1)?.split('\n')[0]).toBe('Process chain (6 links)')
   })
 })
 
@@ -729,5 +984,82 @@ describe('applyEdit', () => {
     const editor = run(CLICKFIX, defangTimeline(CLICKFIX, 1)?.edit ?? null)
     expect(editor.transactions).toEqual([])
     expect(editor.doc).toBe(CLICKFIX.join('\n'))
+  })
+})
+
+/** The steps sample from the styles spec: six steps, then the Details bullet whose lines are the facts. */
+const STORY = [
+  '## Alert story',
+  STEPS,
+  '- 21:34 Alert fired: Potential Recon Activity Via Nltest.EXE',
+  '- On host: DESKTOP1.domain.local',
+  '- User context: domain\\user1',
+  '- Process launch: nltest.exe',
+  '- Command executed: nltest /domain_trusts',
+  '- Artifact path: C:\\Users\\user1\\Downloads\\',
+  '- Details',
+  '    - Alert ID: SEC-2023-0704-0001',
+  '    - Time: 2023-07-04 21:34 UTC',
+  '    - Host: DESKTOP1.domain.local',
+  '      192.168.56.95'
+]
+
+describe('steps: the closing Details bullet stays last', () => {
+  const shape = (lines: string[]) => {
+    const block = findTimelines(lines)[0]
+    return { steps: block.steps.map((s) => s.event.text), facts: block.facts.length }
+  }
+
+  it('adds a step at the end above the Details bullet, from the add row and from Details or a fact', () => {
+    const added = [...STORY.slice(0, 8), '- ', ...STORY.slice(8)]
+    for (const line of [1, 3, 8, 9, 12]) {
+      const edit = addEventAtEnd(STORY, line)
+      expect(apply(STORY, edit)).toEqual(added)
+      expect(edit?.cursor).toEqual({ line: 8, ch: 2 })
+    }
+    for (const line of [8, 9, 11, 12]) expect(apply(STORY, addEventBelow(STORY, line))).toEqual(added)
+    expect(shape(added)).toEqual({ steps: [...shape(STORY).steps, ''], facts: 3 })
+    // A step's own Add below is unchanged.
+    expect(apply(STORY, addEventBelow(STORY, 3))).toEqual([...STORY.slice(0, 4), '- ', ...STORY.slice(4)])
+  })
+
+  it('with no step yet, adds the first one above Details', () => {
+    const facts = [STEPS, '- Details', '    - Alert ID: 1']
+    expect(apply(facts, addEventAtEnd(facts, 0))).toEqual([STEPS, '- ', ...facts.slice(1)])
+    expect(apply(facts, addEventBelow(facts, 2))).toEqual([STEPS, '- ', ...facts.slice(1)])
+  })
+
+  it('moves no step below Details and never Details or its facts', () => {
+    expect(moveEvent(STORY, 7, 'down')).toBeNull()
+    expect(shape(apply(STORY, moveEvent(STORY, 7, 'up'))).facts).toBe(3)
+    for (const line of [8, 9, 12]) {
+      expect(moveEvent(STORY, line, 'up')).toBeNull()
+      expect(moveEvent(STORY, line, 'down')).toBeNull()
+    }
+  })
+
+  it('leaves a list without facts as it was: a last Details bullet with nothing under it is a step', () => {
+    const plain = [STEPS, '- a', '- Details']
+    expect(apply(plain, addEventAtEnd(plain, 0))).toEqual([...plain, '- '])
+    expect(apply(plain, moveEvent(plain, 1, 'down'))).toEqual([STEPS, '- Details', '- a'])
+  })
+})
+
+describe('a file named by itself stays as written', () => {
+  const chain = [CHAINED, '- Initial process: cmd.exe', '    - Terminal process: nltest.exe']
+
+  it('is not defanged or copied defanged, in steps or a chain', () => {
+    expect(defangTimeline(chain, 1)?.changed).toBe(false)
+    expect(copyText(chain, 1)?.split('\n')).toEqual([
+      'Process chain (2 links)',
+      'cmd.exe (Initial process)',
+      '  → nltest.exe (Terminal process)'
+    ])
+    const steps = [STEPS, '- Process launch: nltest.exe', '- On host: DESKTOP1.domain.local', '- Beacon: c2.evil.com']
+    expect(apply(steps, defangTimeline(steps, 1)?.edit ?? null).slice(1)).toEqual([
+      '- Process launch: nltest.exe',
+      '- On host: DESKTOP1.domain.local',
+      defangText('- Beacon: c2.evil.com')
+    ])
   })
 })

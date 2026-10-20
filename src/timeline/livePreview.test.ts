@@ -1,5 +1,12 @@
-import { EditorSelection, EditorState, StateEffect, type Extension, type TransactionSpec } from '@codemirror/state'
-import { EditorView, type DecorationSet, type ViewUpdate, type WidgetType } from '@codemirror/view'
+import {
+  EditorSelection,
+  EditorState,
+  RangeSet,
+  StateEffect,
+  type Extension,
+  type TransactionSpec
+} from '@codemirror/state'
+import { EditorView, type Decoration, type DecorationSet, type ViewUpdate, type WidgetType } from '@codemirror/view'
 import { editorLivePreviewField } from 'obsidian'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { FakeEl, fakeEvent } from '../../test/fakeDom'
@@ -104,6 +111,26 @@ const widgets = (state: EditorState, set: DecorationSet) =>
   seen(state, set)
     .filter((s) => s.widget)
     .map((s) => ({ line: s.line, ch: s.ch, to: s.to, name: s.widget?.constructor.name, side: s.side }))
+
+/**
+ * One line as CodeMirror's renderer reads the set: its text runs and widgets
+ * in order, each with the classes of the marks it is drawn inside.
+ */
+function drawn(state: EditorState, set: DecorationSet, line: number): { piece: string; in: string[] }[] {
+  const { from, to } = state.doc.line(line + 1)
+  const out: { piece: string; in: string[] }[] = []
+  const classes = (active: readonly Decoration[]) => active.map((m) => String((m.spec as { class?: string }).class))
+  RangeSet.spans<Decoration>([set], from, to, {
+    span(a, b, active) {
+      out.push({ piece: state.doc.sliceString(a, b), in: classes(active) })
+    },
+    point(_a, _b, d, active) {
+      const widget = (d.spec as { widget?: WidgetType }).widget
+      if (widget) out.push({ piece: `<${widget.constructor.name}>`, in: classes(active) })
+    }
+  })
+  return out
+}
 
 const activeLines = (state: EditorState): number[] =>
   [...lineClasses(state, build(state).decorations)].filter(([, c]) => c.includes(CLS.active)).map(([l]) => l)
@@ -695,5 +722,341 @@ describe('NoteTimelinePlugin', () => {
     const plugin = new NoteTimelinePlugin(fakeView(state), callbacks())
     const view = { plugin: () => plugin } as unknown as EditorView
     expect(sources[0](view)).toBe(plugin.atomic)
+  })
+})
+
+/** The steps sample from the styles spec (screen 8). */
+const STEPS = [
+  '## Alert story',
+  '%% timeline steps %%',
+  '- 21:34 Alert fired: Potential Recon Activity Via Nltest.EXE',
+  '- On host: DESKTOP1.domain.local',
+  '- User context: domain\\user1',
+  '- Process launch: nltest.exe',
+  '- Command executed: nltest /domain_trusts',
+  '- Artifact path: C:\\Users\\user1\\Downloads\\',
+  '- Details',
+  '    - Alert ID: SEC-2023-0704-0001',
+  '    - Time: 2023-07-04 21:34 UTC',
+  '    - Host: DESKTOP1.domain.local',
+  '      192.168.56.95'
+]
+
+/** The chain sample from the styles spec (screen 9). */
+const CHAIN = [
+  '## Process chain',
+  '%% timeline chain %%',
+  '- Initial process: cmd.exe',
+  '    - Terminal process: nltest.exe',
+  '        - User context: domain\\user1',
+  '            - Execution: nltest /domain_trusts'
+]
+
+type Shown = Seen['widget'] & object
+const view = {} as EditorView
+const widgetAt = (state: EditorState, name: string, line: number, handlers = callbacks()): Shown => {
+  const found = seen(state, build(state, handlers).decorations).find(
+    (s) => s.widget?.constructor.name === name && s.line === line
+  )
+  if (!found?.widget) throw new Error(`no ${name} on line ${line}`)
+  return found.widget
+}
+const shown = (w: Shown, v = view) => w.toDOM(v) as unknown as FakeEl
+
+describe('noteTimelineExtension: every style', () => {
+  it('reads the marker of every style, and keeps each one atomic', () => {
+    for (const marker of ['%% timeline steps %%', '%% timeline chain %%', '%% timeline Steps %%']) {
+      const state = stateOf(['Intro', marker, '- a'])
+      expect(readTimelines(state.doc)).toHaveLength(1)
+      expect(seen(state, build(state).atomic).map((s) => [s.line, s.ch, s.to])).toEqual([[1, 0, marker.length]])
+    }
+  })
+
+  it('never draws a block widget', () => {
+    for (const lines of [CLICKFIX, STEPS, CHAIN]) {
+      const state = stateOf(lines)
+      const specs = seen(state, build(state).decorations).map((s) => s.widget && (s as { block?: boolean }).block)
+      expect(specs.some(Boolean)).toBe(false)
+    }
+  })
+
+  it("redraws the header when the marker's style changes the same list", () => {
+    const events = stateOf(['%% timeline %%', '- Alert fired: x'])
+    const steps = stateOf(['%% timeline steps %%', '- Alert fired: x'])
+    const a = widgetAt(events, 'HeaderWidget', 0)
+    const b = widgetAt(steps, 'HeaderWidget', 0)
+    expect(a.eq(b)).toBe(false)
+    expect(shown(b).find(`.${CLS.title}`).getText()).toBe('Steps')
+    expect(shown(b).find(`.${CLS.meta}`).getText()).toBe('1 step')
+  })
+
+  it('keeps the text typed at an edge of a steps marker off it', () => {
+    const lines = ['Intro', '%% timeline steps %%', '- a']
+    const state = stateOf(lines)
+    const plugin = new NoteTimelinePlugin(
+      {
+        state,
+        visibleRanges: [{ from: 0, to: state.doc.length }],
+        dom: { closest: () => null },
+        lineBlockAt: (at: number) => state.doc.lineAt(at)
+      } as unknown as EditorView,
+      callbacks()
+    )
+    const dispatch = vi.fn<(spec: TransactionSpec) => void>()
+    expect(plugin.typed({ state, dispatch } as unknown as EditorView, pos(state, 1), pos(state, 1), 'x')).toBe(true)
+    expect(state.update(dispatch.mock.calls[0][0]).state.doc.line(3).text).toBe(lines[1])
+  })
+})
+
+describe('noteTimelineExtension: User and Host kinds', () => {
+  it('colours a user or host event by its kind, written or read off the text', () => {
+    const state = stateOf([
+      '%% timeline %%',
+      '- 21:34 Host: DESKTOP1.domain.local, the finance workstation',
+      '- 21:35 the account VANTARA\\maya.chen was disabled',
+      '- 21:36 User: domain\\user1 ran it'
+    ])
+    const lines = lineClasses(state, build(state).decorations)
+    expect(lines.get(1)).toEqual(expect.arrayContaining(['cf-ntl-k-host', CLS.explicit]))
+    expect(lines.get(2)).toContain('cf-ntl-k-user')
+    expect(lines.get(2)).not.toContain(CLS.explicit)
+    expect(lines.get(3)).toEqual(expect.arrayContaining(['cf-ntl-k-user', CLS.explicit]))
+    expect(marks(state, build(state).decorations)).toContainEqual({ line: 1, text: 'Host', cls: CLS.tag })
+  })
+})
+
+describe('noteTimelineExtension: steps', () => {
+  const state = stateOf(STEPS)
+  const { decorations } = build(state)
+  const lines = lineClasses(state, decorations)
+  const w = widgets(state, decorations)
+
+  it('draws each step as a numbered row on the rail, with no kind, gap or time-not-recorded', () => {
+    expect(lines.get(1)).toEqual([CLS.line, CLS.markerLine])
+    for (const n of [2, 3, 4, 5, 6, 7]) {
+      expect(lines.get(n)).toEqual(
+        expect.arrayContaining([CLS.line, CLS.steps, CLS.ev, CLS.step, CLS.cardTop, CLS.cardBottom])
+      )
+      expect(lines.get(n)?.some((c) => c.startsWith('cf-ntl-k-') || c === CLS.gap)).toBe(false)
+    }
+    expect([...lines].filter(([, c]) => c.includes(CLS.first)).map(([l]) => l)).toEqual([2])
+    expect(w.filter((x) => x.name === 'StepNodeWidget')).toEqual(
+      [2, 3, 4, 5, 6, 7].map((line) => ({ line, ch: 2, to: 2, name: 'StepNodeWidget', side: -1 }))
+    )
+    expect(w.some((x) => ['NodeWidget', 'BandWidget', 'UntimedWidget'].includes(x.name ?? ''))).toBe(false)
+    expect(shown(widgetAt(state, 'StepNodeWidget', 5)).getText()).toBe('4')
+  })
+
+  it('puts the label and the time as written on a row above the value', () => {
+    const m = marks(state, decorations)
+    expect(m.filter((x) => x.line === 2)).toEqual(
+      expect.arrayContaining([
+        { line: 2, text: '21:34 Alert fired: ', cls: CLS.head },
+        { line: 2, text: '21:34', cls: CLS.time },
+        { line: 2, text: 'Alert fired', cls: CLS.label },
+        { line: 2, text: ': ', cls: CLS.sep },
+        { line: 2, text: 'Potential Recon Activity Via Nltest.EXE', cls: CLS.value }
+      ])
+    )
+    // No time written, no chip: nothing says it is missing.
+    expect(m.filter((x) => x.line === 3).map((x) => x.cls)).not.toContain(CLS.time)
+    expect(m).toContainEqual({ line: 3, text: 'On host: ', cls: CLS.head })
+  })
+
+  it('sets a value in monospace when its shape names it, else in the body font', () => {
+    const value = (line: number) =>
+      marks(state, decorations).find((x) => x.line === line && x.cls.startsWith(CLS.value))
+    expect(value(4)).toEqual({ line: 4, text: 'domain\\user1', cls: `${CLS.value} ${CLS.mono}` })
+    expect(value(5)?.cls).toBe(`${CLS.value} ${CLS.mono}`)
+    expect(value(6)).toEqual({ line: 6, text: 'nltest /domain_trusts', cls: `${CLS.value} ${CLS.mono}` })
+    expect(value(2)?.cls).toBe(CLS.value)
+    // An internal host name is a Hostname.
+    expect(value(3)).toEqual({ line: 3, text: 'DESKTOP1.domain.local', cls: `${CLS.value} ${CLS.mono}` })
+  })
+
+  it('reads a step with no label as all value, and a time with no label as its own row', () => {
+    const s = stateOf(['%% timeline steps %%', '- the analyst closed the alert', '- 21:40 escalated to tier 2'])
+    const m = marks(s, build(s).decorations)
+    expect(m).toContainEqual({ line: 1, text: 'the analyst closed the alert', cls: CLS.value })
+    expect(m.filter((x) => x.line === 1).map((x) => x.cls)).not.toContain(CLS.head)
+    expect(m).toContainEqual({ line: 2, text: '21:40 ', cls: CLS.head })
+    expect(m).toContainEqual({ line: 2, text: 'escalated to tier 2', cls: CLS.value })
+  })
+
+  it('draws the closing Details bullet as facts rows, not a step', () => {
+    expect(lines.get(8)).toEqual(expect.arrayContaining([CLS.steps, CLS.facts, CLS.ev, CLS.factsHead, CLS.cardTop]))
+    expect(lines.get(8)).not.toContain(CLS.step)
+    expect(lines.get(9)).toEqual(expect.arrayContaining([CLS.facts, CLS.detail, CLS.fact]))
+    expect(lines.get(11)).toContain(CLS.fact)
+    expect(lines.get(12)).toEqual(expect.arrayContaining([CLS.facts, CLS.factMore, CLS.cardBottom, CLS.last]))
+    expect(lines.get(7)).not.toContain(CLS.last)
+    const m = marks(state, decorations)
+    expect(m).toEqual(
+      expect.arrayContaining([
+        { line: 9, text: 'Alert ID: ', cls: CLS.factKey },
+        { line: 9, text: 'Alert ID', cls: CLS.label },
+        // A fact's value is an identifier: monospace, as in the facts row it stands for.
+        { line: 9, text: 'SEC-2023-0704-0001', cls: `${CLS.value} ${CLS.mono}` },
+        { line: 11, text: 'Host: ', cls: CLS.factKey },
+        { line: 12, text: '192.168.56.95', cls: CLS.factMoreText }
+      ])
+    )
+    // The line under a fact starts on its value's column: a hidden copy of the key holds the width.
+    expect(w).toContainEqual(expect.objectContaining({ line: 12, ch: 6, name: 'FactPadWidget', side: -1 }))
+    expect(w.filter((x) => x.name === 'StepNodeWidget').map((x) => x.line)).not.toContain(8)
+  })
+
+  it('chips no indicator in a step, but keeps the header counting the live ones', () => {
+    const s = stateOf(['%% timeline steps %%', '- Fetched: https://promptcraft.online/a.ps1'])
+    const { decorations: d } = build(s)
+    expect(marks(s, d).some((x) => x.cls.split(' ').includes(CLS.ioc))).toBe(false)
+    expect(widgets(s, d).some((x) => x.name === 'IconWidget')).toBe(false)
+    expect(
+      shown(widgetAt(s, 'HeaderWidget', 0))
+        .find(`.${CLS.live}`)
+        .getText()
+    ).toBe('1 live indicator · Defang')
+  })
+
+  it('hints at what an empty step could say', () => {
+    const s = stateOf(['%% timeline steps %%', '- Alert fired: x', '- '])
+    const ghost = widgets(s, build(s).decorations).filter((x) => x.name === 'GhostWidget')
+    expect(ghost).toEqual([{ line: 2, ch: 2, to: 2, name: 'GhostWidget', side: 1 }])
+    expect(shown(widgetAt(s, 'GhostWidget', 2)).getText()).toBe('Label: what you saw')
+  })
+
+  it('keeps every row drawn and marks the one the caret is in', () => {
+    const active = (at: [number, number]) =>
+      [...lineClasses(state, build(stateOf(STEPS, at)).decorations)]
+        .filter(([, c]) => c.includes(CLS.active))
+        .map(([l]) => l)
+    expect(active([5, 20])).toEqual([5])
+    expect(active([10, 4])).toEqual([8, 9, 10, 11, 12])
+  })
+
+  it('adds a step from the row under the list', () => {
+    const cb = callbacks()
+    const focus = vi.fn<() => void>()
+    const row = shown(widgetAt(state, 'AddWidget', 12, cb), { focus } as unknown as EditorView)
+    expect(row.getText()).toBe('Add step')
+    row.click()
+    expect(cb.onAddEvent).toHaveBeenCalledExactlyOnceWith(expect.anything(), 1)
+    expect(focus).toHaveBeenCalledOnce()
+  })
+})
+
+describe('noteTimelineExtension: process chain', () => {
+  const state = stateOf(CHAIN)
+  const { decorations } = build(state)
+  const lines = lineClasses(state, decorations)
+  const w = widgets(state, decorations)
+
+  it('draws each link as a card, the root and its spawned children apart', () => {
+    expect(lines.get(2)).toEqual(
+      expect.arrayContaining([CLS.line, CLS.chain, CLS.root, CLS.ev, CLS.proc, CLS.procEnd, CLS.first])
+    )
+    expect(lines.get(2)).not.toContain(CLS.spawned)
+    for (const n of [3, 4, 5]) {
+      expect(lines.get(n)).toEqual(expect.arrayContaining([CLS.chain, CLS.child, CLS.proc, CLS.procEnd, CLS.spawned]))
+    }
+    expect(lines.get(5)).toContain(CLS.last)
+    // A chain has no rail of events, cards or gaps.
+    const events: string[] = [CLS.cardTop, CLS.gap, CLS.step]
+    expect([...lines.values()].flat().some((c) => events.includes(c))).toBe(false)
+  })
+
+  it("draws a 'Spawns' connector above every child, and the role after every label and its ': '", () => {
+    expect(w.filter((x) => x.name === 'SpawnWidget')).toEqual([
+      { line: 3, ch: 6, to: 6, name: 'SpawnWidget', side: -1 },
+      { line: 4, ch: 10, to: 10, name: 'SpawnWidget', side: -1 },
+      { line: 5, ch: 14, to: 14, name: 'SpawnWidget', side: -1 }
+    ])
+    const roles = w.filter((x) => x.name === 'RoleWidget')
+    expect(roles.map((x) => [x.line, x.ch, x.side])).toEqual([
+      [2, 19, -1],
+      [3, 24, -1],
+      [4, 24, -1],
+      [5, 25, -1]
+    ])
+    // In the label's row after the ': ' (shown while editing), so the colon stays with the label.
+    const row = drawn(state, decorations, 2).filter((p) => p.piece !== '- ')
+    expect(row.map((p) => p.piece)).toEqual(['Initial process', ': ', '<RoleWidget>', '<IconWidget>', 'cmd.exe'])
+    expect(row.map((p) => p.in.includes(CLS.head))).toEqual([true, true, true, false, false])
+    expect(shown(widgetAt(state, 'RoleWidget', 2)).getText()).toBe('Root process')
+    const child = shown(widgetAt(state, 'RoleWidget', 3))
+    expect([child.getText(), child.hasClass(CLS.role), child.hasClass(CLS.roleAlone)]).toEqual([
+      'Spawned child',
+      true,
+      false
+    ])
+    const spawn = shown(widgetAt(state, 'SpawnWidget', 3))
+    expect(spawn.getText()).toBe('Spawns')
+    expect(widgetAt(state, 'SpawnWidget', 3).ignoreEvent(new Event('mousedown'))).toBe(false)
+  })
+
+  it('sets every value in monospace after an icon for what it names', () => {
+    const m = marks(state, decorations)
+    expect(m).toEqual(
+      expect.arrayContaining([
+        { line: 2, text: 'Initial process: ', cls: CLS.head },
+        { line: 2, text: 'Initial process', cls: CLS.label },
+        { line: 2, text: 'cmd.exe', cls: `${CLS.value} ${CLS.mono}` },
+        { line: 5, text: 'nltest /domain_trusts', cls: `${CLS.value} ${CLS.mono}` }
+      ])
+    )
+    const icons = w.filter((x) => x.name === 'IconWidget')
+    expect(icons.map((x) => [x.line, x.ch, x.side])).toEqual([
+      [2, 19, 2],
+      [3, 24, 2],
+      [4, 24, 2],
+      [5, 25, 2]
+    ])
+    const icon = widgetAt(state, 'IconWidget', 3) as unknown as { icon: string; cls: string }
+    expect([icon.icon, icon.cls]).toEqual(['activity', CLS.valueIcon])
+  })
+
+  it("keeps a link's notes in its card, and a second root apart from the first", () => {
+    const s = stateOf(['%% timeline chain %%', '- Initial process: cmd.exe', '    started by the user', '- Second: x'])
+    const l = lineClasses(s, build(s).decorations)
+    expect(l.get(1)).not.toContain(CLS.procEnd)
+    expect(l.get(2)).toEqual(expect.arrayContaining([CLS.chain, CLS.root, CLS.detail, CLS.procEnd]))
+    expect(l.get(3)).toEqual(expect.arrayContaining([CLS.root, CLS.proc, CLS.procEnd, CLS.last]))
+    expect(l.get(3)).not.toContain(CLS.first)
+  })
+
+  it('gives a link with no label its role just before the value, and hints at an empty one', () => {
+    const s = stateOf(['%% timeline chain %%', '- cmd.exe', '    - '])
+    const found = widgets(s, build(s).decorations)
+    // After the text's start, then the icon: Obsidian measures a list line's
+    // hanging indent from the first thing after its bullet, the role here.
+    expect(found.filter((x) => x.line === 1).map((x) => [x.name, x.ch, x.side])).toEqual([
+      ['RoleWidget', 2, 1],
+      ['IconWidget', 2, 2]
+    ])
+    expect(shown(widgetAt(s, 'RoleWidget', 1)).hasClass(CLS.roleAlone)).toBe(true)
+    expect(found.filter((x) => x.line === 2).map((x) => x.name)).toEqual(['SpawnWidget', 'GhostWidget', 'AddWidget'])
+    expect(shown(widgetAt(s, 'GhostWidget', 2)).getText()).toBe('Label: process or command')
+  })
+
+  it('adds a child of the last link when the plugin can, else a link', () => {
+    const plain = callbacks()
+    const row = shown(widgetAt(state, 'AddWidget', 5, plain), { focus: () => {} } as unknown as EditorView)
+    expect(row.getText()).toBe('Add link')
+    row.click()
+    expect(plain.onAddEvent).toHaveBeenCalledExactlyOnceWith(expect.anything(), 1)
+    const onAddChild = vi.fn<NonNullable<NoteTimelineCallbacks['onAddChild']>>()
+    const cb = { ...callbacks(), onAddChild }
+    const child = shown(widgetAt(state, 'AddWidget', 5, cb), { focus: () => {} } as unknown as EditorView)
+    expect(child.getText()).toBe('Add a child it spawned')
+    child.click()
+    expect(onAddChild).toHaveBeenCalledExactlyOnceWith(expect.anything(), 5)
+    expect(cb.onAddEvent).not.toHaveBeenCalled()
+    expect(widgetAt(state, 'AddWidget', 5, cb).eq(widgetAt(state, 'AddWidget', 5, plain))).toBe(true)
+  })
+
+  it('marks the card the caret is in, its notes too', () => {
+    const s = stateOf(['%% timeline chain %%', '- a: x', '    note', '    - b: y'], [2, 3])
+    const active = [...lineClasses(s, build(s).decorations)].filter(([, c]) => c.includes(CLS.active))
+    expect(active.map(([l]) => l)).toEqual([1, 2])
   })
 })

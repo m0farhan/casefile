@@ -1,4 +1,5 @@
 import type { IocType } from '../types'
+import { NAME_LIKE, detectDetailField } from '../soc/detailKind'
 import { detectIocType, extractIocsFromText } from '../soc/ioc'
 import { defangText } from '../soc/toolbox'
 
@@ -7,12 +8,34 @@ import { defangText } from '../soc/toolbox'
  * read as an incident's events. Pure: lines in, a description out, nothing
  * written back. What it cannot read stays as written and is said to be unread,
  * never guessed: a bullet without a time it can read is "time not recorded",
- * and every gap and span it reports is derived from two written times.
+ * and every gap and span it reports is derived from two written times. The
+ * marker names the style the list is drawn in; the block rules are the same
+ * for every style.
  */
 
 export const TIMELINE_MARKER = '%% timeline %%'
 
-export type EventKind = 'observed' | 'web' | 'execution' | 'file' | 'email' | 'detection' | 'response'
+/** Events in time (the plain marker), numbered steps, or a process chain. */
+export type TimelineStyle = 'events' | 'steps' | 'chain'
+
+const MARKER = /^%% timeline(?: (\S+))? %%$/
+
+/** The marker line for a style. */
+export const markerFor = (style: TimelineStyle): string =>
+  style === 'events' ? TIMELINE_MARKER : `%% timeline ${style} %%`
+
+/** The style a marker line names, the style word in any case; null when the line is no marker. */
+export function markerStyle(line: string): TimelineStyle | null {
+  const m = MARKER.exec(line.trim())
+  if (!m) return null
+  const word = m[1]?.toLowerCase()
+  return word === undefined ? 'events' : word === 'steps' || word === 'chain' ? word : null
+}
+
+/** Whether a note may hold a timeline, before it is split into lines: one string scan. */
+export const mayHoldTimeline = (text: string): boolean => text.includes('%% timeline')
+
+export type EventKind = 'observed' | 'web' | 'execution' | 'file' | 'email' | 'user' | 'host' | 'detection' | 'response'
 
 /** Columns in the full line string, end exclusive. */
 export interface Span {
@@ -108,8 +131,55 @@ export interface TimelineSummary {
   live: number
 }
 
+/** A label before ': ' and the value after it, as columns of the line, and what the value is by its shape. */
+export interface Labelled {
+  /** Null when the text is all value. */
+  label: Span | null
+  labelText: string | null
+  /** Empty (from === to) when there is none. */
+  value: Span
+  valueText: string
+  /** detectDetailField's name for the value (Email, IP, URL, Domain, Hash, File path, …); null when its shape does not say. */
+  valueKind: string | null
+}
+
+/** A numbered step: an event's text after its time phrase, read as label and value. */
+export interface TimelineStep extends Labelled {
+  /** 1 for the first step, in note order. */
+  n: number
+  /** The bullet, with its time (null when none is written) and details. */
+  event: TimelineEvent
+}
+
+/** One fact under the closing Details or Facts bullet: its label is the key, null for a line that is not 'Key: value'. */
+export interface TimelineFact extends Labelled {
+  /** The detail line it starts on. */
+  line: number
+  /** The plain lines under it: more of its value (the IP under Host), each with its text and the text's columns. */
+  more: { line: number; span: Span; text: string }[]
+}
+
+/** A link of a process chain: any bullet in the block. */
+export interface ChainLink extends Labelled {
+  line: number
+  /** Last line of the link with its notes and the links under it: what move and delete take. */
+  lastLine: number
+  indent: string
+  /** Column where the bullet's text starts, after its marker and a task's box. */
+  textFrom: number
+  /** 0 for a top-level bullet. */
+  depth: number
+  /** Index in `links` of the link it hangs under; null for a root. */
+  parent: number | null
+  /** Derived from the depth, display only. */
+  role: 'Root process' | 'Spawned child'
+  /** Its plain lines (code included), up to its first child. */
+  notes: TimelineDetail[]
+}
+
 export interface TimelineBlock {
   markerLine: number
+  style: TimelineStyle
   /** First event line; the marker line when the list is empty. */
   firstLine: number
   /** Last line of the last event, details included; the marker line when empty. */
@@ -118,6 +188,12 @@ export interface TimelineBlock {
   /** gaps[i] sits above events[i]; gaps[0] is null. */
   gaps: (TimelineGap | null)[]
   summary: TimelineSummary
+  /** Steps style: every event but a closing Details or Facts bullet. Empty in the other styles. */
+  steps: TimelineStep[]
+  /** Steps style: the facts under the last event when it is a Details or Facts bullet (not a step then). */
+  facts: TimelineFact[]
+  /** Chain style: every bullet in the block, in note order. Empty in the other styles. */
+  links: ChainLink[]
 }
 
 // ─── The block ───────────────────────────────────────────────────────────────
@@ -161,9 +237,10 @@ export function findTimelines(lines: string[]): TimelineBlock[] {
       if (f && f[0] === fence[0] && f.length >= fence.length) fence = ''
       continue
     }
+    const style = f ? null : markerStyle(lines[i])
     if (f) fence = f
-    else if (lines[i].trim() === TIMELINE_MARKER) {
-      const block = readBlock(lines, i)
+    else if (style) {
+      const block = readBlock(lines, i, style)
       blocks.push(block)
       i = block.lastLine
     }
@@ -180,7 +257,7 @@ export function findTimelines(lines: string[]): TimelineBlock[] {
  * lines and blank lines included; a line back at the list's indent ends it, as
  * Markdown ends the list item.
  */
-function readBlock(lines: string[], markerLine: number): TimelineBlock {
+function readBlock(lines: string[], markerLine: number, style: TimelineStyle): TimelineBlock {
   let i = markerLine + 1
   if (isBlank(lines[i]) && BULLET.test(lines[i + 1] ?? '')) i++
   const events: TimelineEvent[] = []
@@ -195,6 +272,8 @@ function readBlock(lines: string[], markerLine: number): TimelineBlock {
   const atBase = (s: string) => BULLET.exec(s)?.[1].length === base && markOf(s) === baseMark
   let carry: Carry = { date: null, text: null }
   let fence: { mark: string; indent: number } | null = null
+  // Code lines are never a chain's link or a fact, whatever they start with.
+  const codeLines = new Set<number>()
   const detail = (line: string, n: number, code: boolean) => {
     const event = events[events.length - 1]
     // Code keeps its indent under its fence, and a '- ' in it is code, not a marker.
@@ -202,6 +281,7 @@ function readBlock(lines: string[], markerLine: number): TimelineBlock {
       ? line.slice(Math.min(indentOf(line), fence?.indent ?? 0)).trimEnd()
       : line.trim().replace(DETAIL_MARKER, '')
     event.details.push({ line: n, text, source: !code && /^source:/i.test(text) })
+    if (code) codeLines.add(n)
     event.lastLine = n
     const found = readIndicators(line)
     live += found.unlisted + found.iocs.filter((s) => s.live).length
@@ -246,11 +326,14 @@ function readBlock(lines: string[], markerLine: number): TimelineBlock {
   }
   return {
     markerLine,
+    style,
     firstLine: events[0]?.line ?? markerLine,
     lastLine: events.at(-1)?.lastLine ?? markerLine,
     events,
     gaps: events.map((e, n) => (n === 0 ? null : gapBetween(events[n - 1].time, e.time))),
-    summary: summarise(events, live)
+    summary: summarise(events, live),
+    ...(style === 'steps' ? readSteps(lines, events, codeLines) : { steps: [], facts: [] }),
+    links: style === 'chain' ? readLinks(lines, events, codeLines) : []
   }
 }
 
@@ -269,6 +352,118 @@ export function timelineAt(
   return null
 }
 
+// ─── Steps and chains ────────────────────────────────────────────────────────
+
+/** The closing bullet that holds a steps list's facts. */
+const FACTS = /^(?:details|facts):?$/i
+
+/**
+ * The text of a line from column `from` as label and value: split at the
+ * first ': ' when what comes before it reads as a name (as Details reads a
+ * pasted 'Field: value'), a label alone when the text ends in ':', else all
+ * value.
+ */
+function labelled(line: string, from: number): Labelled {
+  const end = Math.max(from, line.trimEnd().length)
+  const text = line.slice(from, end)
+  const colon = text.indexOf(': ')
+  let label: Span | null = null
+  let value: Span = { from, to: end }
+  if (colon > 0 && NAME_LIKE.test(text.slice(0, colon))) {
+    label = { from, to: from + colon }
+    value = { from: end - text.slice(colon + 2).trimStart().length, to: end }
+  } else if (text.length > 1 && text.endsWith(':')) {
+    label = { from, to: end - 1 }
+    value = { from: end, to: end }
+  }
+  const valueText = line.slice(value.from, value.to)
+  return {
+    label,
+    labelText: label && line.slice(label.from, label.to),
+    value,
+    valueText,
+    valueKind: detectDetailField(valueText)
+  }
+}
+
+/**
+ * Steps: each event is one, read after its time phrase (the kind word is the
+ * step's label, not taken off it). A last bullet that says only Details or
+ * Facts and has lines under it is not a step: those lines are the facts, a
+ * bullet starting each and a plain line under one adding to it.
+ */
+function readSteps(
+  lines: string[],
+  events: TimelineEvent[],
+  code: Set<number>
+): { steps: TimelineStep[]; facts: TimelineFact[] } {
+  const last = events.at(-1)
+  const closing = last && FACTS.test(last.text.trim()) && last.details.length ? last : null
+  const facts: TimelineFact[] = []
+  for (const d of closing?.details ?? []) {
+    const line = lines[d.line]
+    const at = indentOf(line)
+    const marker = code.has(d.line) ? undefined : DETAIL_MARKER.exec(line.slice(at))?.[0]
+    const fact = facts.at(-1)
+    if (!marker && fact) fact.more.push({ line: d.line, span: { from: at, to: line.trimEnd().length }, text: d.text })
+    else facts.push({ line: d.line, ...labelled(line, at + (marker?.length ?? 0)), more: [] })
+  }
+  const steps = events
+    .filter((e) => e !== closing)
+    .map((event, i) => {
+      const line = lines[event.line]
+      // After the time phrase and its separator: where a kind word or the body starts.
+      const from = event.kindSpan?.from ?? line.length - event.body.length
+      return { n: i + 1, event, ...labelled(line, from) }
+    })
+  return { steps, facts }
+}
+
+/**
+ * A chain's links: every event is a root, and a bullet in its details hangs
+ * under the nearest link above with a smaller indent. A plain line, or any
+ * line of code, is a note of the link above it.
+ */
+function readLinks(lines: string[], events: TimelineEvent[], code: Set<number>): ChainLink[] {
+  const links: ChainLink[] = []
+  for (const e of events) {
+    const at = (line: number, indent: number, textFrom: number, parent: number | null): ChainLink => ({
+      line,
+      lastLine: line,
+      indent: lines[line].slice(0, indent),
+      textFrom,
+      depth: parent === null ? 0 : links[parent].depth + 1,
+      parent,
+      role: parent === null ? 'Root process' : 'Spawned child',
+      notes: [],
+      ...labelled(lines[line], textFrom)
+    })
+    const start = links.length
+    links.push(at(e.line, e.indent.length, e.textFrom, null))
+    const path = [start]
+    for (const d of e.details) {
+      const line = lines[d.line]
+      const indent = indentOf(line)
+      const marker = code.has(d.line) ? undefined : DETAIL_MARKER.exec(line.slice(indent))?.[0]
+      if (!marker) {
+        links[path[path.length - 1]].notes.push(d)
+        continue
+      }
+      while (path.length > 1 && links[path[path.length - 1]].indent.length >= indent) path.pop()
+      const from = indent + marker.length
+      const box = TASK_BOX.exec(line.slice(from))?.[0].length ?? 0
+      path.push(links.push(at(d.line, indent, from + box, path[path.length - 1])) - 1)
+    }
+    // A link runs to the last line before the next one no deeper; the last ones to the event's end.
+    const own = links.slice(start)
+    own.forEach((l, k) => {
+      const next = own.slice(k + 1).find((o) => o.depth <= l.depth)
+      l.lastLine = next ? (e.details.filter((d) => d.line < next.line).at(-1)?.line ?? l.line) : e.lastLine
+    })
+  }
+  return links
+}
+
 // ─── One bullet ──────────────────────────────────────────────────────────────
 
 const KIND_WORDS: Record<string, EventKind> = {
@@ -281,7 +476,14 @@ const KIND_WORDS: Record<string, EventKind> = {
   web: 'web',
   file: 'file',
   download: 'file',
-  email: 'email'
+  email: 'email',
+  user: 'user',
+  account: 'user',
+  host: 'host',
+  workstation: 'host',
+  endpoint: 'host',
+  server: 'host',
+  device: 'host'
 }
 // Whitespace after the colon, so file:///etc/passwd is a path, not a kind.
 const KIND = new RegExp(`^(${Object.keys(KIND_WORDS).join('|')}):(?:[ \\t]+|$)`, 'i')
@@ -331,8 +533,8 @@ function readEvent(
 }
 
 /**
- * The kind the text implies when none is written. Detection and response are
- * the analyst's calls, never read off the text.
+ * The kind the text implies when none is written. Detection, response and
+ * host are the analyst's calls, never read off the text.
  */
 function deriveKind(body: string, iocs: TimelineIoc[]): EventKind {
   const has = (...types: IocType[]) => iocs.some((i) => types.includes(i.type))
@@ -340,6 +542,8 @@ function deriveKind(body: string, iocs: TimelineIoc[]): EventKind {
   if (has('hash') || PATH.test(body)) return 'file'
   if (has('url', 'domain', 'ip')) return 'web'
   if (has('email')) return 'email'
+  // A DOMAIN\user token, as Details names one; Windows\Temp is a folder, BUILTIN\x a group.
+  if (body.split(/\s+/).some((t) => t.includes('\\') && detectDetailField(t) === 'User')) return 'user'
   return 'observed'
 }
 
@@ -618,21 +822,55 @@ function writtenAs(value: string): RegExp {
 }
 
 /**
+ * File extensions that are also top-level domains: login-microsoft.zip may be
+ * a live site, so it is defanged. ponytail: the ones Details reads as files,
+ * by hand; check against a TLD list if one comes into the code.
+ */
+const TLD_EXTENSION = /\.(?:zip|sh|py|one)\W*$/i
+/** Stands in for the dots of a token kept as written while defangText reads the text; no note holds it. */
+const MASK = '\u0000'
+
+/**
+ * A token shaped like a host that reaches no one outside: a file named by
+ * itself, as Details reads one (cmd.exe, invoice.pdf), or an internal host
+ * (DESKTOP1.domain.local).
+ */
+const keepsItsDots = (token: string): boolean => {
+  if (!token.includes('.')) return false
+  const kind = detectDetailField(token)
+  return kind === 'Hostname' || (kind === 'File path' && !/[\\/]/.test(token) && !TLD_EXTENSION.test(token))
+}
+
+/**
+ * defangText for the timeline's text, a file or an internal host named by
+ * itself left as written. defangText reads the value after 'Label: ' as a
+ * host when it has a host's shape, and labelled lines are how steps and
+ * chains are written: cmd.exe would be cmd[.]exe. Every count, edit, copy
+ * and drawing of a timeline defangs with this, so they agree.
+ */
+export function defangTimelineText(text: string): string {
+  if (text.includes(MASK)) return defangText(text)
+  const masked = text.replace(/\S+/g, (t) => (keepsItsDots(t) ? t.replaceAll('.', MASK) : t))
+  return masked === text ? defangText(text) : defangText(masked).replaceAll(MASK, '.')
+}
+
+/**
  * Every indicator on a line from column `from`, defanged or real, as columns
  * of the line. extractIocsFromText decides what is an indicator; this only
  * finds where each one is written. The domain inside a URL or an address is
- * part of it, not a second indicator. `live` is whether defangText over the
- * whole line would change it, so it agrees with what Defang will do: a bare
- * domain in prose, which defangText leaves as written, is not live.
+ * part of it, not a second indicator. `live` is whether defangTimelineText
+ * over the whole line would change it, so it agrees with what Defang will do:
+ * a bare domain in prose, which defangText leaves as written, is not live.
  */
 export function indicatorSpans(line: string, from = 0): TimelineIoc[] {
   return readIndicators(line, from).iocs
 }
 
 /**
- * indicatorSpans, and how many changes defangText makes on the line outside
- * every span: a file:// or ms-msdt: link, or anything else the extractor does
- * not list. Together they are what Defang timeline changes on the line.
+ * indicatorSpans, and how many changes defangTimelineText makes on the line
+ * outside every span: a file:// or ms-msdt: link, or anything else the
+ * extractor does not list. Together they are what Defang timeline changes on
+ * the line.
  */
 function readIndicators(line: string, from = 0): { iocs: TimelineIoc[]; unlisted: number } {
   const text = line.slice(from)
@@ -648,7 +886,7 @@ function readIndicators(line: string, from = 0): { iocs: TimelineIoc[]; unlisted
   found.sort((a, b) => a.span.from - b.span.from || b.span.to - a.span.to)
   const iocs: TimelineIoc[] = []
   for (const f of found) if (f.span.from >= (iocs.at(-1)?.span.to ?? 0)) iocs.push({ ...f, live: false })
-  const out = defangText(line)
+  const out = defangTimelineText(line)
   if (out === line) return { iocs, unlisted: 0 }
   const alone = (i: TimelineIoc) => {
     const written = line.slice(i.span.from, i.span.to)
@@ -805,14 +1043,55 @@ function summarise(events: TimelineEvent[], otherLive: number): TimelineSummary 
 // ─── Copy for ticket ─────────────────────────────────────────────────────────
 
 /**
- * The timeline as plain text for a ticket: a time column as written, then the
- * bullet without its lead word and time phrase; details indent under it and
- * Source: lines join the event line. A date line goes above each event whose
- * date, stated or carried, differs from the one above it; a time with no date
- * comes before any. Not defanged here: copyText reads the block from the note
- * lines as Defang timeline leaves them.
+ * The timeline as plain text for a ticket, laid out for its style. Not
+ * defanged here: copyText reads the block from the note lines as Defang
+ * timeline leaves them.
  */
 export function copyForTicket(block: TimelineBlock): string {
+  if (block.style === 'steps') return copySteps(block)
+  return block.style === 'chain' ? copyChain(block) : copyEvents(block)
+}
+
+/** 'Label: value', 'Label:' or the value alone. */
+const pair = (at: Labelled): string =>
+  at.labelText === null ? at.valueText : `${at.labelText}: ${at.valueText}`.trimEnd()
+
+/** Steps: '1. Label: value (21:34)' with the time as written when there is one, details under it, then the facts. */
+function copySteps(block: TimelineBlock): string {
+  const out = [`Steps (${block.steps.length})`]
+  for (const s of block.steps) {
+    const t = s.event.time
+    out.push(`${s.n}. ${pair(s)}${t ? ` (${t.approx ? '~' : ''}${t.raw})` : ''}`.trimEnd())
+    for (const d of s.event.details) out.push(' '.repeat(`${s.n}. `.length) + d.text)
+  }
+  if (block.facts.length) out.push('')
+  for (const f of block.facts) {
+    out.push(pair(f))
+    // The lines a fact runs on to sit under its value.
+    for (const m of f.more) out.push(' '.repeat(f.labelText === null ? 0 : f.labelText.length + 2) + m.text)
+  }
+  return out.join('\n')
+}
+
+/** A chain: 'value (label)', two spaces a level and '→ ' before a child, its notes under it. */
+function copyChain(block: TimelineBlock): string {
+  const { links } = block
+  const out = [`Process chain (${links.length} link${links.length === 1 ? '' : 's'})`]
+  for (const l of links) {
+    const lead = l.depth ? `${'  '.repeat(l.depth)}→ ` : ''
+    out.push(lead + [l.valueText, l.labelText !== null && `(${l.labelText})`].filter(Boolean).join(' '))
+    for (const n of l.notes) out.push(' '.repeat(lead.length + 2) + n.text)
+  }
+  return out.join('\n')
+}
+
+/**
+ * Events: a time column as written, then the bullet without its lead word and
+ * time phrase; details indent under it and Source: lines join the event line.
+ * A date line goes above each event whose date, stated or carried, differs
+ * from the one above it; a time with no date comes before any.
+ */
+function copyEvents(block: TimelineBlock): string {
   const { events } = block
   const labels = events.map((e) => (!e.time || e.time.minutes === null ? '--:--' : timeLabel(e.time)))
   const width = Math.max(8, ...labels.map((l) => l.length)) + 3

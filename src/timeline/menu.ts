@@ -10,26 +10,29 @@ import {
   type Plugin
 } from 'obsidian'
 import { EditorView } from '@codemirror/view'
-import { defangText } from '../soc/toolbox'
 import { copyDefanged, copyText as copyToClipboard } from '../ui/defangMenu'
 import {
+  addChild,
   addEventAtEnd,
   addEventBelow,
   applyEdit,
   backToPlainList,
+  closingOf,
   copyText,
   defangTimeline,
   deleteEvent,
+  insertTimeline,
   makeTimeline,
   moveEvent,
   selectedLines,
   setEventKind,
+  setStyle,
   sortEventsByTime,
   type TimelineEdit
 } from './actions'
 import { kindLabel } from './dom'
 import { noteTimelineExtension } from './livePreview'
-import { findTimelines, timelineAt, type EventKind } from './parse'
+import { defangTimelineText, findTimelines, timelineAt, type EventKind, type TimelineStyle } from './parse'
 import { decorateTimelineSections, redrawOnTimelineChange } from './reading'
 
 type KindChoice = EventKind | 'auto'
@@ -37,17 +40,36 @@ type KindChoice = EventKind | 'auto'
 /** The kinds the picker offers, in the menu's order. Observed has no word, so Auto stands for it. */
 const KIND_CHOICES: { kind: KindChoice; icon: string }[] = [
   { kind: 'auto', icon: 'wand-2' },
-  { kind: 'detection', icon: 'siren' },
-  { kind: 'response', icon: 'shield-check' },
-  { kind: 'execution', icon: 'terminal' },
   { kind: 'web', icon: 'globe' },
+  { kind: 'execution', icon: 'terminal' },
   { kind: 'file', icon: 'file' },
-  { kind: 'email', icon: 'mail' }
+  { kind: 'email', icon: 'mail' },
+  { kind: 'user', icon: 'user' },
+  { kind: 'host', icon: 'monitor' },
+  { kind: 'detection', icon: 'siren' },
+  { kind: 'response', icon: 'shield-check' }
 ]
+
+/** The styles a timeline is drawn in, in the submenus' order, with the header's icon. */
+const STYLES: { style: TimelineStyle; title: string; icon: string }[] = [
+  { style: 'events', title: 'Events', icon: 'git-commit-vertical' },
+  { style: 'steps', title: 'Steps', icon: 'list-ordered' },
+  { style: 'chain', title: 'Process chain', icon: 'git-fork' }
+]
+
+/** What the items call a top-level bullet in each style. */
+const ITEM_NOUN: Record<TimelineStyle, string> = { events: 'event', steps: 'step', chain: 'link' }
 
 const choiceLabel = (kind: KindChoice): string => (kind === 'auto' ? 'Auto (from the text)' : kindLabel(kind))
 
 const noteLines = (editor: Editor): string[] => editor.getValue().split('\n')
+
+/**
+ * Obsidian's editor for one table cell in Live Preview, which holds the
+ * cell's text only: a timeline written there breaks the cell, so no item or
+ * command applies, as Obsidian's own block items do not. Not in its typings.
+ */
+const inTableCell = (editor: Editor): boolean => (editor as { inTableCell?: boolean }).inTableCell === true
 
 /** Applies an edit when there is one; false when the item does not apply. */
 function apply(editor: Editor, edit: TimelineEdit | null): boolean {
@@ -58,13 +80,13 @@ function apply(editor: Editor, edit: TimelineEdit | null): boolean {
 
 /** The timeline and event under the caret, if any. */
 function here(editor: Editor, line = editor.getCursor().line) {
-  return timelineAt(findTimelines(noteLines(editor)), line)
+  return inTableCell(editor) ? null : timelineAt(findTimelines(noteLines(editor)), line)
 }
 
-/** The kind the event says now: its word when written, else Auto. */
+/** The kind the event says now: its word when written, else Auto. Null outside an events timeline: steps and chains draw no kind. */
 function currentChoice(editor: Editor, line: number): KindChoice | null {
   const at = here(editor, line)
-  if (!at?.event) return null
+  if (!at?.event || at.block.style !== 'events') return null
   return at.event.kindExplicit ? at.event.kind : 'auto'
 }
 
@@ -117,6 +139,35 @@ function sortedEdit(lines: string[], line: number): TimelineEdit | null {
   return sort && 'edit' in sort ? sort.edit : null
 }
 
+/** Insert timeline, where Make timeline does not apply: a list the caret or selection is on is made one instead. */
+function insertEdit(editor: Editor, line: number, style: TimelineStyle): TimelineEdit | null {
+  const lines = noteLines(editor)
+  return makeTimeline(lines, ...selectedLines(editor)) ? null : insertTimeline(lines, line, style)
+}
+
+/** An item whose submenu offers the styles, `current` checked (TaskContextMenu's cast: setSubmenu is not in the typings). */
+function addStyleItem(
+  menu: Menu,
+  title: string,
+  icon: string,
+  current: TimelineStyle | null,
+  pick: (style: TimelineStyle) => void
+): void {
+  menu.addItem((item) => {
+    item.setTitle(title).setIcon(icon)
+    const sub = (item as unknown as { setSubmenu: () => Menu }).setSubmenu()
+    for (const s of STYLES) {
+      sub.addItem((si) =>
+        si
+          .setTitle(s.title)
+          .setIcon(s.icon)
+          .setChecked(s.style === current)
+          .onClick(() => pick(s.style))
+      )
+    }
+  })
+}
+
 function defang(editor: Editor, line: number): void {
   const result = defangTimeline(noteLines(editor), line)
   if (!result) return
@@ -134,29 +185,35 @@ function copy(editor: Editor, line: number): void {
   const text = copyText(lines, line)
   if (text === null) return
   const live = defangTimeline(lines, line)?.changed ?? false
-  copyToClipboard(defangText(text), live ? 'Copied, defanged' : 'Copied (nothing to defang)')
+  copyToClipboard(defangTimelineText(text), live ? 'Copied, defanged' : 'Copied (nothing to defang)')
 }
 
 /**
  * The timeline's items for a menu at `line`: inside a timeline, its editing
- * items; outside one, Make timeline when the caret or selection is on a list.
- * Items that do not apply are left out; sorting that cannot be done honestly
- * stays visible, disabled, saying why.
+ * items, named for its style; outside one, Make timeline › when the caret or
+ * selection is on a list, else Insert timeline › where one can go. Items that
+ * do not apply are left out; sorting that cannot be done honestly stays
+ * visible, disabled, saying why.
  */
 export function addTimelineItems(menu: Menu, editor: Editor, line: number, app: App): void {
+  if (inTableCell(editor)) return
   const lines = noteLines(editor)
   const at = timelineAt(findTimelines(lines), line)
   if (!at) {
     const [from, to] = selectedLines(editor)
-    if (!makeTimeline(lines, from, to)) return
-    menu.addItem((item) =>
-      item
-        .setTitle('Make timeline')
-        .setIcon('git-commit-vertical')
-        .onClick(() => apply(editor, makeTimeline(noteLines(editor), from, to)))
-    )
+    if (makeTimeline(lines, from, to)) {
+      addStyleItem(menu, 'Make timeline', 'git-commit-vertical', null, (style) =>
+        apply(editor, makeTimeline(noteLines(editor), from, to, style))
+      )
+    } else if (insertTimeline(lines, line, 'events')) {
+      addStyleItem(menu, 'Insert timeline', 'git-commit-vertical', null, (style) =>
+        apply(editor, insertTimeline(noteLines(editor), line, style))
+      )
+    }
     return
   }
+  const { style } = at.block
+  const noun = ITEM_NOUN[style]
   const run = (title: string, icon: string, edit: (ls: string[]) => TimelineEdit | null) => {
     if (!edit(lines)) return
     menu.addItem((item) =>
@@ -166,10 +223,11 @@ export function addTimelineItems(menu: Menu, editor: Editor, line: number, app: 
         .onClick(() => apply(editor, edit(noteLines(editor))))
     )
   }
-  run('Add event below', 'list-plus', (ls) => addEventBelow(ls, line))
-  run('Move event up', 'arrow-up', (ls) => moveEvent(ls, line, 'up'))
-  run('Move event down', 'arrow-down', (ls) => moveEvent(ls, line, 'down'))
-  if (at.event) {
+  run(`Add ${noun} below`, 'list-plus', (ls) => addEventBelow(ls, line))
+  run('Add child', 'corner-down-right', (ls) => addChild(ls, line))
+  run(`Move ${noun} up`, 'arrow-up', (ls) => moveEvent(ls, line, 'up'))
+  run(`Move ${noun} down`, 'arrow-down', (ls) => moveEvent(ls, line, 'down'))
+  if (currentChoice(editor, line) !== null) {
     menu.addItem((item) =>
       item
         .setTitle('Set event kind…')
@@ -186,14 +244,17 @@ export function addTimelineItems(menu: Menu, editor: Editor, line: number, app: 
     })
   }
   if (at.event) {
+    // A steps list's closing bullet goes with its facts.
+    const title = at.event === closingOf(at.block) ? 'Delete details' : `Delete ${noun}`
     menu.addItem((item) =>
       item
-        .setTitle('Delete event')
+        .setTitle(title)
         .setIcon('trash-2')
         .setWarning(true)
         .onClick(() => apply(editor, deleteEvent(noteLines(editor), line)))
     )
   }
+  addStyleItem(menu, 'Style', 'layout-list', style, (s) => apply(editor, setStyle(noteLines(editor), line, s)))
   menu.addItem((item) =>
     item
       .setTitle('Defang timeline')
@@ -321,6 +382,10 @@ export function registerNoteTimeline(plugin: Plugin): void {
         const editor = editorOf(view)
         if (editor) apply(editor, addEventAtEnd(noteLines(editor), markerLine))
       },
+      onAddChild: (view, line) => {
+        const editor = editorOf(view)
+        if (editor) apply(editor, addChild(noteLines(editor), line))
+      },
       onHeaderMenu: (view, markerLine, evt) => {
         const editor = editorOf(view)
         if (!editor) return
@@ -364,14 +429,26 @@ export function registerNoteTimeline(plugin: Plugin): void {
       id,
       name,
       editorCheckCallback: (checking, editor) => {
-        const edit = build(editor, editor.getCursor().line)
+        const edit = inTableCell(editor) ? null : build(editor, editor.getCursor().line)
         if (!edit) return false
         if (!checking) applyEdit(editor, edit)
         return true
       }
     })
-  command('timeline-make', 'Make timeline', (editor) => makeTimeline(noteLines(editor), ...selectedLines(editor)))
+  for (const { style, title } of STYLES) {
+    // Events keeps the plain ids and names it had before there were styles.
+    const id = style === 'events' ? '' : `-${style}`
+    const name = style === 'events' ? '' : `: ${title.toLowerCase()}`
+    command(`timeline-make${id}`, `Make timeline${name}`, (editor) =>
+      makeTimeline(noteLines(editor), ...selectedLines(editor), style)
+    )
+    command(`timeline-insert${id}`, `Insert timeline${name}`, (editor, line) => insertEdit(editor, line, style))
+    command(`timeline-style-${style}`, `Change timeline style to ${title.toLowerCase()}`, (editor, line) =>
+      setStyle(noteLines(editor), line, style)
+    )
+  }
   command('timeline-add-event', 'Add timeline event below', (editor, line) => addEventBelow(noteLines(editor), line))
+  command('timeline-add-child', 'Add child to process chain link', (editor, line) => addChild(noteLines(editor), line))
   command('timeline-move-up', 'Move timeline event up', (editor, line) => moveEvent(noteLines(editor), line, 'up'))
   command('timeline-move-down', 'Move timeline event down', (editor, line) =>
     moveEvent(noteLines(editor), line, 'down')

@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeEl, fakeEvent } from '../../test/fakeDom'
 import {
   CLS,
+  headerShape,
   kindClass,
   kindLabel,
+  linkIcon,
   renderAddEvent,
   renderGap,
   renderHeader,
   renderNode,
+  renderSpawn,
+  renderStepNode,
   renderUntimedChip
 } from './dom'
 import { findTimelines, type TimelineGap, type TimelineSummary } from './parse'
@@ -33,6 +37,31 @@ const SPEC_NOTE = [
   '- Response: the SOC isolated corp-wks-102 from the network.'
 ]
 
+/** The steps and chain samples from the styles spec. */
+const STEPS = [
+  '## Alert story',
+  '%% timeline steps %%',
+  '- 21:34 Alert fired: Potential Recon Activity Via Nltest.EXE',
+  '- On host: DESKTOP1.domain.local',
+  '- User context: domain\\user1',
+  '- Process launch: nltest.exe',
+  '- Command executed: nltest /domain_trusts',
+  '- Artifact path: C:\\Users\\user1\\Downloads\\',
+  '- Details',
+  '    - Alert ID: SEC-2023-0704-0001',
+  '    - Time: 2023-07-04 21:34 UTC',
+  '    - Host: DESKTOP1.domain.local',
+  '      192.168.56.95'
+]
+const CHAIN = [
+  '## Process chain',
+  '%% timeline chain %%',
+  '- Initial process: cmd.exe',
+  '    - Terminal process: nltest.exe',
+  '        - User context: domain\\user1',
+  '            - Execution: nltest /domain_trusts'
+]
+
 const gap = (over: Partial<TimelineGap>): TimelineGap => ({
   label: '+32 s',
   long: false,
@@ -52,6 +81,8 @@ describe('kindLabel', () => {
     expect(kindLabel('execution')).toBe('Execution')
     expect(kindLabel('file')).toBe('File / download')
     expect(kindLabel('email')).toBe('Email')
+    expect(kindLabel('user')).toBe('User')
+    expect(kindLabel('host')).toBe('Host')
     expect(kindLabel('detection')).toBe('Detection')
     expect(kindLabel('response')).toBe('Response')
   })
@@ -91,8 +122,12 @@ describe('renderNode', () => {
   })
 
   it('uses the agreed icon for every kind', () => {
-    const icons = (['file', 'email', 'response'] as const).map((k) => iconOf(renderNode(root(), k, true, false)))
-    expect(icons).toEqual(['file', 'mail', 'shield-check'])
+    const icons = (['file', 'email', 'user', 'host', 'response'] as const).map((k) =>
+      iconOf(renderNode(root(), k, true, false))
+    )
+    expect(icons).toEqual(['file', 'mail', 'user', 'monitor', 'shield-check'])
+    expect(kindClass('user')).toBe('cf-ntl-k-user')
+    expect(renderNode(root(), 'host', true, false).getAttribute('aria-label')).toBe('Host event')
   })
 })
 
@@ -226,5 +261,110 @@ describe('renderAddEvent', () => {
     row.dispatchEvent(fakeEvent('keydown', { key: 'a' }))
     expect(onClick).toHaveBeenCalledTimes(3)
     expect(enter.defaultPrevented).toBe(true)
+  })
+
+  it('names what it adds in each style', () => {
+    expect(fake(renderAddEvent(root(), () => {}, 'Add step')).getText()).toBe('Add step')
+  })
+})
+
+describe('renderHeader for steps and chains', () => {
+  it('heads a steps list with its own icon and title, and counts the steps', () => {
+    const block = findTimelines(STEPS)[0]
+    const header = fake(renderHeader(root(), block.summary, {}, headerShape(block)))
+    expect(header.find(`.${CLS.title}`).getText()).toBe('Steps')
+    expect(iconOf(header.find(`.${CLS.headerIcon}`) as unknown as HTMLElement)).toBe('list-ordered')
+    // The Details bullet is no step: it holds the facts below.
+    expect(header.find(`.${CLS.meta}`).getText()).toBe('6 steps · details below')
+  })
+
+  it('says nothing of details when a steps list has none, and counts one step as one', () => {
+    const one = findTimelines(['%% timeline steps %%', '- Alert fired: x'])[0]
+    expect(
+      fake(renderHeader(root(), one.summary, {}, headerShape(one)))
+        .find(`.${CLS.meta}`)
+        .getText()
+    ).toBe('1 step')
+  })
+
+  it('heads a chain with its links and spawns', () => {
+    const block = findTimelines(CHAIN)[0]
+    const header = fake(renderHeader(root(), block.summary, {}, headerShape(block)))
+    expect(header.find(`.${CLS.title}`).getText()).toBe('Process chain')
+    expect(iconOf(header.find(`.${CLS.headerIcon}`) as unknown as HTMLElement)).toBe('git-fork')
+    expect(header.find(`.${CLS.meta}`).getText()).toBe('4 links · 3 spawns')
+    const lone = findTimelines(['%% timeline chain %%', '- Initial process: cmd.exe'])[0]
+    expect(
+      fake(renderHeader(root(), lone.summary, {}, headerShape(lone)))
+        .find(`.${CLS.meta}`)
+        .getText()
+    ).toBe('1 link')
+    const two = findTimelines(['%% timeline chain %%', '- a', '    - b'])[0]
+    expect(
+      fake(renderHeader(root(), two.summary, {}, headerShape(two)))
+        .find(`.${CLS.meta}`)
+        .getText()
+    ).toBe('2 links · 1 spawn')
+  })
+
+  it('keeps the live pill, Defang and the menu in every style', () => {
+    const block = findTimelines(['%% timeline chain %%', '- Fetched: https://promptcraft.online/a.ps1'])[0]
+    const onDefang = vi.fn<() => void>()
+    const onMenu = vi.fn<(e: MouseEvent) => void>()
+    const header = fake(renderHeader(root(), block.summary, { onDefang, onMenu }, headerShape(block)))
+    expect(header.find(`.${CLS.live}`).getText()).toBe('1 live indicator · Defang')
+    header.find(`.${CLS.defang}`).click()
+    expect(onDefang).toHaveBeenCalledOnce()
+    expect(header.findAll(`.${CLS.menu}`)).toHaveLength(1)
+  })
+
+  it('reads an events timeline as before', () => {
+    expect(headerShape(findTimelines(SPEC_NOTE)[0])).toEqual({ style: 'events' })
+    const block = findTimelines(SPEC_NOTE)[0]
+    const header = fake(renderHeader(root(), block.summary, {}, headerShape(block)))
+    expect(header.find(`.${CLS.title}`).getText()).toBe('Timeline')
+    expect(header.find(`.${CLS.meta}`).getText()).toContain('6 events · 3 May 2025')
+  })
+})
+
+describe('renderStepNode', () => {
+  it('numbers a step on the rail in place of its bullet', () => {
+    const node = fake(renderStepNode(root(), 3))
+    expect(node.classes).toEqual(new Set([CLS.node, CLS.stepNode]))
+    expect(node.getText()).toBe('3')
+  })
+})
+
+describe('linkIcon', () => {
+  const links = findTimelines(CHAIN)[0].links
+  it('draws a run program as the root terminal or a child activity, a user as a person', () => {
+    expect(links.map(linkIcon)).toEqual(['terminal', 'activity', 'user', 'activity'])
+  })
+
+  it('names other values by their shape, and anything else with a dot', () => {
+    const icons = (values: string[]) =>
+      findTimelines(['%% timeline chain %%', ...values.map((v) => `- Link: ${v}`)])[0].links.map(linkIcon)
+    expect(icons(['https://evil.example/x', '10.0.0.5', 'C:\\Users\\a\\Downloads\\', 'just a note', 'cmd'])).toEqual([
+      'globe',
+      'globe',
+      'file',
+      'circle-dot',
+      'circle-dot'
+    ])
+  })
+
+  it('draws a host as a monitor', () => {
+    const links = findTimelines(['%% timeline chain %%', '- On host: WS01.corp.local'])[0].links
+    expect(links.map(linkIcon)).toEqual(['monitor'])
+  })
+})
+
+describe('renderSpawn', () => {
+  it("draws the connector to a link's child, with nothing to type", () => {
+    const spawn = fake(renderSpawn(root()))
+    expect(spawn.hasClass(CLS.spawn)).toBe(true)
+    expect(spawn.getText()).toBe('Spawns')
+    expect(iconOf(spawn.find(`.${CLS.chipIcon}`) as unknown as HTMLElement)).toBe('arrow-down')
+    expect(spawn.find(`.${CLS.chipIcon}`).getAttribute('aria-hidden')).toBe('true')
   })
 })

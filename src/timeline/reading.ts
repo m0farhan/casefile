@@ -2,22 +2,39 @@ import { MarkdownView, setIcon, type MarkdownPostProcessorContext, type Plugin, 
 import { defangText } from '../soc/toolbox'
 import type { IocType } from '../types'
 import { copyDefanged } from '../ui/defangMenu'
-import { CLS, iocIcon, kindClass, renderGap, renderHeader, renderNode, renderUntimedChip } from './dom'
 import {
+  CLS,
+  headerShape,
+  iocIcon,
+  kindClass,
+  linkIcon,
+  renderGap,
+  renderHeader,
+  renderNode,
+  renderSpawn,
+  renderStepNode,
+  renderUntimedChip
+} from './dom'
+import {
+  defangTimelineText,
   findTimelines,
   indicatorSpans,
-  TIMELINE_MARKER,
+  mayHoldTimeline,
+  type ChainLink,
   type Span,
   type TimelineBlock,
   type TimelineEvent,
-  type TimelineGap
+  type TimelineFact,
+  type TimelineGap,
+  type TimelineStep
 } from './parse'
 
 /**
  * The note timeline in Reading view: a markdown post-processor that draws the
- * list under a `%% timeline %%` line as cards on a rail. It only adds classes
- * and widgets around what Obsidian rendered, and wraps text it can match to
- * the parser's reading; what it cannot match stays as rendered. Indicators are
+ * list under a `%% timeline %%` line as cards on a rail (numbered steps, or a
+ * process chain's cards, for the other markers). It only adds classes and
+ * widgets around what Obsidian rendered, and wraps text it can match to the
+ * parser's reading; what it cannot match stays as rendered. Indicators are
  * shown defanged and links never open: a click copies the link defanged.
  */
 
@@ -25,6 +42,8 @@ const TEXT_NODE = 3
 const ELEMENT_NODE = 1
 const ATTACK = /\bT\d{4}(?:\.\d{3})?\b/g
 const SOURCE = /^\s*source:/i
+/** A line that starts a list item of its own, as a fact's bullet does. */
+const LIST_ITEM = /^\s*(?:[-*+]|\d{1,3}[.)])(?:\s|$)/
 /** Obsidian's own list furniture, not the bullet's content. */
 const FURNITURE = ['list-bullet', 'list-collapse-indicator']
 
@@ -33,7 +52,7 @@ let parsed: { text: string; lines: string[]; blocks: TimelineBlock[] } | null = 
 
 function timelinesOf(text: string): { lines: string[]; blocks: TimelineBlock[] } {
   if (parsed?.text !== text) {
-    const marked = text.includes(TIMELINE_MARKER)
+    const marked = mayHoldTimeline(text)
     const lines = marked ? text.split(/\r?\n/) : []
     parsed = { text, lines, blocks: marked ? findTimelines(lines) : [] }
   }
@@ -55,14 +74,14 @@ export function sectionTimeline(
 
 /**
  * What Reading view draws from beyond each list's own text: which lists have
- * a marker above them, and how far above. ponytail: a marker moved to another
- * list in one edit keeps the shape and is missed; key each timeline by its
- * list's text if that turns up.
+ * a marker above them, how far above, and in which style. ponytail: a marker
+ * moved to another list in one edit keeps the shape and is missed; key each
+ * timeline by its list's text if that turns up.
  */
 const shapeOf = (blocks: TimelineBlock[]): string =>
   blocks
     .filter((b) => b.events.length)
-    .map((b) => b.firstLine - b.markerLine)
+    .map((b) => `${b.style} ${b.firstLine - b.markerLine}`)
     .join()
 
 /**
@@ -154,7 +173,8 @@ export interface Seg {
 /**
  * One rendered text node cut at its indicators and ATT&CK ids. A live
  * indicator is shown defanged; one already defanged stays as written. Plain
- * runs go through defangText too, so nothing it would defang is shown live.
+ * runs are defanged too, as Defang timeline defangs, so nothing it would
+ * defang is shown live.
  */
 export function splitIndicators(text: string): Seg[] {
   const attack = Array.from(text.matchAll(ATTACK), (m) => ({
@@ -166,7 +186,7 @@ export function splitIndicators(text: string): Seg[] {
   const segs: Seg[] = []
   let at = 0
   const plain = (to: number) => {
-    if (to > at) segs.push({ text: defangText(text.slice(at, to)), cls: null })
+    if (to > at) segs.push({ text: defangTimelineText(text.slice(at, to)), cls: null })
   }
   for (const { span, type, live } of marks) {
     // An id inside an indicator (…/T1059) is part of the indicator.
@@ -203,6 +223,10 @@ export function decorateTimelineSections(el: HTMLElement, ctx: MarkdownPostProce
     return at === null ? extra === 0 : info.lineStart + Number(at) === event.line
   }
   if (extra < 0 || !block.events.every(onItsLine) || lists.some((l) => l.hasClass(CLS.list))) return
+  // A chain's links are every item, nested ones too: Markdown must nest them as the note reads them.
+  const links =
+    block.style === 'chain' ? chainItems(items.slice(0, block.events.length), block.links, info.lineStart) : []
+  if (!links) return
   if (extra) {
     // Markdown runs the list on past the timeline (an unindented line
     // continues the bullet above): the items after it stay a plain list
@@ -213,8 +237,22 @@ export function decorateTimelineSections(el: HTMLElement, ctx: MarkdownPostProce
     rest.append(...items.slice(block.events.length))
   }
   for (const list of lists) list.addClass(CLS.list)
-  lists[0].before(renderHeader(el, block.summary, {}))
-  block.events.forEach((event, i) => decorateItem(items[i], event, block.gaps[i], lines[event.line]))
+  if (block.style !== 'events') for (const list of lists) list.addClass(CLS[block.style])
+  lists[0].before(renderHeader(el, block.summary, {}, headerShape(block)))
+  if (block.style === 'steps') {
+    block.steps.forEach((step, i) => decorateStep(items[i], step, lines[step.event.line]))
+    if (block.facts.length) {
+      // The facts go in a list of their own below the steps, off their rail.
+      const details = items[block.events.length - 1]
+      const facts = el.createEl('ul', { cls: CLS.factsList })
+      lists[lists.length - 1].after(facts)
+      facts.append(details)
+      lists.push(facts)
+      decorateFacts(details, block.facts, lines, info.lineStart)
+    }
+  } else if (block.style === 'chain') {
+    links.forEach((item, k) => decorateLink(item, block.links[k], lines[block.links[k].line]))
+  } else block.events.forEach((event, i) => decorateItem(items[i], event, block.gaps[i], lines[event.line]))
   // Obsidian loads an embedded note (![[…]]) into a card after the
   // post-processors ran, and again when that note changes: what it adds is
   // disarmed and defanged like the card's own text.
@@ -238,7 +276,7 @@ function decorateItem(li: HTMLElement, event: TimelineEvent, gap: TimelineGap | 
   }
   if (first?.nodeType === TEXT_NODE) wrapHead(first as Text, headPieces(event, line))
   for (const { node, code } of texts) {
-    if (code) node.data = defangText(node.data)
+    if (code) node.data = defangTimelineText(node.data)
     else replaceText(node, splitIndicators(node.data))
   }
   disarm(li)
@@ -257,6 +295,178 @@ function decorateItem(li: HTMLElement, event: TimelineEvent, gap: TimelineGap | 
   // Band first, then the node: the order a screen reader meets them before the text.
   li.prepend(renderNode(li, event.kind, event.kindExplicit, event.key))
   if (gap) li.prepend(renderGap(li, gap))
+}
+
+const isList = (n: ChildNode): boolean => n.nodeType === ELEMENT_NODE && /^[OU]L$/.test((n as HTMLElement).tagName)
+const isFurniture = (n: ChildNode): boolean =>
+  n.nodeType === ELEMENT_NODE && FURNITURE.some((c) => (n as HTMLElement).hasClass(c))
+
+/** The items of the lists directly under an item. */
+const subItems = (li: HTMLElement): HTMLElement[] =>
+  Array.from(li.children)
+    .filter((c) => isList(c))
+    .flatMap((l) => Array.from(l.children).filter((c): c is HTMLElement => c.tagName === 'LI'))
+
+/**
+ * Every item of a chain's list, nested ones too, in note order: one per link,
+ * each on its link's line where Obsidian marks it. Null when Markdown nested
+ * the list otherwise (a one-space indent is a child to the parser and a
+ * sibling to Markdown): the list is left as rendered.
+ */
+function chainItems(roots: HTMLElement[], links: ChainLink[], lineStart: number): HTMLElement[] | null {
+  const tree = (li: HTMLElement): HTMLElement[] => [li, ...subItems(li).flatMap(tree)]
+  const all = roots.flatMap(tree)
+  if (all.length !== links.length) return null
+  const ok = all.every((li, k) => {
+    const at = li.getAttribute('data-line')
+    return at === null || lineStart + Number(at) === links[k].line
+  })
+  return ok ? all : null
+}
+
+/**
+ * The item's text as a label row over its value. The rendered text must
+ * start with `head`, the text before the value as written; drawHead draws
+ * that row from the parser's reading instead (none when there is no head).
+ * What follows, up to a nested list, becomes the value, and what comes after
+ * a line break in it a line of `noteCls` below. Left as rendered, and null,
+ * when the text does not start as written.
+ */
+function labelAndValue(
+  item: HTMLElement,
+  head: string,
+  drawHead: ((row: HTMLElement) => void) | null,
+  valueCls: string[],
+  noteCls: string
+): HTMLElement | null {
+  const first = firstContent(item)
+  const parent = first?.parentElement
+  // Markdown trims the spaces off the end of an item that is all head.
+  const written = head.trimEnd()
+  if (first?.nodeType !== TEXT_NODE || !parent || !(first as Text).data.startsWith(written)) return null
+  const text = first as Text
+  if (drawHead) {
+    const row = parent.createDiv({ cls: CLS.head })
+    text.before(row)
+    drawHead(row)
+  }
+  text.data = text.data.slice(written.length).trimStart()
+  const value = parent.createDiv({ cls: [CLS.value, ...valueCls] })
+  text.before(value)
+  const nodes = Array.from(parent.childNodes)
+  const rest = nodes.slice(nodes.indexOf(text))
+  const end = rest.findIndex(isList)
+  value.append(...(end < 0 ? rest : rest.slice(0, end)))
+  const inValue = Array.from(value.childNodes)
+  const br = inValue.findIndex((n) => (n as HTMLElement).tagName === 'BR')
+  if (br >= 0) {
+    const note = parent.createDiv({ cls: noteCls })
+    value.after(note)
+    inValue[br].remove()
+    note.append(...inValue.slice(br + 1))
+  }
+  return value
+}
+
+/**
+ * Steps and chains chip nothing: the note's own text under el is defanged
+ * before anything is added, as Defang reads a line (a program's file name,
+ * cmd.exe, is no domain). The label row is drawn from the parser's text only
+ * where the defanged text still starts with it, so Defang left it as written.
+ */
+function defangAll(el: HTMLElement): void {
+  for (const { node } of textNodes(el, false)) defangNode(node)
+}
+
+/** A step: its number on the rail, its label and the time as written above its value. */
+function decorateStep(li: HTMLElement, step: TimelineStep, line: string): void {
+  li.addClass(CLS.item, CLS.step)
+  defangAll(li)
+  const { event } = step
+  const t = event.timeSpan
+  const time: Piece | null = t && {
+    text: line.slice(t.from, t.to),
+    cls: event.time?.approx ? `${CLS.time} ${CLS.approx}` : CLS.time,
+    sec: event.secondsSpan && { from: event.secondsSpan.from - t.from, to: event.secondsSpan.to - t.from }
+  }
+  const head = line.slice(event.textFrom, step.value.from)
+  labelAndValue(
+    li,
+    head,
+    head.trim()
+      ? (row) => {
+          if (step.labelText !== null) row.createSpan({ cls: CLS.label, text: step.labelText })
+          if (time) pieceSpan(row, time)
+        }
+      : null,
+    step.valueKind ? [CLS.mono] : [],
+    CLS.detail
+  )
+  disarm(li)
+  for (const d of subItems(li)) d.addClass(CLS.detail)
+  li.prepend(renderStepNode(li, step.n))
+}
+
+/** The closing Details bullet: its word as a title over its facts, each a key over its value. */
+function decorateFacts(li: HTMLElement, facts: TimelineFact[], lines: string[], lineStart: number): void {
+  li.addClass(CLS.facts)
+  defangAll(li)
+  const title = firstContent(li)
+  if (title?.nodeType === TEXT_NODE && title.parentElement) {
+    title.before(title.parentElement.createSpan({ cls: CLS.factsTitle, text: (title as Text).data.trim() }))
+    title.remove()
+  }
+  // Each item is a fact a bullet starts, found by its line where Obsidian marks it, else in order.
+  const bulleted = facts.filter((f) => LIST_ITEM.test(lines[f.line]))
+  subItems(li).forEach((item, i) => {
+    const at = item.getAttribute('data-line')
+    const fact = at === null ? bulleted[i] : facts.find((f) => f.line === lineStart + Number(at))
+    if (!fact) return
+    item.addClass(CLS.fact)
+    const line = lines[fact.line]
+    const head = line.slice(fact.label?.from ?? fact.value.from, fact.value.from)
+    labelAndValue(
+      item,
+      head,
+      fact.labelText === null ? null : (row) => row.createSpan({ cls: CLS.factKey, text: fact.labelText ?? '' }),
+      // A fact's value is an identifier, whatever its shape.
+      [CLS.mono],
+      CLS.factMore
+    )
+  })
+  disarm(li)
+}
+
+/**
+ * A chain link: its own content in a card, the links it spawned below the
+ * card, and the 'Spawns' connector above it when it is a child. The card has
+ * the label and the role over the value, which is monospace after its icon.
+ */
+function decorateLink(li: HTMLElement, link: ChainLink, line: string): void {
+  li.addClass(link.parent === null ? CLS.root : CLS.child)
+  const card = li.createDiv({ cls: CLS.card })
+  card.append(...Array.from(li.childNodes).filter((n) => n !== card && !isList(n) && !isFurniture(n)))
+  li.prepend(card)
+  // The card holds the link's own text only: each link below defangs its own.
+  defangAll(card)
+  const head = line.slice(link.label?.from ?? link.value.from, link.value.from)
+  const value = labelAndValue(
+    card,
+    head,
+    (row) => {
+      if (link.labelText !== null) row.createSpan({ cls: CLS.label, text: link.labelText })
+      row.createSpan({ cls: CLS.role, text: link.role })
+    },
+    [CLS.mono],
+    CLS.detail
+  )
+  if (value && link.valueText) {
+    const icon = value.createSpan({ cls: CLS.valueIcon, attr: { 'aria-hidden': 'true' } })
+    setIcon(icon, linkIcon(link))
+    value.prepend(icon)
+  }
+  disarm(card)
+  if (link.parent !== null) li.prepend(renderSpawn(li))
 }
 
 /** Every text node under el, and whether it is inside code (defanged, never chipped). */
@@ -334,7 +544,7 @@ function disarmAdded(node: Node): void {
 }
 
 function defangNode(node: Text): void {
-  const data = defangText(node.data)
+  const data = defangTimelineText(node.data)
   if (data !== node.data) node.data = data
 }
 

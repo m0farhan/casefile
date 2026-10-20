@@ -1,6 +1,7 @@
 /* ─ Responder note timeline ─
- * The bullets under a `%% timeline %%` line drawn as event cards on a rail,
- * in Live Preview (classes on CodeMirror's .cm-line elements) and in Reading
+ * The bullets under a `%% timeline %%` line drawn as event cards on a rail
+ * (numbered steps, or a process chain's cards, under the other markers), in
+ * Live Preview (classes on CodeMirror's .cm-line elements) and in Reading
  * view (the same classes on the rendered <ul>/<li>). Obsidian theme
  * variables only, so light and dark both work; never the dark-only --gs-*.
  *
@@ -39,7 +40,14 @@ body {
 .cf-ntl-k-file {
   --cf-ntl-kc: var(--color-purple);
 }
+/* Muted, as screen 10 has it: blue is the host's. */
 .cf-ntl-k-email {
+  --cf-ntl-kc: var(--text-muted);
+}
+.cf-ntl-k-user {
+  --cf-ntl-kc: var(--color-pink);
+}
+.cf-ntl-k-host {
   --cf-ntl-kc: var(--color-blue);
 }
 .cf-ntl-k-detection {
@@ -382,9 +390,12 @@ ul.cf-ntl-list .cf-ntl-ioc-icon {
 .cf-ntl-ioc-icon-email {
   color: var(--color-blue);
 }
-/* The hint on an empty event bullet: display only, never in the note. */
+/* The hint on an empty item: display only, never in the note. CodeMirror
+   draws a placeholder as an inline-block, which would take the hanging indent
+   of a list line and start left of the text. */
 .cf-ntl-ghost {
   color: var(--text-faint);
+  text-indent: 0;
 }
 /* Indicators are evidence, not links. In a timeline, Obsidian's link colour
    and underline come off bare URLs, emails and links, and a click never opens
@@ -532,7 +543,7 @@ ul.cf-ntl-list li.cf-ntl-source > .list-collapse-indicator {
 }
 
 /* ─ Live Preview: each decorated line paints its share of the card ─ */
-.markdown-source-view.mod-cm6 .cm-line.cf-ntl-line:not(.cf-ntl-marker-line) {
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-line:not(.cf-ntl-marker-line, .cf-ntl-chain) {
   position: relative;
   border-left: var(--cf-ntl-indent) solid transparent;
   border-top: var(--cf-ntl-band, 0px) solid transparent;
@@ -578,7 +589,7 @@ ul.cf-ntl-list li.cf-ntl-source > .list-collapse-indicator {
   --cf-ntl-edge-bottom: inset 0 -1px 0 var(--cf-ntl-edge);
   --cf-ntl-glow-bottom: inset 0 -4px 0 var(--cf-ntl-glow, #0000);
 }
-.markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-top:not(.cf-ntl-first) {
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-top:not(.cf-ntl-first, .cf-ntl-steps) {
   --cf-ntl-band: var(--cf-ntl-band-h);
 }
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-card-top.cf-ntl-gap-long,
@@ -601,7 +612,8 @@ ul.cf-ntl-list li.cf-ntl-source > .list-collapse-indicator {
 }
 /* The node stands in for the bullet: hidden, its width kept so the caret does not move. */
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-ev .cm-formatting-list,
-.markdown-source-view.mod-cm6 .cm-line.cf-ntl-source .cm-formatting-list {
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-source .cm-formatting-list,
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-fact .cm-formatting-list {
   visibility: hidden;
 }
 /* A folded card keeps its fold arrow: it says details are hidden, and a click opens them. */
@@ -624,8 +636,307 @@ ul.cf-ntl-list li.cf-ntl-source > .list-collapse-indicator {
   background-size: calc(100% - 26px) 1px;
 }
 
+/* ─ A label over its value: steps, facts and chain links ─ */
+/* Live Preview: the label row is a mark on the text, inline and ended by a
+   line break, so the value starts the row below. Obsidian measures a list
+   line's hanging indent from the first character after its bullet: it must
+   stay on the bullet's row (a row as wide as the line wrapped below it, and
+   the indent came out 0). The value's rows then start on that column. */
+.markdown-source-view.mod-cm6 .cf-ntl-head {
+  font-size: 0.82em;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.markdown-source-view.mod-cm6 .cf-ntl-head::after {
+  content: '\A';
+  white-space: pre;
+}
+/* A time that opens the row has its padding outset, so its text, which the
+   indent is measured from, starts on the column the value does. */
+.markdown-source-view.mod-cm6 .cf-ntl-head > .cf-ntl-time:first-child {
+  margin-inline-start: -6px;
+}
+/* Reading view: the row is its own block, the label before the time. */
+ul.cf-ntl-list .cf-ntl-head,
+ul.cf-ntl-facts-list .cf-ntl-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+ul.cf-ntl-list .cf-ntl-value,
+ul.cf-ntl-facts-list .cf-ntl-value {
+  margin-top: 3px;
+}
+.cf-ntl-value:empty {
+  display: none;
+}
+.cf-ntl-head .cf-ntl-time {
+  font-size: 0.92em;
+}
+.cf-ntl-mono {
+  font-family: var(--font-monospace);
+  font-size: 0.94em;
+}
+.cf-ntl-sep {
+  color: var(--text-faint);
+}
+/* The row says what the colon did: it shows again while the caret is in the item. */
+.markdown-source-view.mod-cm6 .cm-line:not(.cf-ntl-active) .cf-ntl-sep {
+  color: transparent;
+}
+
+/* ─ Steps: numbered rows on the rail, no card until the caret is in one ─ */
+.cf-ntl-steps {
+  --cf-ntl-kc: var(--text-faint);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-steps {
+  --cf-ntl-fill: transparent;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-steps:not(.cf-ntl-active) {
+  --cf-ntl-edge: transparent;
+}
+ul.cf-ntl-list.cf-ntl-steps > li.cf-ntl-item.cf-ntl-step {
+  --cf-ntl-fill: transparent;
+  --cf-ntl-edge: transparent;
+  --cf-ntl-band: 0px;
+}
+.cf-ntl-node.cf-ntl-step-node {
+  --cf-ntl-s: calc(var(--cf-ntl-node-size) + 2px);
+  border: 1px solid var(--background-modifier-border-hover);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.cf-ntl-steps .cf-ntl-add::before,
+.cf-ntl-chain .cf-ntl-add::before {
+  display: none;
+}
+
+/* ─ Facts: the closing Details bullet, rows in Live Preview, a grid in Reading view ─ */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-facts {
+  --cf-ntl-rail: transparent;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-facts-head {
+  padding-top: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background-image: linear-gradient(var(--background-modifier-border), var(--background-modifier-border));
+  background-repeat: no-repeat;
+  background-position: 0 5px;
+  background-size: 100% 1px;
+}
+.markdown-source-view.mod-cm6 .cf-ntl-fact-key {
+  display: inline-block;
+  min-width: min(9em, 40%);
+  text-indent: 0;
+  font-size: 0.88em;
+  color: var(--text-muted);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-fact .cf-ntl-value {
+  color: var(--text-normal);
+}
+/* The line under a fact keeps the body size: the hidden key copy before its
+   text then measures as wide as the key above, and the text starts on the
+   value's column. */
+.markdown-source-view.mod-cm6 .cf-ntl-fact-pad {
+  visibility: hidden;
+}
+.markdown-source-view.mod-cm6 .cf-ntl-fact-more-text {
+  font-family: var(--font-monospace);
+  font-size: 0.82em;
+  color: var(--text-muted);
+}
+ul.cf-ntl-facts-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+ul.cf-ntl-facts-list li > .list-bullet,
+ul.cf-ntl-facts-list li > .list-collapse-indicator,
+ul.cf-ntl-facts-list li.cf-ntl-facts > ul::before {
+  display: none;
+}
+.cf-ntl-facts-title {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+ul.cf-ntl-facts-list li.cf-ntl-facts > ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12em, 1fr));
+  gap: 16px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+ul.cf-ntl-facts-list li.cf-ntl-fact {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+ul.cf-ntl-facts-list .cf-ntl-fact-more {
+  margin-top: 3px;
+  font-family: var(--font-monospace);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ─ Process chain: each link a card at its depth, the root's bar orange, a child's red ─ */
+.cf-ntl-root {
+  --cf-ntl-kc: var(--color-orange);
+}
+.cf-ntl-child {
+  --cf-ntl-kc: var(--color-red);
+}
+body {
+  --cf-ntl-spawn-h: 34px;
+}
+.cf-ntl-chain .cf-ntl-label {
+  font-weight: 600;
+  color: var(--cf-ntl-kc);
+}
+/* A link's label row is larger than a step's, as screen 9 has it. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-chain .cf-ntl-head,
+ul.cf-ntl-list.cf-ntl-chain .cf-ntl-head {
+  font-size: 0.92em;
+}
+.cf-ntl-role {
+  margin-inline-start: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+/* A link with no label: the role just before the value, on its row. */
+.cf-ntl-role.cf-ntl-role-alone {
+  margin-inline: 0 10px;
+  font-size: 0.92em;
+}
+.cf-ntl-value-icon {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-inline-end: 8px;
+  text-indent: 0;
+  color: var(--cf-ntl-kc);
+  --icon-size: 15px;
+}
+.cf-ntl-spawn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: var(--cf-ntl-spawn-h);
+  margin-inline-start: 12px;
+  padding-inline-start: 14px;
+  border-left: 1.5px dashed var(--background-modifier-border-hover);
+  font-family: var(--font-interface);
+  font-size: 12.5px;
+  line-height: 1;
+  color: var(--text-muted);
+  text-indent: 0;
+  white-space: nowrap;
+  --icon-size: 13px;
+}
+/* Live Preview: the note's indent is the depth. Obsidian pads a list line to
+   its text column, so the card is painted from the content box, a little
+   before the text, not from the line's edge: the bar and the fill are two
+   background layers. A top-level bullet's text column is nearer the edge
+   than that, so the line keeps a gutter as wide, which the card may paint
+   into; the layers stop at the bands above and below. The connector sits in
+   the band above a child's line, level with the text. */
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-chain {
+  --cf-ntl-pad: 16px;
+  position: relative;
+  padding-top: var(--cf-ntl-pt, 0px);
+  padding-bottom: var(--cf-ntl-pb, 0px);
+  padding-inline-end: 16px;
+  border-left: var(--cf-ntl-pad) solid transparent;
+  border-top: var(--cf-ntl-band, 0px) solid transparent;
+  border-bottom: var(--cf-ntl-foot-h, 0px) solid transparent;
+  background-image:
+    linear-gradient(var(--cf-ntl-kc), var(--cf-ntl-kc)), linear-gradient(var(--cf-ntl-fill), var(--cf-ntl-fill));
+  background-repeat: no-repeat;
+  background-origin: content-box;
+  background-clip: border-box;
+  background-position: calc(-1 * var(--cf-ntl-pad)) calc(-1 * var(--cf-ntl-pt, 0px));
+  background-size:
+    3px calc(100% + var(--cf-ntl-pt, 0px) + var(--cf-ntl-pb, 0px)),
+    calc(100% + var(--cf-ntl-pad) + 16px) calc(100% + var(--cf-ntl-pt, 0px) + var(--cf-ntl-pb, 0px));
+  overflow-wrap: anywhere;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-proc {
+  --cf-ntl-pt: 12px;
+  border-top-right-radius: 6px calc(var(--cf-ntl-band, 0px) + 6px);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-proc-end {
+  --cf-ntl-pb: 12px;
+  border-bottom-right-radius: 6px calc(var(--cf-ntl-foot-h, 0px) + 6px);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-proc:not(.cf-ntl-first) {
+  --cf-ntl-band: 12px;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-proc.cf-ntl-spawned {
+  --cf-ntl-band: var(--cf-ntl-spawn-h);
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-chain.cf-ntl-active {
+  --cf-ntl-fill: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-secondary));
+}
+.markdown-source-view.mod-cm6 .cf-ntl-spawn {
+  position: absolute;
+  bottom: 100%;
+  margin-inline-start: calc(12px - var(--cf-ntl-pad));
+}
+/* Reading view: the nested list is the depth, each link's own text a card. */
+ul.cf-ntl-list.cf-ntl-chain,
+ul.cf-ntl-chain ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: none;
+}
+ul.cf-ntl-chain ul {
+  padding-inline-start: 28px;
+}
+/* Obsidian's indent guides: its rule is .markdown-rendered.show-indentation-guide li > ul::before. */
+.markdown-rendered ul.cf-ntl-chain li > ul::before,
+ul.cf-ntl-chain li > .list-bullet,
+ul.cf-ntl-chain li > .list-collapse-indicator {
+  display: none;
+}
+ul.cf-ntl-chain li.cf-ntl-root + li.cf-ntl-root {
+  margin-top: 12px;
+}
+.cf-ntl-card {
+  padding: 12px 16px;
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+  box-shadow: inset 3px 0 0 var(--cf-ntl-kc);
+  overflow-wrap: anywhere;
+}
+.cf-ntl-card .cf-ntl-value {
+  color: var(--text-normal);
+}
+.cf-ntl-card .cf-ntl-detail {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 0.93em;
+}
+
 /* ─ Light theme: kind and warning text mixed toward the text colour for 4.5:1 ─ */
-.theme-light .cf-ntl-tag {
+.theme-light .cf-ntl-tag,
+.theme-light .cf-ntl-chain .cf-ntl-label {
   color: color-mix(in srgb, var(--cf-ntl-kc) 65%, var(--text-normal));
 }
 .theme-light {
@@ -676,6 +987,10 @@ body.is-mobile {
   ul.cf-ntl-list > li.cf-ntl-item,
   .markdown-source-view.mod-cm6 .cm-line.cf-ntl-line {
     --cf-ntl-fill: transparent;
+    break-inside: avoid;
+  }
+  .cf-ntl-card {
+    background: none;
     break-inside: avoid;
   }
   .cf-ntl-menu,

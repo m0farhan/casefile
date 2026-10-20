@@ -131,6 +131,25 @@ function mount(details = [{ field: 'User', value: 'anita.garcia' }]) {
 }
 
 describe('detectDetailField', () => {
+  it('names an internal host a Hostname, defanged or not', () => {
+    for (const v of [
+      'DESKTOP1.domain.local',
+      'WS01.corp.local',
+      'dc01.ad.internal',
+      'fs01.lan',
+      'srv-02.vantara.corp',
+      'nas.home.arpa',
+      'WS01.corp.local:445',
+      'DESKTOP1[.]domain[.]local',
+      'DESKTOP1.domain.local.'
+    ]) {
+      expect(detectDetailField(v), v).toBe('Hostname')
+    }
+    for (const v of ['local', '.local', 'a..local', '-ws.local', 'my host.local', 'maya.chen@vantara.local']) {
+      expect(detectDetailField(v), v).not.toBe('Hostname')
+    }
+  })
+
   it('names a value by its kind, defanged or not', () => {
     const cases: [string, string][] = [
       // Email

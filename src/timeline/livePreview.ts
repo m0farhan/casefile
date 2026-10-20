@@ -9,23 +9,40 @@ import {
   type ViewUpdate
 } from '@codemirror/view'
 import { editorLivePreviewField, setIcon } from 'obsidian'
-import { CLS, iocIcon, kindClass, renderAddEvent, renderGap, renderHeader, renderNode, renderUntimedChip } from './dom'
+import {
+  CLS,
+  headerShape,
+  iocIcon,
+  kindClass,
+  linkIcon,
+  renderAddEvent,
+  renderGap,
+  renderHeader,
+  renderNode,
+  renderSpawn,
+  renderStepNode,
+  renderUntimedChip,
+  type HeaderShape
+} from './dom'
 import {
   findTimelines,
   indicatorSpans,
-  TIMELINE_MARKER,
+  mayHoldTimeline,
   type EventKind,
+  type Labelled,
   type Span,
   type TimelineBlock,
   type TimelineGap,
   type TimelineIoc,
+  type TimelineStyle,
   type TimelineSummary
 } from './parse'
 import { headPieces } from './reading'
 
 /**
  * The note timeline in Live Preview: the list under a `%% timeline %%` line
- * drawn as cards on a rail while it stays editable text. Every line keeps
+ * drawn as cards on a rail while it stays editable text (as numbered steps,
+ * or as a process chain's cards, for the other markers). Every line keeps
  * its own text and caret positions; the look comes from classes on each
  * .cm-line, marks on the text and small inline widgets (note-timeline.css),
  * never block widgets or vertical margins. The marker line's text is replaced
@@ -40,6 +57,8 @@ export interface NoteTimelineCallbacks {
   onKindClick: (view: EditorView, line: number, evt: MouseEvent) => void
   /** "Add event" under the last card. */
   onAddEvent: (view: EditorView, markerLine: number) => void
+  /** A chain's add row: a child under the link on `line`. Without it the row adds a link, as onAddEvent does. */
+  onAddChild?: (view: EditorView, line: number) => void
   /** The header's menu button. */
   onHeaderMenu: (view: EditorView, markerLine: number, evt: MouseEvent) => void
   /** The header's Defang button, shown when the timeline has live indicators. */
@@ -47,7 +66,14 @@ export interface NoteTimelineCallbacks {
 }
 
 const ATTACK = /\bT\d{4}(?:\.\d{3})?\b/g
-const GHOST = '11:07  what happened…'
+/** What an empty item could say, by style. */
+const GHOST: Record<TimelineStyle, string> = {
+  events: '11:07  what happened…',
+  steps: 'Label: what you saw',
+  chain: 'Label: process or command'
+}
+/** What the row under the last item adds, by style. */
+const ADD: Record<TimelineStyle, string> = { events: 'Add event', steps: 'Add step', chain: 'Add link' }
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
@@ -78,6 +104,7 @@ function control(el: HTMLElement, view: EditorView): HTMLElement {
 class HeaderWidget extends WidgetType {
   constructor(
     readonly summary: TimelineSummary,
+    readonly shape: HeaderShape,
     readonly markerLine: number,
     readonly handlers: NoteTimelineCallbacks
   ) {
@@ -85,15 +112,17 @@ class HeaderWidget extends WidgetType {
   }
 
   eq(other: HeaderWidget): boolean {
-    return other.markerLine === this.markerLine && same(other.summary, this.summary)
+    return other.markerLine === this.markerLine && same(other.summary, this.summary) && same(other.shape, this.shape)
   }
 
   toDOM(view: EditorView): HTMLElement {
     const onMenu = (evt: MouseEvent) => this.handlers.onHeaderMenu(view, this.markerLine, evt)
-    const header = renderHeader(createDiv(), this.summary, {
-      onMenu,
-      onDefang: () => this.handlers.onDefang(view, this.markerLine)
-    })
+    const header = renderHeader(
+      createDiv(),
+      this.summary,
+      { onMenu, onDefang: () => this.handlers.onDefang(view, this.markerLine) },
+      this.shape
+    )
     header.addEventListener('mousedown', (e) => e.preventDefault())
     // A right-click opens the header's own menu. Obsidian's, built at the
     // caret, would need the caret on the marker, and its Insert items would
@@ -188,14 +217,37 @@ class UntimedWidget extends WidgetType {
 }
 
 /** What an empty event could say. Display only, never written. */
+/** A fact's key, hidden: the line under the fact starts on its value's column. */
+class FactPadWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super()
+  }
+
+  eq(other: FactPadWidget): boolean {
+    return other.text === this.text
+  }
+
+  toDOM(): HTMLElement {
+    return createSpan({ cls: [CLS.factKey, CLS.factPad], text: this.text, attr: { 'aria-hidden': 'true' } })
+  }
+}
+
 class GhostWidget extends WidgetType {
-  eq(): boolean {
-    return true
+  constructor(readonly text: string) {
+    super()
+  }
+
+  eq(other: GhostWidget): boolean {
+    return other.text === this.text
   }
 
   toDOM(view: EditorView): HTMLElement {
     // CodeMirror's own placeholder class, so the theme draws it faint and unselectable.
-    const ghost = createSpan({ cls: ['cm-placeholder', 'cf-ntl-ghost'], text: GHOST, attr: { 'aria-hidden': 'true' } })
+    const ghost = createSpan({
+      cls: ['cm-placeholder', 'cf-ntl-ghost'],
+      text: this.text,
+      attr: { 'aria-hidden': 'true' }
+    })
     return menuHere(ghost, view)
   }
 
@@ -204,25 +256,94 @@ class GhostWidget extends WidgetType {
   }
 }
 
+/** A step's number, standing in for its bullet. Display only. */
+class StepNodeWidget extends WidgetType {
+  constructor(readonly n: number) {
+    super()
+  }
+
+  eq(other: StepNodeWidget): boolean {
+    return other.n === this.n
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    return menuHere(renderStepNode(createDiv(), this.n), view)
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/** A chain link's role, read off its depth: after the label, or just before the value when there is none. */
+class RoleWidget extends WidgetType {
+  constructor(
+    readonly role: string,
+    readonly alone: boolean
+  ) {
+    super()
+  }
+
+  eq(other: RoleWidget): boolean {
+    return other.role === this.role && other.alone === this.alone
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const role = createSpan({ cls: CLS.role, text: this.role })
+    if (this.alone) role.addClass(CLS.roleAlone)
+    return menuHere(role, view)
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/** The 'Spawns' connector in the band above a child link. */
+class SpawnWidget extends WidgetType {
+  eq(): boolean {
+    return true
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    return menuHere(renderSpawn(createDiv()), view)
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
 class AddWidget extends WidgetType {
+  /** `childOf`: in a chain, the last link, which the row adds a child to when the plugin can. */
   constructor(
     readonly markerLine: number,
-    readonly handlers: NoteTimelineCallbacks
+    readonly handlers: NoteTimelineCallbacks,
+    readonly style: TimelineStyle = 'events',
+    readonly childOf: number | null = null
   ) {
     super()
   }
 
   eq(other: AddWidget): boolean {
-    return other.markerLine === this.markerLine
+    return other.markerLine === this.markerLine && other.style === this.style && other.childOf === this.childOf
   }
 
   toDOM(view: EditorView): HTMLElement {
+    const { onAddChild } = this.handlers
+    const line = this.childOf
+    const child = onAddChild && line !== null ? () => onAddChild(view, line) : null
     // The row keeps the editor from taking focus on the press, so it is given
     // focus after the edit, with the caret on the new bullet, for typing.
-    const row = renderAddEvent(createDiv(), () => {
-      this.handlers.onAddEvent(view, this.markerLine)
-      view.focus()
-    })
+    const row = renderAddEvent(
+      createDiv(),
+      () => {
+        if (child) child()
+        else this.handlers.onAddEvent(view, this.markerLine)
+        view.focus()
+      },
+      child ? 'Add a child it spawned' : ADD[this.style]
+    )
     return control(row, view)
   }
 
@@ -260,12 +381,16 @@ class IconWidget extends WidgetType {
 /** Every timeline in the doc; a note without the marker costs one string scan. */
 export function readTimelines(doc: Text): TimelineBlock[] {
   const text = doc.toString()
-  return text.includes(TIMELINE_MARKER) ? findTimelines(text.split('\n')) : []
+  return mayHoldTimeline(text) ? findTimelines(text.split('\n')) : []
 }
 
-/** CodeMirror throws on an empty mark, which would take the whole plugin down: one is skipped instead. */
-function mark(out: Range<Decoration>[], cls: string, from: number, to: number, inclusiveStart = false): void {
-  if (to > from) out.push(Decoration.mark({ class: cls, inclusiveStart }).range(from, to))
+/**
+ * CodeMirror throws on an empty mark, which would take the whole plugin down:
+ * one is skipped instead. `inclusiveEnd` draws a widget at its end with side
+ * -1 inside it.
+ */
+function mark(out: Range<Decoration>[], cls: string, from: number, to: number, inclusiveEnd = false): void {
+  if (to > from) out.push(Decoration.mark({ class: cls, inclusiveEnd }).range(from, to))
 }
 const widget = (w: WidgetType, side: number, at: number): Range<Decoration> =>
   Decoration.widget({ widget: w, side }).range(at)
@@ -291,6 +416,27 @@ function indicatorMarks(out: Range<Decoration>[], from: number, iocs: TimelineIo
 /** Where the visual line holding a position starts; a fold makes one of several lines. */
 type LineStart = (pos: number) => number
 
+/**
+ * The lines a card is drawn on, `line` to `endLine`: null when it is folded
+ * away with a heading or a list item above it, where it is not drawn and a
+ * widget at its end would show after that fold's "…". Folded details join the
+ * card's first line, and a joined line is drawn with that line's classes only:
+ * the card closes on `shownEnd`, the last line still drawn.
+ */
+function cardLines(state: EditorState, line: number, endLine: number, lineStart: LineStart) {
+  const doc = state.doc
+  const top = doc.line(line + 1)
+  if (lineStart(top.from) < top.from) return null
+  const bottom = doc.line(endLine + 1)
+  const sel = state.selection.main
+  return {
+    top,
+    bottom,
+    shownEnd: Math.max(line, doc.lineAt(lineStart(bottom.from)).number - 1),
+    active: sel.from <= bottom.to && sel.to >= top.from
+  }
+}
+
 /** One card: its line classes, the widgets around it and the marks on its text. */
 function decorateEvent(
   out: Range<Decoration>[],
@@ -305,19 +451,13 @@ function decorateEvent(
   const next = block.events.at(i + 1)
   // A blank line before the next event stays on this card, as timelineAt reads it.
   const endLine = next ? next.line - 1 : block.lastLine
-  const top = doc.line(event.line + 1)
-  // Folded away with a heading or a list item above it, the card is not
-  // drawn, but a widget at its end would show after that fold's "…".
-  if (lineStart(top.from) < top.from) return
-  const bottom = doc.line(endLine + 1)
-  // Folded details join the bullet line, and a joined line is drawn with the
-  // first line's classes only: the card closes on the last line still drawn.
-  const shownEnd = Math.max(event.line, doc.lineAt(lineStart(bottom.from)).number - 1)
-  const sel = state.selection.main
+  const drawn = cardLines(state, event.line, endLine, lineStart)
+  if (!drawn) return
+  const { top, bottom, shownEnd } = drawn
   const card: string[] = [CLS.line, kindClass(event.kind)]
   if (event.kindExplicit) card.push(CLS.explicit)
   if (event.key) card.push(CLS.key)
-  if (sel.from <= bottom.to && sel.to >= top.from) card.push(CLS.active)
+  if (drawn.active) card.push(CLS.active)
   const gap = block.gaps[i]
 
   for (let n = event.line; n <= endLine; n++) {
@@ -350,7 +490,7 @@ function decorateEvent(
   const at = top.from + event.textFrom
   if (gap) out.push(widget(new BandWidget(gap), -1, at))
   out.push(widget(new NodeWidget(event.kind, event.kindExplicit, event.key, event.line, handlers), -1, at))
-  if (!event.text.trim()) out.push(widget(new GhostWidget(), 1, top.to))
+  if (!event.text.trim()) out.push(widget(new GhostWidget(GHOST.events), 1, top.to))
   else if (!event.time) out.push(widget(new UntimedWidget(event.unread), -1, at))
 
   let col = event.textFrom
@@ -362,6 +502,163 @@ function decorateEvent(
   indicatorMarks(out, top.from, event.iocs, event.attack)
 
   if (!next) out.push(widget(new AddWidget(block.markerLine, handlers), 1, bottom.to))
+}
+
+/**
+ * A label over its value, `at` the line's start: the text from `from` to the
+ * value as one row (headCls, which the stylesheet ends with a line break, so
+ * the value starts the row below), the label and the ': ' after it marked in
+ * it, and the value. No row when nothing comes before the value. The row
+ * takes in a widget at the value's start with side -1.
+ */
+function labelledMarks(
+  out: Range<Decoration>[],
+  at: number,
+  l: Labelled,
+  from: number,
+  headCls: string,
+  valueCls: string
+): void {
+  mark(out, headCls, at + from, at + l.value.from, true)
+  if (l.label) {
+    mark(out, CLS.label, at + l.label.from, at + l.label.to)
+    mark(out, CLS.sep, at + l.label.to, at + l.value.from)
+  }
+  mark(out, valueCls, at + l.value.from, at + l.value.to)
+}
+
+const valueClass = (kind: string | null): string => (kind ? `${CLS.value} ${CLS.mono}` : CLS.value)
+
+/**
+ * One step, or the closing Details bullet and its facts: rows on the rail
+ * with no card of their own until the caret is in one. A step's number
+ * stands in for its bullet; its time is drawn only when written, and no
+ * indicator is chipped (the header still counts the live ones).
+ */
+function decorateStep(
+  out: Range<Decoration>[],
+  state: EditorState,
+  block: TimelineBlock,
+  i: number,
+  handlers: NoteTimelineCallbacks,
+  lineStart: LineStart
+): void {
+  const doc = state.doc
+  const event = block.events[i]
+  const step = block.steps.at(i)
+  const next = block.events.at(i + 1)
+  const endLine = next ? next.line - 1 : block.lastLine
+  const drawn = cardLines(state, event.line, endLine, lineStart)
+  if (!drawn) return
+  const { top, bottom, shownEnd } = drawn
+  const base: string[] = [CLS.line, CLS.steps]
+  if (!step) base.push(CLS.facts)
+  if (drawn.active) base.push(CLS.active)
+  // The facts are the closing bullet's detail lines.
+  const facts = new Map(step ? [] : block.facts.map((f) => [f.line, f]))
+  const more = new Map(step ? [] : block.facts.flatMap((f) => f.more.map((m) => [m.line, { fact: f, span: m.span }])))
+
+  for (let n = event.line; n <= endLine; n++) {
+    const line = doc.line(n + 1)
+    const cls = [...base]
+    if (n === event.line) {
+      cls.push(CLS.ev, CLS.cardTop, step ? CLS.step : CLS.factsHead)
+      if (i === 0) cls.push(CLS.first)
+    } else {
+      cls.push(CLS.detail)
+      const fact = facts.get(n)
+      if (fact) {
+        cls.push(CLS.fact)
+        labelledMarks(
+          out,
+          line.from,
+          fact,
+          fact.label?.from ?? fact.value.from,
+          CLS.factKey,
+          // A fact's value is an identifier, whatever its shape.
+          valueClass('fact')
+        )
+      } else {
+        const extra = more.get(n)
+        if (extra) {
+          cls.push(CLS.factMore)
+          const { label, value } = extra.fact
+          const key = label ? doc.line(extra.fact.line + 1).text.slice(label.from, value.from) : ''
+          if (key) out.push(widget(new FactPadWidget(key), -1, line.from + extra.span.from))
+          mark(out, CLS.factMoreText, line.from + extra.span.from, line.from + extra.span.to)
+        }
+      }
+    }
+    if (n === shownEnd) cls.push(CLS.cardBottom)
+    if (n === shownEnd && !next) cls.push(CLS.last)
+    out.push(Decoration.line({ class: cls.join(' ') }).range(line.from))
+  }
+
+  if (step) {
+    const at = top.from
+    out.push(widget(new StepNodeWidget(step.n), -1, at + event.textFrom))
+    if (!event.text.trim()) out.push(widget(new GhostWidget(GHOST.steps), 1, top.to))
+    // The time as written opens the label row, its lead word muted.
+    if (event.lead) mark(out, CLS.lead, at + event.lead.from, at + event.lead.to)
+    const t = event.timeSpan
+    if (t) mark(out, event.time?.approx ? `${CLS.time} ${CLS.approx}` : CLS.time, at + t.from, at + t.to)
+    const sec = event.secondsSpan
+    if (sec) mark(out, CLS.sec, at + sec.from, at + sec.to)
+    labelledMarks(out, at, step, event.textFrom, CLS.head, valueClass(step.valueKind))
+  }
+  if (!next) out.push(widget(new AddWidget(block.markerLine, handlers, 'steps'), 1, bottom.to))
+}
+
+/**
+ * One link of a process chain: a card from its bullet to the next link, its
+ * notes in it, at its own depth (the note's indent). A child has the 'Spawns'
+ * connector in the band above it; the role beside the label is read off the
+ * depth; the value is monospace after an icon for what it names.
+ */
+function decorateLink(
+  out: Range<Decoration>[],
+  state: EditorState,
+  block: TimelineBlock,
+  k: number,
+  handlers: NoteTimelineCallbacks,
+  lineStart: LineStart
+): void {
+  const doc = state.doc
+  const link = block.links[k]
+  const next = block.links.at(k + 1)
+  const endLine = next ? next.line - 1 : block.lastLine
+  const drawn = cardLines(state, link.line, endLine, lineStart)
+  if (!drawn) return
+  const { top, bottom, shownEnd } = drawn
+  const root = link.parent === null
+  const base: string[] = [CLS.line, CLS.chain, root ? CLS.root : CLS.child]
+  if (drawn.active) base.push(CLS.active)
+
+  for (let n = link.line; n <= endLine; n++) {
+    const cls = [...base]
+    if (n === link.line) {
+      cls.push(CLS.ev, CLS.proc)
+      if (k === 0) cls.push(CLS.first)
+      if (!root) cls.push(CLS.spawned)
+    } else cls.push(CLS.detail)
+    if (n === shownEnd) cls.push(CLS.procEnd)
+    if (n === shownEnd && !next) cls.push(CLS.last)
+    out.push(Decoration.line({ class: cls.join(' ') }).range(doc.line(n + 1).from))
+  }
+
+  const at = top.from
+  if (!root) out.push(widget(new SpawnWidget(), -1, at + link.textFrom))
+  if (!link.label && !link.valueText) out.push(widget(new GhostWidget(GHOST.chain), 1, top.to))
+  else {
+    // After the ': ', in the label's row; with no label, first after the bullet
+    // and then the icon: Obsidian measures a list line's hanging indent from
+    // the first thing after its bullet, so that must be on the bullet's row.
+    if (link.label) out.push(widget(new RoleWidget(link.role, false), -1, at + link.value.from))
+    else out.push(widget(new RoleWidget(link.role, true), 1, at + link.textFrom))
+    labelledMarks(out, at, link, link.label?.from ?? link.value.from, CLS.head, `${CLS.value} ${CLS.mono}`)
+    if (link.valueText) out.push(widget(new IconWidget(linkIcon(link), CLS.valueIcon), 2, at + link.value.from))
+  }
+  if (!next) out.push(widget(new AddWidget(block.markerLine, handlers, 'chain', link.line), 1, bottom.to))
 }
 
 /**
@@ -382,15 +679,19 @@ export function buildTimelineDecorations(
   const atomic: Range<Decoration>[] = []
   for (const block of blocks) {
     const marker = doc.line(block.markerLine + 1)
-    const header = Decoration.replace({ widget: new HeaderWidget(block.summary, block.markerLine, handlers) }).range(
-      marker.from,
-      marker.to
-    )
+    const header = Decoration.replace({
+      widget: new HeaderWidget(block.summary, headerShape(block), block.markerLine, handlers)
+    }).range(marker.from, marker.to)
     atomic.push(header)
     const end = doc.line(block.lastLine + 1).to
     if (!visible.some((r) => r.from <= end && r.to >= marker.from)) continue
     out.push(Decoration.line({ class: `${CLS.line} ${CLS.markerLine}` }).range(marker.from), header)
-    for (let i = 0; i < block.events.length; i++) decorateEvent(out, state, block, i, handlers, lineStart)
+    if (block.style === 'chain') {
+      for (let k = 0; k < block.links.length; k++) decorateLink(out, state, block, k, handlers, lineStart)
+      continue
+    }
+    const decorate = block.style === 'steps' ? decorateStep : decorateEvent
+    for (let i = 0; i < block.events.length; i++) decorate(out, state, block, i, handlers, lineStart)
   }
   return { decorations: Decoration.set(out, true), atomic: Decoration.set(atomic) }
 }

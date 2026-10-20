@@ -1,14 +1,15 @@
 import type { Editor } from 'obsidian'
-import { defangText } from '../soc/toolbox'
 import {
-  TIMELINE_MARKER,
   type EventKind,
   type TimelineBlock,
   type TimelineEvent,
+  type TimelineStyle,
   comparable,
   copyForTicket,
+  defangTimelineText,
   findTimelines,
   frontmatterEnd,
+  markerFor,
   oneZone,
   timelineAt
 } from './parse'
@@ -38,11 +39,49 @@ const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/
 /** Lines that end a list rather than join it as events: a code fence, a divider ('---', '* * *'), a numbered item. */
 const NOT_AN_EVENT = /^\s*(?:`{3,}|~{3,}|\d{1,9}[.)](?:[ \t]|$))|^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/
 
+/** A blockquote or callout line. */
+const QUOTE = /^\s*>/
+/** A pipe table's delimiter row: '| --- | :-: |', '---|---'. */
+const isTableRule = (s: string): boolean => s.includes('|') && s.includes('-') && /^[\s|:-]+$/.test(s)
+
 const isBlank = (s: string | undefined): boolean => !s?.trim()
 const indentOf = (s: string): number => s.length - s.trimStart().length
 
 function here(lines: string[], line: number): { block: TimelineBlock; event: TimelineEvent | null } | null {
   return timelineAt(findTimelines(lines), line)
+}
+
+/** What add, move and delete act on: an event, or a chain's link with everything under it. */
+interface Item {
+  line: number
+  lastLine: number
+  indent: string
+}
+
+/** A steps list's closing Details or Facts bullet, which holds the facts and stays last; undefined in any other list. */
+export const closingOf = (block: TimelineBlock): TimelineEvent | undefined =>
+  block.facts.length ? block.events.at(-1) : undefined
+
+/**
+ * The item the caret is on, and the items it moves among: the event and the
+ * events; in steps, the steps, while the closing Details bullet (a fact is
+ * its) moves among none; in a chain, the link the line is on (a note is its
+ * link's) and the links under the same parent, so a root moves among the
+ * roots. Null on the marker or outside a timeline.
+ */
+function itemAt(
+  lines: string[],
+  line: number,
+  at = here(lines, line)
+): { block: TimelineBlock; item: Item; siblings: Item[] } | null {
+  if (!at?.event) return null
+  const { block } = at
+  const closing = closingOf(block)
+  if (closing) return { block, item: at.event, siblings: at.event === closing ? [] : block.steps.map((s) => s.event) }
+  if (block.style !== 'chain') return { block, item: at.event, siblings: block.events }
+  let link = block.links[0]
+  for (const l of block.links) if (l.line <= line) link = l
+  return { block, item: link, siblings: block.links.filter((l) => l.parent === link.parent) }
 }
 
 function replace(from: number, to: number, out: string[], cursor?: TimelineEdit['cursor']): TimelineEdit {
@@ -101,7 +140,7 @@ export function selectedLines(editor: Editor): [number, number] {
 }
 
 /**
- * Make timeline: the marker line directly above the list the caret is in.
+ * Make timeline: the marker line for the style directly above the list the caret is in.
  * Over a selection of two or more lines, its plain lines become events first:
  * '- ' goes in front of each at the selection's least indent, a deeper one
  * stays the detail of the line above, and blank lines and leading headings are
@@ -110,7 +149,12 @@ export function selectedLines(editor: Editor): [number, number] {
  * or two blank lines inside the selection; a code fence, a divider or a
  * numbered item where '- ' would go).
  */
-export function makeTimeline(lines: string[], fromLine: number, toLine: number): TimelineEdit | null {
+export function makeTimeline(
+  lines: string[],
+  fromLine: number,
+  toLine: number,
+  style: TimelineStyle = 'events'
+): TimelineEdit | null {
   let first = fromLine
   let last = toLine
   while (first < last && (isBlank(lines[first]) || HEADING.test(lines[first]))) first++
@@ -132,7 +176,7 @@ export function makeTimeline(lines: string[], fromLine: number, toLine: number):
   }
   const start = listStart(out, first)
   if (start < 0 || timelineAt(blocks, start)) return null
-  const marker = (BULLET.exec(out[start])?.[1] ?? '') + TIMELINE_MARKER
+  const marker = (BULLET.exec(out[start])?.[1] ?? '') + markerFor(style)
   // The parser has the last word: every line asked for must be in the new timeline.
   const marked = [...out.slice(0, start), marker, ...out.slice(start)]
   const block = findTimelines(marked).find((b) => b.markerLine === start)
@@ -142,35 +186,136 @@ export function makeTimeline(lines: string[], fromLine: number, toLine: number):
   return replace(start, last, [marker, ...out.slice(start, last + 1)])
 }
 
-/** An empty event after line `after`, bulleted and indented like `like`, caret in it. */
-function insertEvent(lines: string[], after: number, like: TimelineEvent | undefined): TimelineEdit {
-  const bullet = like ? `${like.indent}${lines[like.line][like.indent.length]} ` : '- '
+/** Whether `line` is a row of a pipe table: one of a run of lines with a pipe that holds a delimiter row. */
+function inTable(lines: string[], line: number): boolean {
+  const piped = (i: number) => lines[i]?.includes('|') ?? false
+  if (!piped(line)) return false
+  let from = line
+  let to = line
+  while (piped(from - 1)) from--
+  while (piped(to + 1)) to++
+  return lines.slice(from, to + 1).some(isTableRule)
+}
+
+/**
+ * Whether a %% comment or a $$ math block is still open after `line`: an odd
+ * count of its marks from the frontmatter down, code left out. ponytail: a
+ * mark in inline code counts too; skip code spans if that turns up.
+ */
+function inOpenBlock(lines: string[], line: number, code: boolean[]): boolean {
+  const from = frontmatterEnd(lines) + 1
+  const text = lines.slice(from, line + 1).filter((_, i) => !code[from + i])
+  return ['%%', '$$'].some((mark) => text.join('\n').split(mark).length % 2 === 0)
+}
+
+/**
+ * Insert timeline: a new one at the caret, nothing selected. A blank line
+ * becomes the marker and one empty item; on a paragraph or a heading it goes
+ * below that line. A blank line goes above it after a paragraph, where the
+ * empty item would be read as more of the paragraph, and below it before
+ * text, two where one would let it take in what follows (a list). Null in a
+ * timeline, the frontmatter, a code block, a quote or callout, a table, a
+ * %% comment or a $$ math block (each would be split), or where the parser
+ * would not read one empty event.
+ */
+export function insertTimeline(lines: string[], line: number, style: TimelineStyle): TimelineEdit | null {
+  const code = codeLines(lines)
+  if (line <= frontmatterEnd(lines) || code[line] || QUOTE.test(lines[line]) || inTable(lines, line)) return null
+  if (inOpenBlock(lines, line, code)) return null
+  if (findTimelines(lines).some((b) => line >= b.markerLine && line <= b.lastLine)) return null
+  const blank = isBlank(lines[line])
+  const above = blank ? lines[line - 1] : lines[line]
+  const gap = above !== undefined && !isBlank(above) && !HEADING.test(above)
+  const head = [...(blank ? [] : [lines[line]]), ...(gap ? [''] : []), markerFor(style), '- ']
+  const itemLine = line + head.length - 1
+  if (line + 1 < lines.length && !isBlank(lines[line + 1])) head.push('')
+  // The parser has the last word: the new timeline is the one empty event and nothing after it.
+  for (const out of [head, [...head, '']]) {
+    const note = [...lines.slice(0, line), ...out, ...lines.slice(line + 1)]
+    const block = findTimelines(note).find((b) => b.markerLine === itemLine - 1)
+    if (block?.events.length === 1 && block.lastLine === itemLine) {
+      return replace(line, line, out, { line: itemLine, ch: 2 })
+    }
+  }
+  return null
+}
+
+/** Style ›: the marker rewritten for the style, its indent kept; null when the timeline has that style. */
+export function setStyle(lines: string[], line: number, style: TimelineStyle): TimelineEdit | null {
+  const block = here(lines, line)?.block
+  if (!block || block.style === style) return null
+  const marker = lines[block.markerLine]
+  return replace(block.markerLine, block.markerLine, [marker.slice(0, indentOf(marker)) + markerFor(style)])
+}
+
+/** The bullet character an item is written with; '-' for a numbered one. */
+function bulletOf(lines: string[], item: Item): string {
+  const c = lines[item.line][item.indent.length]
+  return '-*+'.includes(c) ? c : '-'
+}
+
+/** An empty item written `bullet` after line `after`, caret in it. */
+function insertItem(lines: string[], after: number, bullet: string): TimelineEdit {
   return replace(after, after, [lines[after], bullet], { line: after + 1, ch: bullet.length })
 }
 
-/** Add event below: after the caret's event and its details; on the marker, the new first event. */
+/** An empty item after line `after`, bulleted and indented like `like`. */
+const insertEvent = (lines: string[], after: number, like: Item | undefined): TimelineEdit =>
+  insertItem(lines, after, like ? `${like.indent}${bulletOf(lines, like)} ` : '- ')
+
+/**
+ * Add event below: after the caret's event and its details; on the marker,
+ * the new first event; on a steps list's closing Details bullet or its facts,
+ * the new last step. In a chain, a sibling of the caret's link after
+ * everything under it.
+ */
 export function addEventBelow(lines: string[], line: number): TimelineEdit | null {
   const at = here(lines, line)
   if (!at) return null
-  return at.event
-    ? insertEvent(lines, at.event.lastLine, at.event)
-    : insertEvent(lines, at.block.markerLine, at.block.events[0])
+  const item = itemAt(lines, line, at)?.item
+  if (item && item === closingOf(at.block)) return addEventAtEnd(lines, line)
+  return item ? insertEvent(lines, item.lastLine, item) : insertEvent(lines, at.block.markerLine, at.block.events[0])
 }
 
-/** "+ Add event": after the last event's last detail line. `line` is the marker or any line of the timeline. */
+/**
+ * Add child: an empty link one indent deeper under the caret's link, after
+ * everything already under it. The indent unit and bullet are the block's own
+ * (the first child's, its indent past its parent's), else a tab and the
+ * link's bullet. Null on the marker or outside a chain.
+ */
+export function addChild(lines: string[], line: number): TimelineEdit | null {
+  const at = itemAt(lines, line)
+  if (at?.block.style !== 'chain') return null
+  const { links } = at.block
+  const ref = links.find((l) => l.parent !== null)
+  const parent = ref?.parent == null ? '' : links[ref.parent].indent
+  const unit = ref?.indent.startsWith(parent) ? ref.indent.slice(parent.length) : ''
+  return insertItem(lines, at.item.lastLine, `${at.item.indent}${unit || '\t'}${bulletOf(lines, ref ?? at.item)} `)
+}
+
+/**
+ * "+ Add event": after the last event's last detail line; in steps, after the
+ * last step, so the closing Details bullet stays last (on the marker when it
+ * is the only one). `line` is the marker or any line of the timeline.
+ */
 export function addEventAtEnd(lines: string[], line: number): TimelineEdit | null {
   const block = here(lines, line)?.block
-  return block ? insertEvent(lines, block.lastLine, block.events.at(-1)) : null
+  if (!block) return null
+  const last = closingOf(block) ? block.steps.at(-1)?.event : block.events.at(-1)
+  return insertEvent(lines, last?.lastLine ?? block.markerLine, last ?? block.events[0])
 }
 
-/** Swap the caret's event, details and all, with its neighbour; blank lines between them stay put. */
+/**
+ * Swap the caret's event, details and all, with its neighbour; blank lines
+ * between them stay put. In a chain, the link with everything under it, among
+ * the links under the same parent.
+ */
 export function moveEvent(lines: string[], line: number, dir: 'up' | 'down'): TimelineEdit | null {
-  const at = here(lines, line)
-  const e = at?.event
-  if (!at || !e) return null
-  const { events } = at.block
-  const n = events.indexOf(e)
-  const other = events[dir === 'up' ? n - 1 : n + 1]
+  const at = itemAt(lines, line)
+  if (!at) return null
+  const { item: e, siblings } = at
+  const n = siblings.indexOf(e)
+  const other = siblings[dir === 'up' ? n - 1 : n + 1]
   if (!other) return null
   const [a, b] = dir === 'up' ? [other, e] : [e, other]
   const out = [
@@ -190,7 +335,9 @@ const KIND_WORD: Record<Exclude<EventKind, 'observed'>, string> = {
   execution: 'Execution',
   web: 'Web',
   file: 'File',
-  email: 'Email'
+  email: 'Email',
+  user: 'User',
+  host: 'Host'
 }
 
 /**
@@ -237,15 +384,16 @@ function byTime(events: TimelineEvent[]): TimelineEvent[] {
 }
 
 /**
- * Sort events by time: null (item hidden) when the timeline is in order or
- * the line is not in one; a reason (item disabled) when an event has no time,
- * the times are in different zones, the day order is unknown, or sorting would
- * put a time-only event under another day's date; else the edit. Details go
- * with their event and blank lines between events stay where they are.
+ * Sort events by time: null (item hidden) when the timeline is in order, is
+ * drawn in another style than events, or the line is not in one; a reason
+ * (item disabled) when an event has no time, the times are in different
+ * zones, the day order is unknown, or sorting would put a time-only event
+ * under another day's date; else the edit. Details go with their event and
+ * blank lines between events stay where they are.
  */
 export function sortEventsByTime(lines: string[], line: number): { edit: TimelineEdit } | { reason: string } | null {
   const at = here(lines, line)
-  if (!at) return null
+  if (at?.block.style !== 'events') return null
   const { block } = at
   const timed = block.events.filter((e) => e.time?.minutes != null)
   const times = timed.flatMap((e) => (e.time ? [e.time] : []))
@@ -280,20 +428,21 @@ export function sortEventsByTime(lines: string[], line: number): { edit: Timelin
 }
 
 /**
- * Delete event: the event and its details, whole lines; the caret goes to the
- * line above. Between two blank lines (a loose list) one of them goes too:
- * two would end the timeline there.
+ * Delete event: the event and its details, whole lines (in a chain, the link
+ * and everything under it); the caret goes to the line above. Between two
+ * blank lines (a loose list) one of them goes too: two would end the timeline
+ * there.
  */
 export function deleteEvent(lines: string[], line: number): TimelineEdit | null {
-  const e = here(lines, line)?.event
+  const e = itemAt(lines, line)?.item
   if (!e) return null
   const loose = isBlank(lines[e.line - 1]) && e.lastLine + 1 < lines.length && isBlank(lines[e.lastLine + 1])
   return removeLines(lines, e.line, e.lastLine + (loose ? 1 : 0), { line: e.line - 1, ch: lines[e.line - 1].length })
 }
 
 /**
- * Defang timeline: defangText over every event and detail line, never the
- * marker or anything outside the list. `changed` is false when there was
+ * Defang timeline: defangTimelineText over every event and detail line,
+ * never the marker or anything outside the list. `changed` is false when there was
  * nothing to defang, for the caller's notice.
  */
 export function defangTimeline(lines: string[], line: number): { edit: TimelineEdit; changed: boolean } | null {
@@ -302,11 +451,11 @@ export function defangTimeline(lines: string[], line: number): { edit: TimelineE
   const { markerLine, firstLine, lastLine } = block
   if (!block.events.length) return { edit: replace(markerLine, markerLine, [lines[markerLine]]), changed: false }
   const before = lines.slice(firstLine, lastLine + 1)
-  const out = before.map((l) => defangText(l))
+  const out = before.map((l) => defangTimelineText(l))
   return { edit: replace(firstLine, lastLine, out), changed: out.some((l, i) => l !== before[i]) }
 }
 
-/** Back to plain list: only the marker line goes. */
+/** Back to plain list: only the marker line goes, whatever the style. */
 export function backToPlainList(lines: string[], line: number): TimelineEdit | null {
   const block = here(lines, line)?.block
   return block ? removeLines(lines, block.markerLine, block.markerLine) : null

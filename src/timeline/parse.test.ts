@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import { defangText } from '../soc/toolbox'
 import {
   TIMELINE_MARKER,
   type TimelineBlock,
   type TimelineEvent,
   copyForTicket,
+  defangTimelineText,
   findTimelines,
   formatDay,
   indicatorSpans,
+  markerFor,
+  markerStyle,
+  mayHoldTimeline,
   timelineAt
 } from './parse'
 
@@ -791,5 +796,389 @@ describe('a list that changes bullet character', () => {
     const b = findTimelines([TIMELINE_MARKER, '- 11:04 first', '- 11:05 second', '* 11:06 another list'])[0]
     expect(b.events.map((e) => e.text)).toEqual(['11:04 first', '11:05 second'])
     expect(b.lastLine).toBe(2)
+  })
+})
+
+describe('timeline styles: the marker', () => {
+  it('reads the style from the marker line, the style word in any case', () => {
+    expect(findTimelines([TIMELINE_MARKER, '- a'])[0].style).toBe('events')
+    expect(findTimelines(['%% timeline steps %%', '- a'])[0].style).toBe('steps')
+    expect(findTimelines(['  %% timeline chain %%  ', '- a'])[0].style).toBe('chain')
+    expect(findTimelines(['%% timeline STEPS %%', '- a'])[0].style).toBe('steps')
+    expect(markerStyle('\t%% timeline Chain %%')).toBe('chain')
+  })
+
+  it('takes no other timeline comment for a marker', () => {
+    for (const line of [
+      '%% timeline events %%',
+      '%% timeline step %%',
+      '%% timeline  steps %%',
+      '%%timeline steps%%'
+    ]) {
+      expect(markerStyle(line)).toBeNull()
+      expect(findTimelines([line, '- a'])).toEqual([])
+    }
+  })
+
+  it('writes the marker for each style, and tells a note that may hold one', () => {
+    expect(markerFor('events')).toBe(TIMELINE_MARKER)
+    expect(markerFor('steps')).toBe('%% timeline steps %%')
+    expect(markerFor('chain')).toBe('%% timeline chain %%')
+    expect(mayHoldTimeline('x\n%% timeline chain %%\n- a')).toBe(true)
+    expect(mayHoldTimeline('- a\n- b')).toBe(false)
+  })
+
+  it('reads the list under every style by the same block rules', () => {
+    for (const style of ['steps', 'chain'] as const) {
+      const b = findTimelines([markerFor(style), '- one', '    - sub', '', '- two', '', '', '- not in it'])[0]
+      expect(b.events.map((e) => e.text)).toEqual(['one', 'two'])
+      expect(b.lastLine).toBe(4)
+    }
+  })
+
+  it('leaves the steps, facts and links of another style empty', () => {
+    const [b] = findTimelines(CLICKFIX)
+    expect([b.steps, b.facts, b.links]).toEqual([[], [], []])
+    const steps = findTimelines(['%% timeline steps %%', '- a', '    - b'])[0]
+    expect(steps.links).toEqual([])
+    expect(findTimelines(['%% timeline chain %%', '- a'])[0].steps).toEqual([])
+  })
+})
+
+/** The steps sample from the styles spec. */
+const STEPS = [
+  '## Alert story',
+  '%% timeline steps %%',
+  '- 21:34 Alert fired: Potential Recon Activity Via Nltest.EXE',
+  '- On host: DESKTOP1.domain.local',
+  '- User context: domain\\user1',
+  '- Process launch: nltest.exe',
+  '- Command executed: nltest /domain_trusts',
+  '- Artifact path: C:\\Users\\user1\\Downloads\\',
+  '- Details',
+  '    - Alert ID: SEC-2023-0704-0001',
+  '    - Time: 2023-07-04 21:34 UTC',
+  '    - Host: DESKTOP1.domain.local',
+  '      192.168.56.95'
+]
+
+describe('timeline styles: steps', () => {
+  const cut = (lines: string[], line: number, s: { from: number; to: number } | null) =>
+    s && lines[line].slice(s.from, s.to)
+  const read = (lines: string[]) => {
+    const b = findTimelines(lines)[0]
+    return b.steps.map((s) => [s.n, cut(lines, s.event.line, s.label), cut(lines, s.event.line, s.value), s.valueKind])
+  }
+
+  it('numbers every top-level bullet but the closing Details, with label, value and value kind', () => {
+    expect(read(STEPS)).toEqual([
+      [1, 'Alert fired', 'Potential Recon Activity Via Nltest.EXE', null],
+      [2, 'On host', 'DESKTOP1.domain.local', 'Hostname'],
+      [3, 'User context', 'domain\\user1', 'User'],
+      [4, 'Process launch', 'nltest.exe', 'File path'],
+      [5, 'Command executed', 'nltest /domain_trusts', 'Command line'],
+      [6, 'Artifact path', 'C:\\Users\\user1\\Downloads\\', 'File path']
+    ])
+    const b = findTimelines(STEPS)[0]
+    expect(b.steps.map((s) => s.event.line)).toEqual([2, 3, 4, 5, 6, 7])
+    expect(b.events).toHaveLength(7)
+  })
+
+  it('reads an optional leading time as events do, and nothing when there is none', () => {
+    const b = findTimelines(STEPS)[0]
+    expect(b.steps[0].event.time).toMatchObject({ raw: '21:34', minutes: 1294 })
+    expect(b.steps.slice(1).map((s) => s.event.time)).toEqual([null, null, null, null, null])
+    const dated = findTimelines(['%% timeline steps %%', '- On 3 May 2025, 11:04 Login: ok', '- 11:05 Exit: ok'])[0]
+    expect(dated.steps[1].event.time).toMatchObject({ date: { y: 2025, m: 5, d: 3 }, minutes: 665 })
+  })
+
+  it('splits at the first ": " only after a name; a closing ":" is a label with no value', () => {
+    const lines = [
+      '%% timeline steps %%',
+      '- Note: see below: twice',
+      '- https://evil.example/a: was hit',
+      '- 10.0.0.1: answered',
+      '- the user rang the desk',
+      '- Artifact path:',
+      '- ',
+      '- Execution: ran it',
+      '- Command:   whoami /all  '
+    ]
+    expect(read(lines)).toEqual([
+      [1, 'Note', 'see below: twice', null],
+      [2, null, 'https://evil.example/a: was hit', null],
+      [3, null, '10.0.0.1: answered', null],
+      [4, null, 'the user rang the desk', null],
+      [5, 'Artifact path', '', null],
+      [6, null, '', null],
+      [7, 'Execution', 'ran it', null],
+      [8, 'Command', 'whoami /all', 'Command line']
+    ])
+  })
+
+  it('takes the facts from a last Details or Facts bullet, a plain line joining the fact above', () => {
+    const b = findTimelines(STEPS)[0]
+    const facts = b.facts.map((f) => [
+      f.line,
+      cut(STEPS, f.line, f.label),
+      cut(STEPS, f.line, f.value),
+      f.more.map((m) => cut(STEPS, m.line, m.span))
+    ])
+    expect(facts).toEqual([
+      [9, 'Alert ID', 'SEC-2023-0704-0001', []],
+      [10, 'Time', '2023-07-04 21:34 UTC', []],
+      [11, 'Host', 'DESKTOP1.domain.local', ['192.168.56.95']]
+    ])
+    expect(b.facts[2].more[0].line).toBe(12)
+  })
+
+  it('reads Facts, details and a closing colon in any case; a fact need not have a name', () => {
+    for (const word of ['Facts', 'details', 'Details:', 'FACTS:']) {
+      const b = findTimelines(['%% timeline steps %%', '- a', `- ${word}`, '    - Host: x', '    - a loose note'])[0]
+      expect(b.steps).toHaveLength(1)
+      expect(b.facts.map((f) => [f.label === null, f.valueKind])).toEqual([
+        [false, null],
+        [true, null]
+      ])
+    }
+  })
+
+  it('keeps Details a step when it is not last, or has nothing under it', () => {
+    const notLast = findTimelines(['%% timeline steps %%', '- Details', '    - Host: x', '- b'])[0]
+    expect([notLast.steps.length, notLast.facts]).toEqual([2, []])
+    const bare = findTimelines(['%% timeline steps %%', '- a', '- Details'])[0]
+    expect([bare.steps.length, bare.facts]).toEqual([2, []])
+    expect(findTimelines(['%% timeline steps %%', '- a', '- Details of the alert', '    - x'])[0].facts).toEqual([])
+  })
+
+  it('still counts live indicators on every line for Defang', () => {
+    const b = findTimelines([
+      '%% timeline steps %%',
+      '- Visited: https://evil.example/a',
+      '- Details',
+      '    - IP: 10.0.0.5'
+    ])[0]
+    expect(b.summary.live).toBe(2)
+  })
+})
+
+/** The chain sample from the styles spec. */
+const CHAIN = [
+  '## Process chain',
+  '%% timeline chain %%',
+  '- Initial process: cmd.exe',
+  '    - Terminal process: nltest.exe',
+  '        - User context: domain\\user1',
+  '            - Execution: nltest /domain_trusts'
+]
+
+describe('timeline styles: chain', () => {
+  const cut = (lines: string[], line: number, s: { from: number; to: number } | null) =>
+    s && lines[line].slice(s.from, s.to)
+
+  it('reads every bullet as a link, each child under the link above with a smaller indent', () => {
+    const b = findTimelines(CHAIN)[0]
+    expect(
+      b.links.map((l) => [
+        l.line,
+        l.depth,
+        l.parent,
+        l.role,
+        cut(CHAIN, l.line, l.label),
+        cut(CHAIN, l.line, l.value),
+        l.valueKind
+      ])
+    ).toEqual([
+      [2, 0, null, 'Root process', 'Initial process', 'cmd.exe', 'File path'],
+      [3, 1, 0, 'Spawned child', 'Terminal process', 'nltest.exe', 'File path'],
+      [4, 2, 1, 'Spawned child', 'User context', 'domain\\user1', 'User'],
+      [5, 3, 2, 'Spawned child', 'Execution', 'nltest /domain_trusts', 'Command line']
+    ])
+    expect(b.links.map((l) => [l.indent, l.lastLine])).toEqual([
+      ['', 5],
+      ['    ', 5],
+      ['        ', 5],
+      ['            ', 5]
+    ])
+  })
+
+  it('gives siblings one parent, a plain line to the link above as a note, and each subtree its last line', () => {
+    const lines = [
+      '%% timeline chain %%',
+      '- explorer.exe',
+      '  - cmd.exe /c a.bat',
+      '    started from the Run box',
+      '    - whoami',
+      '',
+      '  - powershell -enc AAA',
+      '- services.exe',
+      '\t- svchost.exe'
+    ]
+    const b = findTimelines(lines)[0]
+    expect(b.links.map((l) => [l.line, l.depth, l.parent, l.lastLine])).toEqual([
+      [1, 0, null, 6],
+      [2, 1, 0, 4],
+      [4, 2, 1, 4],
+      [6, 1, 0, 6],
+      [7, 0, null, 8],
+      [8, 1, 4, 8]
+    ])
+    expect(b.links[1].notes).toEqual([{ line: 3, text: 'started from the Run box', source: false }])
+    expect(b.links[1].label).toBeNull()
+    expect(cut(lines, 2, b.links[1].value)).toBe('cmd.exe /c a.bat')
+  })
+
+  it('reads an empty link and keeps code in a link a note', () => {
+    const lines = ['%% timeline chain %%', '- ', '  ```', '  - not a link', '  ```', '- [ ] Child: x']
+    const b = findTimelines(lines)[0]
+    expect(b.links.map((l) => [l.line, l.value.from === l.value.to])).toEqual([
+      [1, true],
+      [5, false]
+    ])
+    expect(b.links[0].notes.map((n) => n.line)).toEqual([2, 3, 4])
+    expect(cut(lines, 5, b.links[1].label)).toBe('Child')
+  })
+})
+
+describe('kinds: user and host', () => {
+  it.each([
+    ['User', 'user'],
+    ['Account', 'user'],
+    ['Host', 'host'],
+    ['Workstation', 'host'],
+    ['Endpoint', 'host'],
+    ['Server', 'host'],
+    ['DEVICE', 'host']
+  ])('reads the explicit kind %s', (word, kind) => {
+    const e = one(`At 11:06, ${word}: the thing`)
+    expect(e).toMatchObject({ kind, kindExplicit: true, body: 'the thing' })
+  })
+
+  it.each([
+    ['the session ran as domain\\user1', 'user'],
+    ['logon by NT AUTHORITY\\SYSTEM.', 'user'],
+    ['the account (CORP\\svc_backup$) was used', 'user'],
+    ['certutil ran as CORP\\admin', 'execution'],
+    ['wrote C:\\Users\\user1\\a.txt', 'file'],
+    ['CORP\\bob visited https://evil.example.com/a', 'web'],
+    ['mailed bob@corp.example as CORP\\bob', 'email'],
+    ['looked in Windows\\Temp', 'observed'],
+    ['added to BUILTIN\\Administrators', 'observed']
+  ])('derives the kind of "%s"', (bullet, kind) => {
+    expect(one(`At 11:00, ${bullet}`)).toMatchObject({ kind, kindExplicit: false })
+  })
+
+  it('never derives a host', () => {
+    expect(one('At 11:00, the user logged on to DESKTOP1.domain.local').kind).toBe('observed')
+  })
+})
+
+describe('copyForTicket by style', () => {
+  it('copies steps as a numbered list with times, then the facts', () => {
+    expect(copyForTicket(findTimelines(STEPS)[0]).split('\n')).toEqual([
+      'Steps (6)',
+      '1. Alert fired: Potential Recon Activity Via Nltest.EXE (21:34)',
+      '2. On host: DESKTOP1.domain.local',
+      '3. User context: domain\\user1',
+      '4. Process launch: nltest.exe',
+      '5. Command executed: nltest /domain_trusts',
+      '6. Artifact path: C:\\Users\\user1\\Downloads\\',
+      '',
+      'Alert ID: SEC-2023-0704-0001',
+      'Time: 2023-07-04 21:34 UTC',
+      'Host: DESKTOP1.domain.local',
+      '      192.168.56.95'
+    ])
+  })
+
+  it('keeps a step without a label, a label without a value, an approximate time and the details of a step', () => {
+    const b = findTimelines(['%% timeline steps %%', '- ~11:04 the user rang', '- Ran:', '    - from the desk'])[0]
+    expect(copyForTicket(b).split('\n')).toEqual([
+      'Steps (2)',
+      '1. the user rang (~11:04)',
+      '2. Ran:',
+      '   from the desk'
+    ])
+    expect(copyForTicket(findTimelines(['%% timeline steps %%'])[0])).toBe('Steps (0)')
+  })
+
+  it('copies a chain as values with their labels, indented by depth', () => {
+    expect(copyForTicket(findTimelines(CHAIN)[0]).split('\n')).toEqual([
+      'Process chain (4 links)',
+      'cmd.exe (Initial process)',
+      '  → nltest.exe (Terminal process)',
+      '    → domain\\user1 (User context)',
+      '      → nltest /domain_trusts (Execution)'
+    ])
+    const lines = ['%% timeline chain %%', '- explorer.exe', '  seen at logon', '  - Child:']
+    expect(copyForTicket(findTimelines(lines)[0]).split('\n')).toEqual([
+      'Process chain (2 links)',
+      'explorer.exe',
+      '  seen at logon',
+      '  → (Child)'
+    ])
+  })
+})
+
+describe('timeline styles: code in a list', () => {
+  it('never starts a fact on a line of code', () => {
+    const b = findTimelines([
+      '%% timeline steps %%',
+      '- a',
+      '- Facts',
+      '    - Cmd:',
+      '      ```',
+      '      - x',
+      '      ```'
+    ])[0]
+    expect(b.facts.map((f) => [f.labelText, f.more.map((m) => m.text)])).toEqual([['Cmd', ['```', '- x', '```']]])
+  })
+})
+
+describe('defangTimelineText: a file or an internal host named by itself is no live indicator', () => {
+  it('leaves a program, a document or an internal host as written, after a label too, and defangs the rest as defangText does', () => {
+    // defangText reads each as a host: the value after 'Label: ', or a code span's whole text.
+    for (const line of [
+      '- Initial process: cmd.exe',
+      '    - Terminal process: nltest.exe',
+      '- Parent: explorer.exe',
+      '- Dropped: invoice.pdf',
+      'payload.dll',
+      // An internal name reaches no one outside: the events timeline leaves it as written too.
+      '- On host: DESKTOP1.domain.local',
+      '- Host: WS01.corp.local:445'
+    ]) {
+      expect(defangText(line)).not.toBe(line)
+      expect(defangTimelineText(line)).toBe(line)
+    }
+    for (const line of [
+      '- On host: DESKTOP1.domain.com',
+      '- Fetched: https://evil.example/a.exe',
+      '- IP: 10.0.0.5',
+      // An extension that is also a top-level domain may name a live site.
+      '- Visited: login-microsoft.zip'
+    ]) {
+      expect(defangText(line)).not.toBe(line)
+      expect(defangTimelineText(line)).toBe(defangText(line))
+    }
+    expect(defangTimelineText('- a: cmd.exe\n- b: 10.0.0.5')).toBe(`- a: cmd.exe\n${defangText('- b: 10.0.0.5')}`)
+  })
+
+  it('counts no file and no internal host as a live indicator, in steps and chains', () => {
+    const steps = findTimelines([
+      '%% timeline steps %%',
+      '- Process launch: nltest.exe',
+      '- Parent: explorer.exe',
+      '- Dropped: invoice.pdf',
+      '- On host: DESKTOP1.domain.local',
+      '- Beacon: c2.evil.com'
+    ])[0]
+    expect(steps.summary.live).toBe(1)
+    const chain = findTimelines([
+      '%% timeline chain %%',
+      '- Initial process: cmd.exe',
+      '    - Terminal process: nltest.exe'
+    ])[0]
+    expect(chain.summary.live).toBe(0)
   })
 })
