@@ -124,10 +124,18 @@ describe('note-timeline.css for every style', () => {
     }
   })
 
-  it('hides the bullet of every drawn item, its width kept', () => {
+  it('hides the bullet of every drawn item, its width kept, as text the caret can type after', () => {
+    // A caret at the end of visibility: hidden text, with nothing shown before
+    // it on the line (an empty chain root), lost that text to the first key
+    // typed: '- ' became 'c' and the link was gone. Obsidian hides its own
+    // bullet text with a transparent colour.
+    const bullets = ['.cf-ntl-ev', '.cf-ntl-source', '.cf-ntl-fact'].map(
+      (cls) => `.markdown-source-view.mod-cm6 .cm-line${cls} .cm-formatting-list`
+    )
+    for (const selector of bullets) expect(body(selector), selector).toContain('color: transparent;')
+    for (const selector of bullets) expect(body(`${selector} .list-bullet::after`), selector).toContain('display: none;')
     const hidden = rules.filter((r) => r.body.includes('visibility: hidden')).map((r) => r.selector)
-    expect(hidden.join()).toContain('.cf-ntl-ev .cm-formatting-list')
-    expect(hidden.join()).toContain('.cf-ntl-fact .cm-formatting-list')
+    expect(hidden.join()).not.toContain('.cm-formatting-list')
   })
 
   it("keeps the events rail and card off a chain's lines, which paint their own cards", () => {

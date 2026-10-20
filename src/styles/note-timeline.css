@@ -610,11 +610,19 @@ ul.cf-ntl-list li.cf-ntl-source > .list-collapse-indicator {
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-detail {
   color: var(--text-muted);
 }
-/* The node stands in for the bullet: hidden, its width kept so the caret does not move. */
+/* The node stands in for the bullet: hidden, its width kept so the caret does
+   not move. Hidden as Obsidian hides its own bullet text, by colour, never
+   visibility: a caret after hidden text with nothing shown before it (an
+   empty chain root) lost that text to the first key typed. */
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-ev .cm-formatting-list,
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-source .cm-formatting-list,
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-fact .cm-formatting-list {
-  visibility: hidden;
+  color: transparent;
+}
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-ev .cm-formatting-list .list-bullet::after,
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-source .cm-formatting-list .list-bullet::after,
+.markdown-source-view.mod-cm6 .cm-line.cf-ntl-fact .cm-formatting-list .list-bullet::after {
+  display: none;
 }
 /* A folded card keeps its fold arrow: it says details are hidden, and a click opens them. */
 .markdown-source-view.mod-cm6 .cm-line.cf-ntl-line .cm-fold-indicator:not(.is-collapsed) .collapse-indicator,
