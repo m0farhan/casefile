@@ -745,7 +745,10 @@ ul.cf-ntl-list.cf-ntl-steps > li.cf-ntl-item.cf-ntl-step {
 }
 .markdown-source-view.mod-cm6 .cf-ntl-fact-key {
   display: inline-block;
-  min-width: min(9em, 40%);
+  /* Not a percentage: that resolves against the line, which Obsidian narrows
+     by a continuation line's own indent, and the hidden copy below came out
+     shorter than the key. */
+  min-width: min(9em, 30vw);
   text-indent: 0;
   font-size: 0.88em;
   color: var(--text-muted);
@@ -772,7 +775,8 @@ ul.cf-ntl-facts-list {
 }
 ul.cf-ntl-facts-list li > .list-bullet,
 ul.cf-ntl-facts-list li > .list-collapse-indicator,
-ul.cf-ntl-facts-list li.cf-ntl-facts > ul::before {
+ul.cf-ntl-facts-list li.cf-ntl-facts > ul::before,
+ul.cf-ntl-facts-list li.cf-ntl-facts > ol::before {
   display: none;
 }
 .cf-ntl-facts-title {
@@ -784,9 +788,10 @@ ul.cf-ntl-facts-list li.cf-ntl-facts > ul::before {
   text-transform: uppercase;
   color: var(--text-muted);
 }
-ul.cf-ntl-facts-list li.cf-ntl-facts > ul {
+ul.cf-ntl-facts-list li.cf-ntl-facts > ul,
+ul.cf-ntl-facts-list li.cf-ntl-facts > ol {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12em, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(12em, 100%), 1fr));
   gap: 16px 20px;
   margin: 0;
   padding: 0;
@@ -918,17 +923,24 @@ ul.cf-ntl-list.cf-ntl-chain .cf-ntl-head {
 }
 /* Reading view: the nested list is the depth, each link's own text a card. */
 ul.cf-ntl-list.cf-ntl-chain,
-ul.cf-ntl-chain ul {
+ul.cf-ntl-chain ul,
+ul.cf-ntl-chain ol {
   margin: 0;
   padding: 0;
   list-style: none;
   background: none;
 }
-ul.cf-ntl-chain ul {
+ul.cf-ntl-chain ul,
+ul.cf-ntl-chain ol {
   padding-inline-start: 28px;
+}
+/* Obsidian indents an ol's items 3ch, a ul's by --list-indent: a numbered child sits as a bulleted one does. */
+ul.cf-ntl-chain ol > li {
+  margin-inline-start: var(--list-indent);
 }
 /* Obsidian's indent guides: its rule is .markdown-rendered.show-indentation-guide li > ul::before. */
 .markdown-rendered ul.cf-ntl-chain li > ul::before,
+.markdown-rendered ul.cf-ntl-chain li > ol::before,
 ul.cf-ntl-chain li > .list-bullet,
 ul.cf-ntl-chain li > .list-collapse-indicator {
   display: none;

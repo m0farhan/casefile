@@ -78,7 +78,24 @@ describe('note-timeline.css for every style', () => {
 
   it('spreads the facts across the width in Reading view, so a host name does not break mid-word', () => {
     // auto-fill keeps empty tracks: three facts took three narrow columns of seven.
-    expect(body('ul.cf-ntl-facts-list li.cf-ntl-facts > ul')).toContain('repeat(auto-fit, minmax(12em, 1fr))')
+    // min(12em, 100%): a pane narrower than 12em gets one column that fits it.
+    expect(body('ul.cf-ntl-facts-list li.cf-ntl-facts > ul')).toContain('repeat(auto-fit, minmax(min(12em, 100%), 1fr))')
+  })
+
+  it("sizes a fact's key without a percentage, so its hidden copy on the line below matches it", () => {
+    // A percentage resolves against the line's box, which Obsidian narrows by
+    // a continuation line's own hanging indent: the copy came out shorter.
+    const key = body('.markdown-source-view.mod-cm6 .cf-ntl-fact-key')
+    expect(key).toContain('min-width: min(9em, 30vw);')
+    expect(key).not.toMatch(/min-width:[^;]*%/)
+  })
+
+  it('draws numbered child links and facts in Reading view as the bulleted ones', () => {
+    expect(body('ul.cf-ntl-chain ol')).toContain('list-style: none;')
+    expect(body('ul.cf-ntl-chain ol')).toContain('padding-inline-start: 28px;')
+    expect(body('.markdown-rendered ul.cf-ntl-chain li > ol::before')).toContain('display: none;')
+    expect(body('ul.cf-ntl-facts-list li.cf-ntl-facts > ol::before')).toContain('display: none;')
+    expect(body('ul.cf-ntl-facts-list li.cf-ntl-facts > ol')).toContain('display: grid;')
   })
 
   it("hides Obsidian's indent guides beside a chain in Reading view, outranking its own rule", () => {

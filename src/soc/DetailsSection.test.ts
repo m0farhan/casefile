@@ -143,10 +143,10 @@ describe('detectDetailField', () => {
       'DESKTOP1[.]domain[.]local',
       'DESKTOP1.domain.local.'
     ]) {
-      expect(detectDetailField(v), v).toBe('Hostname')
+      expect([v, detectDetailField(v)]).toEqual([v, 'Hostname'])
     }
     for (const v of ['local', '.local', 'a..local', '-ws.local', 'my host.local', 'maya.chen@vantara.local']) {
-      expect(detectDetailField(v), v).not.toBe('Hostname')
+      expect([v, detectDetailField(v)]).not.toEqual([v, 'Hostname'])
     }
   })
 

@@ -382,7 +382,7 @@ describe('linkIcon', () => {
       ['Scheduled task: \\Microsoft\\Windows\\Update', 'calendar-clock'],
       ['Alert ID: SEC-1', 'circle-dot']
     ]
-    for (const [line, want] of cases) expect(linkIcon(icon(line)), line).toBe(want)
+    for (const [line, want] of cases) expect([line, linkIcon(icon(line))]).toEqual([line, want])
   })
 
   it('falls back on the value for a registry key, a hash or an address', () => {

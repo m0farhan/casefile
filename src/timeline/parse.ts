@@ -869,45 +869,44 @@ function writtenAs(value: string): RegExp {
  * by hand; check against a TLD list if one comes into the code.
  */
 const TLD_EXTENSION = /\.(?:zip|sh|py|one)\W*$/i
-/** Stands in for the dots of a token kept as written while defangText reads the text; no note holds it. */
-const MASK = '\u0000'
-
-/** The shapes of a place on the network: defanged whatever a label calls them. */
-const NETWORK_SHAPES = new Set(['Domain', 'URL', 'IP', 'Email', 'Message-ID'])
+/** A plain dotted name: nowhere in it for an address, a path, a URL or a key=value to hide. */
+const PLAIN_NAME = /^[\p{L}\p{N}_$~-]+(?:\.[\p{L}\p{N}_$~-]+)+$/u
+/** A dotted quad: an IPv4 address, whatever name it opens. */
+const DOTTED_QUAD = /\d{1,3}(?:\.\d{1,3}){3}/
+/** A token without the brackets, quotes and prose punctuation around it. */
+const unwrapped = (token: string): string => token.replace(/^[([{"'`*]+|[)\]}"'`*,.;:!?]+$/g, '')
 
 /**
- * A token shaped like a host that reaches no one outside: a file named by
- * itself, as Details reads one (cmd.exe, invoice.pdf), an internal host
- * (DESKTOP1.domain.local), or, after a label that names something off the
- * network (`named`: a user, a host, a process…), any dotted name not shaped
- * like a place on the network (User: anita.garcia).
+ * A token kept as written because it reaches no one outside: an internal
+ * host (DESKTOP1.domain.local) or a program or document named by itself
+ * (cmd.exe, invoice.pdf). Over-defanging is safe and under-defanging is not,
+ * so only such a name is kept, never one with more in it.
  */
-const keepsItsDots = (token: string, named: boolean): boolean => {
-  if (!token.includes('.')) return false
+function keepsItsDots(token: string): boolean {
+  if (!token.includes('.') || DOTTED_QUAD.test(token)) return false
   const kind = detectDetailField(token)
-  if (kind === 'Hostname' || (kind === 'File path' && !/[\\/]/.test(token) && !TLD_EXTENSION.test(token))) return true
-  return named && !NETWORK_SHAPES.has(kind ?? '')
-}
-
-/** A line with the dots it keeps masked: the value after a label is read by what the label names. */
-function maskLine(line: string): string {
-  const colon = line.indexOf(': ')
-  const kind = colon > 0 ? labelKind(line.slice(0, colon)) : null
-  const named = kind !== null && kind !== 'network'
-  return line.replace(/\S+/g, (t, at: number) => (keepsItsDots(t, named && at > colon) ? t.replaceAll('.', MASK) : t))
+  const name = unwrapped(token)
+  // The name alone: readValue reads past a mailto: the token keeps.
+  if (kind === 'Hostname') return /^[a-z0-9.-]+(?::\d{1,5})?$/i.test(name)
+  return kind === 'File path' && PLAIN_NAME.test(name) && !TLD_EXTENSION.test(name)
 }
 
 /**
- * defangText for the timeline's text, a file, an internal host or a name a
- * label says is off the network left as written. defangText reads the value after 'Label: ' as a
+ * defangText for the timeline's text, a file or an internal host named by
+ * itself left as written. defangText reads the value after 'Label: ' as a
  * host when it has a host's shape, and labelled lines are how steps and
- * chains are written: cmd.exe would be cmd[.]exe. Every count, edit, copy
- * and drawing of a timeline defangs with this, so they agree.
+ * chains are written: cmd.exe would be cmd[.]exe. The text is defanged as
+ * written, so nothing changes how a line is read, and then a kept token goes
+ * back as it was; when the tokens do not line up, nothing is kept. Every
+ * count, edit, copy and drawing of a timeline defangs with this, so they agree.
  */
 export function defangTimelineText(text: string): string {
-  if (text.includes(MASK)) return defangText(text)
-  const masked = text.split('\n').map(maskLine).join('\n')
-  return masked === text ? defangText(text) : defangText(masked).replaceAll(MASK, '.')
+  const out = defangText(text)
+  if (out === text) return out
+  const was = text.split(/(\s+)/)
+  const now = out.split(/(\s+)/)
+  if (was.length !== now.length || was.some((part, i) => i % 2 === 1 && part !== now[i])) return out
+  return now.map((part, i) => (i % 2 === 0 && part !== was[i] && keepsItsDots(was[i]) ? was[i] : part)).join('')
 }
 
 /**
