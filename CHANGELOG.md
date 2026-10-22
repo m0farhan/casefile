@@ -45,6 +45,22 @@ entries below and was mislabelled "Unreleased" until 2026-09-14).
 - Searching for a task by its id found nothing
 - The import dialog offered the built-in statuses and priorities instead of the configured ones
 
+## [2.46.0] - 2026-10-22
+
+### Added
+
+- **Insert a timeline anywhere, nothing selected.** Right-click where you want it and pick **Insert timeline ›** Events, Steps or Process chain: an empty timeline goes in with the caret in its first item, and Enter makes the next. **Make timeline ›** takes the same three styles for bullets you already wrote. Both are also commands (Insert timeline, Insert timeline: steps, Insert timeline: process chain, Make timeline: steps, Make timeline: process chain). Insert is not offered inside a table, a callout or quote, or a comment or math block
+- **Steps: a timeline that need not start with a time.** Each bullet is a numbered step: what comes before `: ` is its label, the rest its value, and a time shows as a chip only when you write one. Hosts, users, processes, commands and paths are set in monospace. A last `Details` (or `Facts`) bullet with `Key: value` lines under it becomes a facts row under the steps; a plain line under a fact adds to its value. Saved as `%% timeline steps %%` and a plain bullet list
+- **Process chain: parent to child.** Each bullet is a card, and a bullet indented under another is the process it spawned, with "Spawns ↓" drawn between them: the root's bar is orange, a spawned child's red. **+ Add a child it spawned** adds one under the last link; right-click a link to add a child or a link below, move it or delete it with everything under it. Saved as `%% timeline chain %%`
+  - A link's label says what it is, and its icon follows: Process, User, Host, Network (also Connection, IP, Domain, URL), File (also Dropped, Path, DLL), Registry (also Run key), Hash (also MD5, SHA256), Email (also Sender), Service and Scheduled task. Without one of those words, the value decides: a command line or a program is a process, `DOMAIN\user` a user, an IP or a URL the network
+- **User and Host events** (pink and blue): in the kind picker, and as the word after the time (`User:`, `Host:`; also Account, Workstation, Endpoint, Server, Device). A `DOMAIN\user` in an event's text suggests User
+- **Style ›** in a timeline's menu turns it into events, steps or a process chain; also commands
+
+### Changed
+
+- **Internal host names are hosts.** `DESKTOP1.domain.local` and names on `.corp`, `.lan`, `.internal`, `.intranet` or `.home.arpa` are read as a Hostname: Details names a pasted one Hostname, and a timeline leaves it as written rather than defanging it or counting it as a live indicator. So does a program or file named by itself (`cmd.exe`). Everything else is defanged as before, an address or URL inside a command line or a `key=value` run included
+- Email events are grey; blue is Host now
+
 ## [2.45.1] - 2026-10-17
 
 ### Changed
